@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# 其他可能生成的文件
+*.log
+.DS_Store
+
+bin/
+lib/
+share/man/
+lib64
+pyvenv.cfg
+patch.diff
