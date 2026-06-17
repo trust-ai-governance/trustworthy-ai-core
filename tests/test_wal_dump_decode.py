@@ -31,7 +31,7 @@ def _build_ctx(params: dict) -> bytes:
     ctx.envelope.request_id = "019ed524-c1a8-76ab-9162-f31e1ad72f1b"
     ctx.envelope.received_at_ns = 1781692795000000000
     ctx.envelope.tenant_id = "dogfood"
-    ctx.envelope.protocol = 2   # type: ignore[assignment]
+    ctx.envelope.protocol = 2  # type: ignore[assignment]
     ctx.envelope.source_addr = "127.0.0.1:54321"
     ctx.identity.agent.agent_id = "dogfood-agent"
     ctx.identity.agent.agent_type = "unknown"
