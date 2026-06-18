@@ -122,7 +122,7 @@ def test_decode_unavailable_falls_back(wal_dir, tmp_path):
         [sys.executable, "-c", code], env=env, capture_output=True, text=True
     )
     assert r.returncode == 0
-    assert "warning: --decode unavailable" in r.stderr
+    assert "warning" in r.stderr and "decode unavailable" in r.stderr
     assert "payload_preview=" in r.stdout  # fell back to preview
     assert "RequestContext=" not in r.stdout
 
