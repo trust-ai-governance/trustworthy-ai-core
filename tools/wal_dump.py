@@ -390,7 +390,12 @@ def main(argv: list[str] | None = None) -> int:
             total += 1
             if args.join:
                 try:
-                    assert join_decode is not None
+                    if join_decode is None:
+                        # 这里根据上下文决定处理方式：要么跳过，要么抛出异常
+                        # 由于这是工具脚本，跳过可能不合理，建议抛出 RuntimeError
+                        raise RuntimeError(
+                            "join_decode unexpectedly None, cannot decode payload"
+                        )
                     join_records.append((rec.seq, join_decode(rec.payload)))
                 except Exception as e:
                     print(
