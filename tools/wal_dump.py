@@ -391,8 +391,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.join:
                 try:
                     if join_decode is None:
-                        # 这里根据上下文决定处理方式：要么跳过，要么抛出异常
-                        # 由于这是工具脚本，跳过可能不合理，建议抛出 RuntimeError
+                        # 满足 mypy 收窄 + bandit check: join_decode is truthy when args.join is true, but mypy doesn't know that.
                         raise RuntimeError(
                             "join_decode unexpectedly None, cannot decode payload"
                         )
