@@ -5,9 +5,8 @@ golden (manifest.yaml + .wal bytes) as platform. This is the other half of the
 binding — if _wal_format drifts from the committed format, it fails here in CI
 instead of at the customer (deployment shape C).
 
-Only the ADAPTER differs from the platform copy. Fill the three TODOs with
-core's _wal_format entry points; the assertion body is identical by design
-(intentional duplication — the shared thing is the DATA, not runner code).
+Only the ADAPTER differs from the platform copy. The assertion body is identical
+by design (intentional duplication — the shared thing is the DATA, not runner code).
 """
 
 from __future__ import annotations
@@ -134,6 +133,19 @@ def _run(root: Path) -> None:
                 except CORRUPTION_ERROR:
                     raised = True
             assert raised, (cid, "expected strict read to raise", strict)
+        # 005 (hash-field corrupt): stored record_hash != recompute. The per-record
+        # loop above already proved decode() reads the STORED (corrupt) hash; this
+        # asserts core's PRODUCTION verifier rejects it. Keyed on the explicit
+        # chain_verify signal — the strict substring above matches 'corruption'/
+        # 'truncation', not 'hash_field_corrupt_...', so 005 would otherwise never
+        # reach wal_verify, leaving a wal_verify regression on hash-field corruption
+        # undetectable.
+        if read.get("chain_verify") == "reject":
+            for s in case["segments"]:
+                assert not wal_verify.verify(root / s["file"], full=True).ok, (
+                    cid,
+                    "wal_verify must reject stored-hash corruption",
+                )
 
 
 def test_wal_v2_golden():
