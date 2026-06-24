@@ -210,19 +210,26 @@ class Measurement:
     unit: str                    # "ratio" | "count" | "tokens" | "ms" ...
     sample_size: int             # how many records backed it (0 ⇒ insufficient data)
     evidence_refs: tuple[EvidenceRef, ...]   # MUST be populated — auditability
+    subject: str = ""            # per-entity key (e.g. agent_id); "" = aggregate
     notes: str = ""
 
 class Indicator(Protocol):
     indicator_id: str
     dimension: str
-    def measure(self, evidence: Iterable[AuditEvidence]) -> Measurement: ...
+    def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]: ...
 ```
 
 Contract rules:
 
+- **`measure` returns a tuple** (ratified): a scalar indicator yields exactly one
+  Measurement with `subject=""` (aggregate); a per-entity indicator
+  (`token_cost_per_agent`) yields one per subject (`subject=agent_id`). Empty input
+  ⇒ a single `sample_size=0` aggregate, not an empty tuple. The rubric matches a
+  control objective's `indicator_id` against the **aggregate** (`subject==""`)
+  Measurement; per-subject rows are report/breakdown detail.
 - An Indicator declares its `dimension` and is **pure** over its evidence input
-  (same evidence ⇒ same Measurement; no I/O, no clock — so a customer reproduces
-  it bit-for-bit).
+  (same evidence ⇒ same tuple of Measurements; no I/O, no clock — so a customer
+  reproduces it bit-for-bit).
 - Every Measurement carries `evidence_refs`. A score with no traceable evidence
   is a bug (mirrors Charter §5.5 "missing field = bug").
 - `sample_size == 0` ⇒ "insufficient data," distinct from `value == 0`. The
@@ -306,6 +313,7 @@ class MaturityReport:
     window: tuple[int, int]        # time range covered
     dimensions: tuple[DimensionReport, ...]
     integrity_summary: dict        # counts of VERIFIED / UNVERIFIED / BROKEN evidence
+    verification_basis: str = "wal"  # "wal" | "index" | "hybrid" — trust basis of this report
 
 class RubricEngine:
     def evaluate(self, registry: DimensionRegistry,
@@ -348,133 +356,154 @@ own read-only mount. No platform code, no network, no clock dependency.
 
 ---
 
-## 4. Dependency on E1 (decided: design against E1's assumed shape)
+## 4. E1 contract — **LANDED** (dimension attribution + scoring)
 
-The richest measured signals need **per-rule dimension attribution**, which is
-**not in the current audit proto**. Today `RuleEvaluation` is:
+> **Status: landed** (ir-spec proto A1–A4, platform emit, core WAL-golden
+> conformance incl. case 005 — all merged, CI green). Source of truth for the
+> semantics: platform/spec handover `E1_audit_dimension_scoring.md`. This section
+> records what core now *consumes*; it is no longer a forward dependency.
 
-```
-RuleEvaluation { rule_id; rule_version; matched; actions_fired[]; eval_duration_ns }
-```
+The richest measured signals need **per-rule dimension attribution**. Pre-E1,
+`RuleEvaluation` had no tags/score and `DecisionTrace` had no scoreboard. E1 added
+them, **additive + optional, numbers never reused** (Charter §3.2/3.3/3.5):
 
-E1 (PHASE1_ISSUES.md, *Not started*) adds dimension `tags` + optional `score`.
-**This design assumes E1's planned shape:**
-
-```
-# ASSUMED post-E1 — depends on ir-spec change landing first
-RuleEvaluation {
-    rule_id; rule_version; matched; actions_fired[]; eval_duration_ns;
-    map<string,string> tags;     # E1 — includes tags["dimension"], passed through verbatim
-    float score;                 # E1 — optional per-rule score
+```proto
+message RuleEvaluation {            // 1–5 unchanged
+  map<string, string> tags = 6;          // A1 — verbatim from rule_ir Rule.tags (incl. 'dimension')
+  map<string, double> score_deltas = 7;  // A2 — this rule's named ScoreStmt deltas
+}
+message DecisionTrace {             // 1–6, 20 unchanged
+  map<string, double> scores = 7;        // A3 — aggregate scoreboard = Σ rules_evaluated[*].score_deltas
+}
+message RequestContext {           // 1–8, 99 unchanged
+  optional uint32 audit_schema_version = 9;  // A4 — set to 1 from E1 on; absent ⇒ pre-E1 history
 }
 ```
 
-Consequence for the build:
+Build consequence — **EV-9 is unblocked.** All measured indicators are now
+buildable on landed fields:
 
-- **Buildable today (no E1):** indicators over fields that already exist —
-  `block_rate`, `scope_deny_rate` (`authorization.missing_scopes`),
-  `token_cost_per_agent` (`response.token_usage`), `error_rate`
-  (`audit.errors[].error_code`), `seq_continuity` / `chain_integrity` (via
-  `wal_verify`), `hint_emission_rate` (`audit.hint_emitted`). These already cover
-  parts of Security&Alignment, Affordable, Efficient-Reliability, and
-  Transparency.
-- **Blocked on E1:** dimension-attributed indicators that read
-  `RuleEvaluation.tags["dimension"]` and per-rule `score` (e.g. Robustness
-  injection/boundary signals split by dimension). Design them now against the
-  assumed shape; they cannot be exercised on real data until E1 ships in
-  ir-spec + platform.
+- *Already buildable pre-E1 (unchanged):* `block_rate`, `scope_deny_rate`
+  (`authorization.missing_scopes`), `token_cost_per_agent` (`response.token_usage`),
+  `error_rate` (`audit.errors[].error_code`), `seq_continuity`/`chain_integrity`
+  (via `wal_verify`), `hint_emission_rate` (`audit.hint_emitted`).
+- *Newly unblocked by E1:* dimension-attributed indicators reading
+  `rules_evaluated[*].tags["dimension"]` + `score_deltas`, and the aggregate
+  `decision.scores` (Robustness/Privacy dimension splits — EV-9).
 
-The Evidence/Indicator contracts above are **identical** in both cases — only the
-set of registered indicators differs — so no rework when E1 lands.
+The Evidence/Indicator contracts (§2) are unchanged by E1 — only the set of
+registered indicators grows.
 
-### 4.1 Exact E1 dependency list (the three-repo split)
+### 4.1 What landed, and the semantics core relies on
 
-Verified against the *live* proto via descriptor introspection (not the docs).
-Current field numbers — **`RuleEvaluation`**: `rule_id(1)`, `rule_version(2)`,
-`matched(3)`, `actions_fired[](4)`, `eval_duration_ns(5)` → **free: #6, #7**.
-**`DecisionTrace`**: `authorization(1)`, `rules_evaluated(2)`,
-`policy_snapshot_version(3)`, `final_decision(4)`, `decision_reason(5)`,
-`decided_by(6)`, `actions(20)` → **free: #7–#19**. The `tags` on the `Rule`
-message in `rule_ir` are the **closed ruleset definition**, unreachable to core;
-E1 must put tags into the audit event itself.
+All additive/optional, numbers never reused. `RuleEvaluation` keeps 1–5;
+`DecisionTrace` keeps 1–6 + 20. **A-side and B-side share ONE `RuleEvaluation`
+message** (`DecisionTrace.rules_evaluated` and
+`ResponseObservation.on_tool_response_rules` are identity-equal), so A1/A2 cover
+both sides in one change. `dimension` lives in `rule_ir` `Rule.tags = 7`
+(pre-existing) — **no rule_ir change was needed**; the gateway copies it verbatim.
 
-**Confirmed: A-side and B-side share ONE message.**
-`DecisionTrace.rules_evaluated` and `ResponseObservation.on_tool_response_rules`
-both reference `trustworthy_ai.v1.RuleEvaluation` (identity-equal). ⇒ adding
-`tags`/`score_deltas` to `RuleEvaluation` is **one change covering both sides.**
+| ID | message.field (#) | type | meaning core consumes |
+|---|---|---|---|
+| A1 | `RuleEvaluation.tags` (6) | `map<string,string>` | dimension attribution: `tags["dimension"]` (may be absent ⇒ rule has no dimension); other tags = metadata |
+| A2 | `RuleEvaluation.score_deltas` (7) | `map<string,double>` | this rule's **named** ScoreStmt deltas (a rule may move several names) |
+| A3 | `DecisionTrace.scores` (7) | `map<string,double>` | aggregate scoreboard, `decision.scores[n] == Σ rules_evaluated[*].score_deltas[n]` |
+| A4 | `RequestContext.audit_schema_version` (9) | `optional uint32` | generation discriminator; **= 1** from E1 on, **absent ⇒ pre-E1 history** |
 
-**A. proto changes — `trustworthy-ai-ir-spec` (core's compile-time dep)**
+Semantics that matter to core (from the handover doc):
 
-1. **`RuleEvaluation.tags: map<string,string>`** (new, optional, field #6) —
-   rule tags incl. `dimension`, passed through verbatim. **Hard blocker**: no
-   dimension attribution without it → every EV-9 indicator is impossible.
-2. **`RuleEvaluation.score_deltas: map<string,double>`** (new, optional, field #7)
-   — per-rule **named** score increments. *(Corrected from `score: double`.)* A
-   rule's action chain can contain multiple `ScoreStmt`s with different names
-   (`risk_score += 5; pii_severity += 2`); `ScoreStmt` is `(score_name, delta)`, so
-   a single scalar loses the name and can't carry multi-score. The map matches
-   `ScoreStmt.score_name` and is **same-shaped as A3** — core can then cross-check
-   `Σ per-rule deltas == aggregate` as a free integrity check. Dimension
-   attribution = *which rule contributed which named score* × *that rule's
-   `dimension` tag* — so per-rule named increments are the real need for EV-9's
-   score indicators.
-3. *(recommended)* **`DecisionTrace.scores: map<string,double>`** (field #7 in
-   DecisionTrace's numbering) — request-scoped aggregated scoreboard (matches
-   `conformance 011` `expected.scores`). Persisting it is **not "interpreting"**:
-   the scoreboard is already the executor's request-scoped state (aggregating
-   rules read it to decide BLOCK); writing it to audit just records an existing
-   execution product. Without it, EV-9 score indicators fall back to summing A2.
-4. *(recommended, NOT blocker)* **`RequestContext.audit_schema_version: uint32`**
-   (new top-level, e.g. field #9) — **correction:** B2 added only `record_type`
-   (`#7`, enum `AuditRecordType`), *not* a version; "merged into B2" was wrong.
-   proto3 `map` has no presence, so empty `tags` can't distinguish *pre-E1
-   (absent)* from *post-E1 untagged rule*. An explicit version lets core exclude
-   legacy records from the dimension-coverage *denominator*. Core still works
-   without it (reports "X% of records carry dimension tags"), so it is a
-   precision aid, not a gate.
-5. Field discipline: additive / optional / never-reuse numbers; fields 1–6
-   (RuleEvaluation 1–5) untouched (Charter §3.2/§3.3/§3.5).
+- **Verbatim, never interpreted.** `tags`/`score_deltas` are byte-equal to the
+  rule's tags and executed deltas. The gateway's *only* arithmetic is the per-name
+  sum into `decision.scores` — arithmetic, not semantics. The dimension taxonomy
+  lives entirely in core.
+- **Coverage:** every *evaluated* rule carries `tags` (matched **and** unmatched —
+  so "what dimensions were considered" is answerable); only score-firing rules
+  carry non-empty `score_deltas`.
+- **Two-record split (B2, unchanged):** record **A** (`decision.made`) carries the
+  request-path rules **and** the aggregate `decision.scores`; record **B**
+  (`response.observed`) is sparse — it carries response-path rules per-rule on
+  `response.on_tool_response_rules` but **no `DecisionTrace`, hence no aggregate
+  scoreboard**. Core must read the board from A and the response rules from B
+  (correlated by `decision_seq`).
+- **Scoreboard invariant = free integrity check.** `decision.scores[n] == Σ
+  score_deltas[n]` holds by construction (`conformance 011_score_aggregation`);
+  EV-9 should assert it and flag any record that violates it.
+- **A4 presence, not value, is the discriminator.** `HasField("audit_schema_version")`
+  goes False→True on set; pre-E1 records leave it unset and read as history — no
+  migration. (`HasField` on a *map* would raise — that's why A4 is a scalar.)
 
-**B. platform emit behavior — closed gateway (core's runtime *data* dep)**
+**WAL v2 golden — landed (was item D).** ir-spec ships independently-authored
+frozen vectors at `gen/python/trustworthy_ai_conformance/wal_v2_golden/`
+(`.wal` bytes + `manifest.yaml`), run by **both** parsers in CI (platform `wal.py`,
+core `_wal_format` + `wal_verify`) with an ir-spec `regen == committed` oracle test.
+Five cases: `001 genesis_chain`, `002 cross_segment`, `003 truncated_tail`,
+`004 crc_corrupt`, **`005 hash_field_corrupt`**. Case 005 corrupts the *stored*
+`record_hash` (payload+CRC intact), forcing each parser to **read the stored hash,
+not recompute it** — a recompute-only reader would reproduce the correct value and
+silently miss tampering. Core asserts 005 two ways: the per-record loop reproduces
+the stored (corrupt) value, and a `chain_verify: reject` path routes through
+production `wal_verify` and requires rejection. This closes the double-parser
+drift risk — `walgen.py` is now only a convenience fixture builder, **not** the
+oracle. (On this branch: `tests/conformance/test_wal_golden.py`.)
 
-6. Populate `tags` on **every evaluated** `RuleEvaluation` (matched and unmatched
-   alike — one message, both sides), else ratio indicators lose their denominator.
-7. Strictly emit, never interpret (PLAN §1): the gateway must not compute
-   `dimension`.
+### 4.2 How core verifies E1 — and why `admin/v1/audit/...` shows no tags
 
-**C. spec conformance — optional**
+**Core does not consume the admin API.** The admin endpoint serves the *derived
+SQLite index* (a projected summary), not the raw audit record; its JSON shape does
+**not** surface `rule_evaluations[*].tags`. So tags being absent from that curl
+says **nothing** about whether the WAL record carries them. Two more reasons a
+field can be missing from any JSON view:
 
-8. One conformance case asserting tags + score_deltas survive into the audit
-   event, so any third-party executor must preserve them.
+1. **proto3 omits empty maps** — if that request matched no tagged rule (or the
+   ruleset in use carries no `dimension` tag yet), `tags` legitimately renders as
+   absent. Confirm the *ruleset* actually tags rules before concluding emit is broken.
+2. The record may be **pre-E1** (`audit_schema_version` unset) if it predates the
+   emit wiring.
 
-**D. WAL v2 golden vectors — `trustworthy-ai-ir-spec` (this-round deliverable, NOT
-optional).** Core's `_wal_format` reads *production* WAL bytes; platform's `wal.py`
-writes them. The two are independent re-declarations of the v2 frame (record
-header `>II32s`, segment header `>8sIqq32s`, genesis
-`7dc8a92266863c5abcecfba93a49935663a44f69959529377d926baec0d32d04`). Any
-single-field drift means core mis-reads or rejects genuine records — and it
-detonates at the *customer* (deployment shape C), not in CI. **`walgen.py` cannot
-be the oracle: it derives fixtures from `_wal_format`'s own constants, so core's
-WAL tests validate core against itself and stay green under drift.** Fix:
-ir-spec ships a committed, independently-authored golden set —
-*known bytes → expected `(seq, payload, record_hash)` + decoded segment header* —
-that **both** parsers run in CI. A2's genesis pinning is one cell of this; the
-whole frame must be bound. (This consumes into core via EV-1's acceptance.)
+**The authoritative core verification path = read the WAL record, not the index:**
 
-**Sequencing:** core *builds* EV-9 once **A** lands (spec proto); EV-9 is
-*acceptance-tested on real data* only once **B** lands (platform emit). **D** is
-independent and should land early — it de-risks every deployment, not just EV-9.
-None of A/B/C/D is a core-repo authoring task — core only consumes the contracts
-(and runs the golden).
+```bash
+# 1. ensure core compiles against the E1 ir-spec (the venv may hold a stale proto)
+pip install -U -r requirements.txt        # re-pulls trustworthy-ai-ir-spec @ main
 
-**Governance + volume notes (small but record them):**
+# 2. decode the actual WAL bytes and look at the rule evaluations
+python tools/wal_dump.py /var/wal --decode | less     # inspect rules_evaluated[*].tags / score_deltas / decision.scores
+#    (--decode lazily imports the open proto; if it warns "decode unavailable",
+#     the installed ir-spec predates E1 → step 1)
+```
+
+Acceptance core asserts (becomes EV-9's tests, see EVAL_ISSUES EV-9):
+
+- a decoded record with `audit_schema_version == 1` exposes `tags` on its rule
+  evaluations, and `score_deltas`/`decision.scores` **on records whose ruleset
+  fired a `score` action** (see gotcha below);
+- the **Σ invariant** holds on any record that has scores;
+- a known pre-E1 record reads with `audit_schema_version` unset and is handled as
+  "no dimension data" (skipped from the dimension-coverage denominator), not as an
+  error.
+
+> **Verified end-to-end (dogfood WAL export):** a `decision.made` record decoded
+> via `wal_dump --decode` shows `audit_schema_version: 1` and per-rule `tags` —
+> e.g. `pii-block-request` with `{dimension: privacy, severity: high}` and
+> `log-chat-requests` with `{dimension: transparency}`. E1 emit is live.
+>
+> **Gotcha — empty `score_deltas`/`scores` is correct, not a bug.** `score_deltas`
+> populates **only** for a rule whose action chain runs a `score:` statement
+> (`ScoreStmt`); a `block`/`log`-only rule yields an empty map, and **proto3 omits
+> empty maps from JSON**, so it doesn't render. Likewise `decision.scores` is
+> absent when no rule scored (Σ of nothing). To exercise the score path, use a
+> ruleset with a scoring rule (the `conformance 011` shape, `risk_score += N`);
+> then both the per-rule `score_deltas` and the aggregate `decision.scores` appear
+> and the Σ invariant is checkable. Read `actions_fired` to see what a rule
+> actually did — `["block"]`/`["log"]` ⇒ no deltas expected.
+
+**Governance + volume notes:**
 
 - *tags are audit-visible.* Verbatim passthrough + deployment shape C carry tags
   into the customer-side WAL, so rule authors must treat `tags` as audit-visible —
   **no secrets in tags** (Charter §12.3 spirit).
 - *audit volume.* `tags`/`score_deltas` on every `RuleEvaluation` × both sides
-  grows the record linearly with `max_rules_per_request` (default 10). Acceptable;
-  noted.
+  grows the record linearly with `max_rules_per_request` (default 10). Acceptable.
 
 ---
 
@@ -506,18 +535,72 @@ treval:
   segments move to object store and core gains an *archive `EvidenceReader`*
   (future, not now).
 
-**The sqlite `audit.db` is NOT required, by design.** D1: the WAL is the permanent
-sole source of truth; the sqlite index is derived + disposable (platform admin
-search). For maturity eval — which scans everything and needs chain integrity —
-WAL-direct is the *more correct* source anyway. Reading the sqlite would only be
-a speed convenience and could only ever be `UNVERIFIED` (core can't re-check a
-chain it didn't parse). **⇒ `ExportEvidenceReader` (EV-2) is deferred, not this
-round.** Postgres is further out, same reasoning.
+**WAL stays the integrity source; the index is the scale path (updated).** D1
+still holds: the WAL is the permanent sole source of truth; a derived DB index is
+disposable. WAL-direct is the *more correct* source for integrity, and it remains
+canonical. **But WAL scans are slow at volume**, and Platform is building a
+**Postgres audit index + query**. So core gains a **`PostgresEvidenceReader`
+(EV-2, no longer deferred)** behind the same `AuditEvidenceReader` Protocol:
+
+- It SQL-filters on indexed columns and decodes the **raw RequestContext payload
+  bytes** the index stores (the *same* decoder the WAL reader uses — reader-agnostic;
+  the speed win is the `WHERE` clause, not a different data shape). See
+  `POSTGRES_READ_CONTRACT.md` for the cross-repo column contract.
+- Index-sourced evidence is **`UNVERIFIED`** — core can't re-check a chain it
+  didn't parse byte-for-byte. The reconciliation: a new **`requires_integrity`**
+  flag on control objectives (EV-6) lets `UNVERIFIED` data satisfy *aggregate*
+  objectives (rates/counts) but **not** integrity ones. **The Transparency
+  dimension — the moat — stays WAL-only.** The report's `verification_basis`
+  (`"wal" | "index" | "hybrid"`) self-declares which path produced it.
+- Driver must be permissive-licensed: **`pg8000` (BSD)** or **`asyncpg`
+  (Apache-2.0)** — **not** `psycopg`/`psycopg2` (LGPL, banned by Charter §1.2).
+  Lives behind the `treval[postgres]` extra so the engine core stays dep-light.
+
+Hybrid spot-verify (Postgres selects, WAL verifies a sample) is a later
+enhancement, not this round.
 
 **Deployment shapes (any of):** (A) core as a sidecar in the same compose with
 `wal-data:/wal:ro`; (B) core CLI on the host against a read-only host-path WAL
 mount; (C) the customer syncs WAL segments to their *own* environment and runs
 core there — the strongest zero-trust story.
+
+---
+
+## 4b. Web layer — SSR dashboard (read-only, optional)
+
+The maturity results need a dashboard, not just CLI text/JSON. Core ships a
+**read-only Python web service that server-renders the dashboard** (client
+downloads rendered HTML); the same service exposes the report JSON API. It lives
+behind the **`treval[web]` extra** — the engine library and CLI never pull it.
+
+```
+ cached MaturityReport (deterministic JSON, produced by a treval run)
+            │
+            ▼
+ treval.web  (FastAPI + Jinja2 SSR, + HTMX for drill-down; read-only)
+   GET /            ─► SSR HTML: 5×5 maturity grid + verification_basis banner
+   GET /report      ─► SSR HTML of the cached report
+   GET /report.json ─► the report JSON (REPORT_JSON_SCHEMA.md contract)
+   GET /evidence/{request_id} ─► live drill-down (reader point-lookup)
+```
+
+Design rules:
+
+- **Engine purity.** `treval.web` imports the engine; the **engine never imports
+  the web layer** (nor the closed platform). Web deps (FastAPI MIT, Starlette /
+  Jinja2 / uvicorn BSD, HTMX BSD-2) are all permissive and isolated to the extra.
+- **Serve cached, don't recompute.** A full engine run is slow; the service serves
+  a **pre-generated** report (with `generated_at_ns`) and only does **live
+  drill-down by `request_id`** (a point lookup — fast on the Postgres index, or a
+  targeted WAL read). Regenerate is admin-only / async.
+- **It exposes audit evidence → treat as sensitive.** Read-only is *not* safe by
+  itself: drill-down surfaces request data that may contain PII. **Loopback-bind +
+  optional token by default** (mirror the platform admin plane); every query is
+  **tenant-scoped** (§7); **never render full response bodies** (§12). These are
+  acceptance gates, not nice-to-haves.
+- **The report JSON is the open contract** (`REPORT_JSON_SCHEMA.md`); the SSR
+  templates render it. The UI engineer builds against committed report fixtures in
+  parallel with the backend — see issues EV-R1 / EV-W1 / EV-W2.
 
 ---
 
