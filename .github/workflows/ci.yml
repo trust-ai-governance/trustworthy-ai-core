@@ -76,7 +76,7 @@ jobs:
 
       - name: Type check with mypy
         if: steps.detect.outputs.has_py == 'true'
-        run: mypy tools
+        run: mypy tools treval
 
       - name: Test with pytest
         if: steps.detect.outputs.has_py == 'true'
@@ -84,14 +84,14 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           if [ -d tests ] || find . -name 'test_*.py' -not -path './.*' | grep -q .; then
-            pytest tests/ --cov=tools --cov-report=xml --cov-report=term-missing --cov-fail-under=60
+            pytest tests/ --cov=tools --cov=treval --cov-report=xml --cov-report=term-missing --cov-fail-under=60
           else
             echo "::notice::No tests yet. pytest skipped."
           fi
 
       - name: Security scan with Bandit
         if: steps.detect.outputs.has_py == 'true'
-        run: bandit -r tools
+        run: bandit -r tools treval
 
       - name: Vulnerability scan with pip-audit
         run: pip-audit || true
