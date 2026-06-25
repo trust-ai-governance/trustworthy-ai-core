@@ -1,0 +1,77 @@
+# Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
+dimension: privacy_data_protection
+title_en: Privacy & Data Protection
+title_zh: 隐私与数据保护
+levels:
+  L1:
+    control_objectives: []   # baseline / no controls in place
+  L2:
+    control_objectives:
+      - id: prv.l2.redaction
+        statement_zh: "基础敏感数据发现与脱敏（正则/NER）"
+        evidence:
+          kind: measured
+          indicator_id: redaction_hit_ratio
+          satisfied_when: "sample_size >= 1"   # pending PII tagger — reads sample_size=0 until source lands
+      - id: prv.l2.retention_deletion
+        statement_zh: "明确数据保留期限与删除流程"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.retention_deletion_process
+      - id: prv.l2.pia_triggers
+        statement_zh: "建立隐私影响评估触发条件"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.pia_trigger_conditions
+  L3:
+    control_objectives:
+      - id: prv.l3.lifecycle_protection
+        statement_zh: "全生命周期标准化保护规程（收集/存储/使用/删除）"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.lifecycle_protection
+      - id: prv.l3.conversation_isolation
+        statement_zh: "对话数据用户级隔离"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.conversation_isolation
+      - id: prv.l3.minors_protection
+        statement_zh: "对未成年人数据实行特殊保护（《办法》合规）"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.minors_protection
+  L4:
+    control_objectives:
+      - id: prv.l4.risk_metrics
+        statement_zh: "量化隐私风险指标（重识别率/泄露影响面/违反率）"
+        evidence:
+          kind: measured
+          indicator_id: pii_exposure_surface
+          satisfied_when: "sample_size >= 100"   # pending PII tagger
+      - id: prv.l4.periodic_pia
+        statement_zh: "定期输出隐私影响评估报告"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.periodic_pia_reports
+      - id: prv.l4.low_risk_verifiable
+        statement_zh: "低隐私风险可验证"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.low_risk_verifiable
+  L5:
+    control_objectives:
+      - id: prv.l5.data_sovereignty
+        statement_zh: "用户数据主权落地（查看/导出/删除）"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.data_sovereignty
+      - id: prv.l5.unlearning
+        statement_zh: "遗忘机制可在限定时间内生效并验证"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.unlearning_verifiable
+      - id: prv.l5.minors_guardian_ui
+        statement_zh: "未成年人数据监护人可操作的决策界面"
+        evidence:
+          kind: attested
+          posture_key: privacy_data_protection.minors_guardian_ui

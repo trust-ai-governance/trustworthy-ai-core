@@ -1,0 +1,83 @@
+# Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
+dimension: transparency_accountability
+title_en: Transparency, Control & Accountability
+title_zh: 透明可控可问责
+levels:
+  L1:
+    control_objectives: []   # baseline / no controls in place
+  L2:
+    control_objectives:
+      - id: trn.l2.asset_inventory
+        statement_zh: "建立 AI 资产发现与台账"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.ai_asset_inventory
+      - id: trn.l2.min_logging
+        statement_zh: "RAG/向量库/日志最低留存要求"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.min_logging_retention
+      - id: trn.l2.approval_owner
+        statement_zh: "书面明确 AI 采购与上线审批责任人"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.approval_owner_documented
+  L3:
+    control_objectives:
+      - id: trn.l3.deployment_registry
+        statement_zh: "权威 AI 部署注册表（所有生产 AI 在册）"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.deployment_registry
+      - id: trn.l3.full_chain_trace
+        statement_zh: "全链路决策可追溯（闭环）"
+        evidence:
+          kind: measured
+          indicator_id: unclosed_loop_rate
+          satisfied_when: "value <= 0"
+      - id: trn.l3.audit_chain_intact
+        statement_zh: "审计 seq 连续性 / 哈希链完整"
+        evidence:
+          kind: measured
+          indicator_id: chain_integrity
+          satisfied_when: "value >= 1"
+      - id: trn.l3.ai_council
+        statement_zh: "建立 AI Council 或 AI CoE"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.ai_council
+      - id: trn.l3.role_training
+        statement_zh: "按角色划分 AI 培训体系"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.role_based_training
+  L4:
+    control_objectives:
+      - id: trn.l4.trace_baseline
+        statement_zh: "跨代码/云/端点全视角决策追溯量化基线"
+        evidence:
+          kind: measured
+          indicator_id: chain_integrity
+          satisfied_when: "sample_size >= 100"
+      - id: trn.l4.telemetry_intervention_decoupled
+        statement_zh: "行为遥测与运行时干预解耦"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.telemetry_intervention_decoupled
+      - id: trn.l4.e2e_delegation_audit
+        statement_zh: "端到端委托链审计"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.e2e_delegation_audit
+  L5:
+    control_objectives:
+      - id: trn.l5.human_ai_coevolution
+        statement_zh: "人类-AI 协同进化闭环（干预反哺决策框架）"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.human_ai_coevolution
+      - id: trn.l5.governance_autoflow
+        statement_zh: "治理证据与例外处理自动流转"
+        evidence:
+          kind: attested
+          posture_key: transparency_accountability.governance_evidence_autoflow
