@@ -1,0 +1,87 @@
+# Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
+dimension: efficient_reliability
+title_en: Efficient Reliability
+title_zh: 高效且可靠
+levels:
+  L1:
+    control_objectives: []   # baseline / no controls in place
+  L2:
+    control_objectives:
+      - id: rel.l2.capacity_monitoring
+        statement_zh: "对主要 AI 服务建立基础容量监控"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.capacity_monitoring
+      - id: rel.l2.recovery_runbook
+        statement_zh: "故障后具备书面恢复流程（Runbook）"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.recovery_runbook
+      - id: rel.l2.train_infer_logical_isolation
+        statement_zh: "训练与推理环境至少逻辑隔离"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.train_infer_logical_isolation
+  L3:
+    control_objectives:
+      - id: rel.l3.lb_failover_healthcheck
+        statement_zh: "负载均衡+自动故障转移+健康检查标准化"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.lb_failover_healthcheck
+      - id: rel.l3.sla_99_5
+        statement_zh: "SLA ≥ 99.5%"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.sla_99_5
+      - id: rel.l3.iac_provisioned
+        statement_zh: "AI 基础设施通过 IaC 供应与管理"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.iac_provisioned
+      - id: rel.l3.train_infer_network_isolation
+        statement_zh: "训练与推理网络隔离"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.train_infer_network_isolation
+  L4:
+    control_objectives:
+      - id: rel.l4.slo_latency_baseline
+        statement_zh: "SLO 延迟量化基线"
+        evidence:
+          kind: measured
+          indicator_id: duration_p99
+          satisfied_when: "sample_size >= 100"
+      - id: rel.l4.slo_success_baseline
+        statement_zh: "端到端成功率/错误率基线"
+        evidence:
+          kind: measured
+          indicator_id: terminal_error_ratio
+          satisfied_when: "sample_size >= 100"
+      - id: rel.l4.fault_injection_drills
+        statement_zh: "故障注入测试形成制度化演练"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.fault_injection_drills
+      - id: rel.l4.cross_az_redundancy
+        statement_zh: "关键负载跨 AZ/跨云冗余"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.cross_az_redundancy
+  L5:
+    control_objectives:
+      - id: rel.l5.dynamic_resource
+        statement_zh: "动态工作流结构调整与资源自适应分配"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.dynamic_resource_allocation
+      - id: rel.l5.predictive_scaling
+        statement_zh: "对可预测负载提前执行扩容"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.predictive_scaling
+      - id: rel.l5.auto_remediation
+        statement_zh: "中高危故障自动运行修复 Runbook"
+        evidence:
+          kind: attested
+          posture_key: efficient_reliability.auto_remediation
