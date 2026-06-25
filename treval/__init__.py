@@ -20,6 +20,17 @@ from treval.models import (
 from treval.posture import PostureFileError, PostureFileReader
 from treval.protocols import AuditEvidenceReader, Indicator, PostureProvider
 from treval.readers import WalEvidenceReader, WalReadError
+from treval.registry import (
+    ControlObjective,
+    Dimension,
+    DimensionRegistry,
+    Evidence,
+    RegistryError,
+    SatisfiedWhenError,
+    compile_satisfied_when,
+    load_registry,
+    validate_against,
+)
 
 __all__ = [
     # models
@@ -41,4 +52,14 @@ __all__ = [
     # posture
     "PostureFileReader",
     "PostureFileError",
+    # registry
+    "Evidence",
+    "ControlObjective",
+    "Dimension",
+    "DimensionRegistry",
+    "load_registry",
+    "validate_against",
+    "RegistryError",
+    "compile_satisfied_when",
+    "SatisfiedWhenError",
 ]

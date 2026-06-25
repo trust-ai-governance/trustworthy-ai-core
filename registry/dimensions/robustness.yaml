@@ -1,0 +1,89 @@
+# Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
+dimension: robustness
+title_en: Robustness
+title_zh: 强鲁棒性
+levels:
+  L1:
+    control_objectives: []   # baseline / no controls in place
+  L2:
+    control_objectives:
+      - id: rob.l2.injection_rule_detection
+        statement_zh: "对 Prompt 注入具备规则级检测（关键词/正则）"
+        evidence:
+          kind: measured
+          indicator_id: injection_rule_hit_ratio
+          satisfied_when: "sample_size >= 1"
+      - id: rob.l2.adversarial_test_ledger
+        statement_zh: "对高风险模型执行基础对抗测试并形成问题台账"
+        evidence:
+          kind: attested
+          posture_key: robustness.adversarial_test_ledger
+      - id: rob.l2.model_version_freeze
+        statement_zh: "建立模型版本冻结要求"
+        evidence:
+          kind: attested
+          posture_key: robustness.model_version_freeze
+  L3:
+    control_objectives:
+      - id: rob.l3.standardized_suite
+        statement_zh: "标准化对抗测试用例库（角色越界/上下文污染/长对话信息丢失）"
+        evidence:
+          kind: attested
+          posture_key: robustness.adversarial_suite_standardized
+      - id: rob.l3.change_regression
+        statement_zh: "模型变更触发对抗回归测试"
+        evidence:
+          kind: attested
+          posture_key: robustness.change_triggers_regression
+      - id: rob.l3.detection_to_siem
+        statement_zh: "检测结果接入 SIEM"
+        evidence:
+          kind: attested
+          posture_key: robustness.detection_to_siem
+      - id: rob.l3.unified_risk_score
+        statement_zh: "对越界行为执行统一风险评分"
+        evidence:
+          kind: measured
+          indicator_id: boundary_breach_rate
+          satisfied_when: "sample_size >= 1"
+  L4:
+    control_objectives:
+      - id: rob.l4.breach_baseline
+        statement_zh: "边界突破率/异常会话比/漂移告警量化基线"
+        evidence:
+          kind: measured
+          indicator_id: boundary_breach_rate
+          satisfied_when: "sample_size >= 100"
+      - id: rob.l4.drift_alerting
+        statement_zh: "漂移告警进入量化基线"
+        evidence:
+          kind: measured
+          indicator_id: drift_alert_count
+          satisfied_when: "sample_size >= 1"
+      - id: rob.l4.redteam_cadence
+        statement_zh: "红队定期演习，评分化且可比较"
+        evidence:
+          kind: attested
+          posture_key: robustness.redteam_cadence
+      - id: rob.l4.model_provenance
+        statement_zh: "模型签名与来源证明"
+        evidence:
+          kind: attested
+          posture_key: robustness.model_provenance_signing
+  L5:
+    control_objectives:
+      - id: rob.l5.guardrail_autoevolve
+        statement_zh: "护栏随新型攻击自动演进"
+        evidence:
+          kind: attested
+          posture_key: robustness.guardrail_autoevolve
+      - id: rob.l5.multiagent_selfcheck
+        statement_zh: "多 Agent 委托链交互下鲁棒性持续自检"
+        evidence:
+          kind: attested
+          posture_key: robustness.multiagent_chain_selfcheck
+      - id: rob.l5.highrisk_autocontain
+        statement_zh: "高危漂移事件自动遏制"
+        evidence:
+          kind: attested
+          posture_key: robustness.highrisk_autocontain

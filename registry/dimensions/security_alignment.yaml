@@ -1,0 +1,112 @@
+# Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
+dimension: security_alignment
+title_en: Comprehensive Security & Alignment
+title_zh: 全域安全与价值观对齐
+levels:
+  L1:
+    control_objectives: []   # baseline / no controls in place
+  L2:
+    control_objectives:
+      - id: sec.l2.sso_mfa
+        statement_zh: "人员访问企业 AI 应用统一走 SSO 与 MFA"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.sso_mfa
+      - id: sec.l2.independent_nhi
+        statement_zh: "AI 工作负载使用独立 NHI"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.independent_nhi
+      - id: sec.l2.initial_risk_assessment
+        statement_zh: "对主要 AI 项目执行初始风险评估"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.initial_risk_assessment
+      - id: sec.l2.incident_response
+        statement_zh: "事件响应计划中加入 AI 相关内容"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.ai_incident_response
+      - id: sec.l2.acceptable_use_policy
+        statement_zh: "建立 AI 可接受使用政策"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.acceptable_use_policy
+  L3:
+    control_objectives:
+      - id: sec.l3.oauth_scope
+        statement_zh: "MCP/Tool 调用使用 OAuth + 细粒度 scope（强制）"
+        evidence:
+          kind: measured
+          indicator_id: scope_deny_rate
+          satisfied_when: "sample_size >= 1"
+      - id: sec.l3.guardrail_blocking
+        statement_zh: "Response/Agent-Action 护栏阻断生效"
+        evidence:
+          kind: measured
+          indicator_id: block_rate
+          satisfied_when: "sample_size >= 1"
+      - id: sec.l3.dual_identity_chain
+        statement_zh: "Agent 与用户身份分离形成双身份链路"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.dual_identity_chain
+      - id: sec.l3.actions_to_siem
+        statement_zh: "Prompt/Response/Agent-Action 接入 SIEM"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.actions_to_siem
+      - id: sec.l3.supply_chain_inventory
+        statement_zh: "模型版本固定，供应链纳入库存管理"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.supply_chain_inventory
+      - id: sec.l3.cicd_security_checks
+        statement_zh: "关键 AI 应用在 CI/CD 中执行专项安全检查"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.cicd_security_checks
+  L4:
+    control_objectives:
+      - id: sec.l4.central_gateway
+        statement_zh: "用中央 AI Gateway 管理生产流量与策略"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.central_gateway
+      - id: sec.l4.continuous_mediation
+        statement_zh: "对 Agent 调用工具的持续中介与态势管理"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.continuous_tool_mediation
+      - id: sec.l4.model_provenance
+        statement_zh: "模型签名与来源证明"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.model_provenance_signing
+      - id: sec.l4.compliance_auto
+        statement_zh: "合规证据自动采集"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.compliance_evidence_auto
+  L5:
+    control_objectives:
+      - id: sec.l5.jit_credentials
+        statement_zh: "Agent 使用 JIT 临时凭证"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.jit_credentials
+      - id: sec.l5.multiagent_validation
+        statement_zh: "多 Agent 委托链校验"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.multiagent_chain_validation
+      - id: sec.l5.guardrail_autoevolve
+        statement_zh: "护栏随攻击模式自动演进"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.guardrail_autoevolve
+      - id: sec.l5.highrisk_autocontain
+        statement_zh: "高危 AI 事件自动遏制"
+        evidence:
+          kind: attested
+          posture_key: security_alignment.highrisk_autocontain
