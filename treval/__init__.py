@@ -18,6 +18,7 @@ from treval.models import (
     PostureEvidence,
 )
 from treval.protocols import AuditEvidenceReader, Indicator, PostureProvider
+from treval.readers import WalEvidenceReader, WalReadError
 
 __all__ = [
     # models
@@ -33,4 +34,7 @@ __all__ = [
     "AuditEvidenceReader",
     "PostureProvider",
     "Indicator",
+    # readers
+    "WalEvidenceReader",
+    "WalReadError",
 ]
