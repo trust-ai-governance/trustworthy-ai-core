@@ -60,8 +60,13 @@ def _get_decoder():
         return _DECODER
     try:
         from google.protobuf.json_format import MessageToDict
-        from trustworthy_ai.v1 import request_context_pb2 as rc_pb
-    except Exception as e:  # ImportError, or proto runtime mismatch
+
+        from tools._rc_decode import decode_request_context
+
+        # Eagerly trigger the lazy proto import so unavailability is detected now
+        # (warn-once + fall back to preview), not per-record at decode time.
+        decode_request_context(b"")
+    except Exception as e:  # protobuf missing, or RcDecodeUnavailable (ir-spec)
         print(
             f"warning: decode unavailable ({type(e).__name__}: {e}). Install the "
             f"trustworthy-ai-ir-spec proto package (provides "
@@ -73,7 +78,7 @@ def _get_decoder():
         return False
 
     def decode(payload: bytes) -> dict:
-        ctx = rc_pb.RequestContext.FromString(payload)
+        ctx = decode_request_context(payload)
         d = MessageToDict(ctx, preserving_proto_field_name=True)
         # Convenience: render bytes fields (base64 in MessageToDict) readably.
         inv = d.get("invocation")
