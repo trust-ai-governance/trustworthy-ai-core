@@ -17,6 +17,12 @@ from treval.models import (
     ObjectiveResult,
     PostureEvidence,
 )
+from treval.indicators import (
+    BlockRate,
+    IndicatorRegistry,
+    build_default_registry,
+    run_indicators,
+)
 from treval.posture import PostureFileError, PostureFileReader
 from treval.protocols import AuditEvidenceReader, Indicator, PostureProvider
 from treval.readers import WalEvidenceReader, WalReadError
@@ -62,4 +68,9 @@ __all__ = [
     "RegistryError",
     "compile_satisfied_when",
     "SatisfiedWhenError",
+    # indicators
+    "IndicatorRegistry",
+    "run_indicators",
+    "BlockRate",
+    "build_default_registry",
 ]
