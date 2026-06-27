@@ -1,7 +1,7 @@
 # Transcribed from docs/MATURITY_MODEL.md — do not invent objectives.
 dimension: transparency_accountability
 title_en: Transparency, Control & Accountability
-title_zh: 透明可控可问责
+title_zh: 透明、可控、可问责
 levels:
   L1:
     control_objectives: []   # baseline / no controls in place

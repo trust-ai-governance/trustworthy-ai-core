@@ -35,11 +35,6 @@ levels:
         evidence:
           kind: attested
           posture_key: robustness.change_triggers_regression
-      - id: rob.l3.detection_to_siem
-        statement_zh: "检测结果接入 SIEM"
-        evidence:
-          kind: attested
-          posture_key: robustness.detection_to_siem
       - id: rob.l3.unified_risk_score
         statement_zh: "对越界行为执行统一风险评分"
         evidence:
