@@ -1,13 +1,32 @@
 {
   "schema_version": 1,
   "kind": "dimension_registry",
-  "note": "SAMPLE for EV-W0 frontend dev. Mirrors EV-6's DimensionRegistry serialized to JSON. The live GET /api/registry endpoint (post EV-6) returns this exact shape from the loaded registry. Content is the authoring draft from docs/MATURITY_MODEL.md; statement_zh strings may be refined when EV-6 authors the YAMLs.",
   "levels_meta": [
-    { "id": "L1", "name_en": "Initial", "name_zh": "偶发" },
-    { "id": "L2", "name_en": "Repeatable", "name_zh": "可重复" },
-    { "id": "L3", "name_en": "Standardized", "name_zh": "标准化" },
-    { "id": "L4", "name_en": "Quantitatively Managed", "name_zh": "量化管理" },
-    { "id": "L5", "name_en": "Optimizing", "name_zh": "优化" }
+    {
+      "id": "L1",
+      "name_en": "Initial",
+      "name_zh": "偶发"
+    },
+    {
+      "id": "L2",
+      "name_en": "Repeatable",
+      "name_zh": "可重复"
+    },
+    {
+      "id": "L3",
+      "name_en": "Standardized",
+      "name_zh": "标准化"
+    },
+    {
+      "id": "L4",
+      "name_en": "Quantitatively Managed",
+      "name_zh": "量化管理"
+    },
+    {
+      "id": "L5",
+      "name_en": "Optimizing",
+      "name_zh": "优化"
+    }
   ],
   "dimensions": [
     {
@@ -17,26 +36,116 @@
       "levels": {
         "L1": [],
         "L2": [
-          { "id": "rob.l2.injection_rule_detection", "statement_zh": "对 Prompt 注入具备规则级检测（关键词/正则）", "kind": "measured", "indicator_id": "injection_rule_hit_ratio", "posture_key": null, "satisfied_when": "sample_size >= 1" },
-          { "id": "rob.l2.adversarial_test_ledger", "statement_zh": "对高风险模型执行基础对抗测试并形成问题台账", "kind": "attested", "indicator_id": null, "posture_key": "robustness.adversarial_test_ledger", "satisfied_when": null },
-          { "id": "rob.l2.model_version_freeze", "statement_zh": "建立模型版本冻结要求", "kind": "attested", "indicator_id": null, "posture_key": "robustness.model_version_freeze", "satisfied_when": null }
+          {
+            "id": "rob.l2.injection_rule_detection",
+            "statement_zh": "对 Prompt 注入具备规则级检测（关键词/正则）",
+            "kind": "measured",
+            "indicator_id": "injection_rule_hit_ratio",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          },
+          {
+            "id": "rob.l2.adversarial_test_ledger",
+            "statement_zh": "对高风险模型执行基础对抗测试并形成问题台账",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.adversarial_test_ledger",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l2.model_version_freeze",
+            "statement_zh": "建立模型版本冻结要求",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.model_version_freeze",
+            "satisfied_when": null
+          }
         ],
         "L3": [
-          { "id": "rob.l3.standardized_suite", "statement_zh": "标准化对抗测试用例库（角色越界/上下文污染/长对话信息丢失）", "kind": "attested", "indicator_id": null, "posture_key": "robustness.adversarial_suite_standardized", "satisfied_when": null },
-          { "id": "rob.l3.change_regression", "statement_zh": "模型变更触发对抗回归测试", "kind": "attested", "indicator_id": null, "posture_key": "robustness.change_triggers_regression", "satisfied_when": null },
-          { "id": "rob.l3.detection_to_siem", "statement_zh": "检测结果接入 SIEM", "kind": "attested", "indicator_id": null, "posture_key": "robustness.detection_to_siem", "satisfied_when": null },
-          { "id": "rob.l3.unified_risk_score", "statement_zh": "对越界行为执行统一风险评分", "kind": "measured", "indicator_id": "boundary_breach_rate", "posture_key": null, "satisfied_when": "sample_size >= 1" }
+          {
+            "id": "rob.l3.standardized_suite",
+            "statement_zh": "标准化对抗测试用例库（角色越界/上下文污染/长对话信息丢失）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.adversarial_suite_standardized",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l3.change_regression",
+            "statement_zh": "模型变更触发对抗回归测试",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.change_triggers_regression",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l3.unified_risk_score",
+            "statement_zh": "对越界行为执行统一风险评分",
+            "kind": "measured",
+            "indicator_id": "boundary_breach_rate",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          }
         ],
         "L4": [
-          { "id": "rob.l4.breach_baseline", "statement_zh": "边界突破率/异常会话比/漂移告警量化基线", "kind": "measured", "indicator_id": "boundary_breach_rate", "posture_key": null, "satisfied_when": "sample_size >= 100" },
-          { "id": "rob.l4.drift_alerting", "statement_zh": "漂移告警进入量化基线", "kind": "measured", "indicator_id": "drift_alert_count", "posture_key": null, "satisfied_when": "sample_size >= 1" },
-          { "id": "rob.l4.redteam_cadence", "statement_zh": "红队定期演习，评分化且可比较", "kind": "attested", "indicator_id": null, "posture_key": "robustness.redteam_cadence", "satisfied_when": null },
-          { "id": "rob.l4.model_provenance", "statement_zh": "模型签名与来源证明", "kind": "attested", "indicator_id": null, "posture_key": "robustness.model_provenance_signing", "satisfied_when": null }
+          {
+            "id": "rob.l4.breach_baseline",
+            "statement_zh": "边界突破率/异常会话比/漂移告警量化基线",
+            "kind": "measured",
+            "indicator_id": "boundary_breach_rate",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 100"
+          },
+          {
+            "id": "rob.l4.drift_alerting",
+            "statement_zh": "漂移告警进入量化基线",
+            "kind": "measured",
+            "indicator_id": "drift_alert_count",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          },
+          {
+            "id": "rob.l4.redteam_cadence",
+            "statement_zh": "红队定期演习，评分化且可比较",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.redteam_cadence",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l4.model_provenance",
+            "statement_zh": "模型签名与来源证明",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.model_provenance_signing",
+            "satisfied_when": null
+          }
         ],
         "L5": [
-          { "id": "rob.l5.guardrail_autoevolve", "statement_zh": "护栏随新型攻击自动演进", "kind": "attested", "indicator_id": null, "posture_key": "robustness.guardrail_autoevolve", "satisfied_when": null },
-          { "id": "rob.l5.multiagent_selfcheck", "statement_zh": "多 Agent 委托链交互下鲁棒性持续自检", "kind": "attested", "indicator_id": null, "posture_key": "robustness.multiagent_chain_selfcheck", "satisfied_when": null },
-          { "id": "rob.l5.highrisk_autocontain", "statement_zh": "高危漂移事件自动遏制", "kind": "attested", "indicator_id": null, "posture_key": "robustness.highrisk_autocontain", "satisfied_when": null }
+          {
+            "id": "rob.l5.guardrail_autoevolve",
+            "statement_zh": "护栏随新型攻击自动演进",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.guardrail_autoevolve",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l5.multiagent_selfcheck",
+            "statement_zh": "多 Agent 委托链交互下鲁棒性持续自检",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.multiagent_chain_selfcheck",
+            "satisfied_when": null
+          },
+          {
+            "id": "rob.l5.highrisk_autocontain",
+            "statement_zh": "高危漂移事件自动遏制",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "robustness.highrisk_autocontain",
+            "satisfied_when": null
+          }
         ]
       }
     },
@@ -47,26 +156,124 @@
       "levels": {
         "L1": [],
         "L2": [
-          { "id": "rel.l2.capacity_monitoring", "statement_zh": "对主要 AI 服务建立基础容量监控", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.capacity_monitoring", "satisfied_when": null },
-          { "id": "rel.l2.recovery_runbook", "statement_zh": "故障后具备书面恢复流程（Runbook）", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.recovery_runbook", "satisfied_when": null },
-          { "id": "rel.l2.train_infer_logical_isolation", "statement_zh": "训练与推理环境至少逻辑隔离", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.train_infer_logical_isolation", "satisfied_when": null }
+          {
+            "id": "rel.l2.capacity_monitoring",
+            "statement_zh": "对主要 AI 服务建立基础容量监控",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.capacity_monitoring",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l2.recovery_runbook",
+            "statement_zh": "故障后具备书面恢复流程（Runbook）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.recovery_runbook",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l2.train_infer_logical_isolation",
+            "statement_zh": "训练与推理环境至少逻辑隔离",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.train_infer_logical_isolation",
+            "satisfied_when": null
+          }
         ],
         "L3": [
-          { "id": "rel.l3.lb_failover_healthcheck", "statement_zh": "负载均衡+自动故障转移+健康检查标准化", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.lb_failover_healthcheck", "satisfied_when": null },
-          { "id": "rel.l3.sla_99_5", "statement_zh": "SLA ≥ 99.5%", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.sla_99_5", "satisfied_when": null },
-          { "id": "rel.l3.iac_provisioned", "statement_zh": "AI 基础设施通过 IaC 供应与管理", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.iac_provisioned", "satisfied_when": null },
-          { "id": "rel.l3.train_infer_network_isolation", "statement_zh": "训练与推理网络隔离", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.train_infer_network_isolation", "satisfied_when": null }
+          {
+            "id": "rel.l3.lb_failover_healthcheck",
+            "statement_zh": "负载均衡+自动故障转移+健康检查标准化",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.lb_failover_healthcheck",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l3.sla_99_5",
+            "statement_zh": "SLA ≥ 99.5%",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.sla_99_5",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l3.iac_provisioned",
+            "statement_zh": "AI 基础设施通过 IaC 供应与管理",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.iac_provisioned",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l3.train_infer_network_isolation",
+            "statement_zh": "训练与推理网络隔离",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.train_infer_network_isolation",
+            "satisfied_when": null
+          }
         ],
         "L4": [
-          { "id": "rel.l4.slo_latency_baseline", "statement_zh": "SLO 延迟量化基线", "kind": "measured", "indicator_id": "duration_p99", "posture_key": null, "satisfied_when": "sample_size >= 100" },
-          { "id": "rel.l4.slo_success_baseline", "statement_zh": "端到端成功率/错误率基线", "kind": "measured", "indicator_id": "terminal_error_ratio", "posture_key": null, "satisfied_when": "sample_size >= 100" },
-          { "id": "rel.l4.fault_injection_drills", "statement_zh": "故障注入测试形成制度化演练", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.fault_injection_drills", "satisfied_when": null },
-          { "id": "rel.l4.cross_az_redundancy", "statement_zh": "关键负载跨 AZ/跨云冗余", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.cross_az_redundancy", "satisfied_when": null }
+          {
+            "id": "rel.l4.slo_latency_baseline",
+            "statement_zh": "SLO 延迟量化基线",
+            "kind": "measured",
+            "indicator_id": "duration_p99",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 100"
+          },
+          {
+            "id": "rel.l4.slo_success_baseline",
+            "statement_zh": "端到端成功率/错误率基线",
+            "kind": "measured",
+            "indicator_id": "terminal_error_ratio",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 100"
+          },
+          {
+            "id": "rel.l4.fault_injection_drills",
+            "statement_zh": "故障注入测试形成制度化演练",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.fault_injection_drills",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l4.cross_az_redundancy",
+            "statement_zh": "关键负载跨 AZ/跨云冗余",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.cross_az_redundancy",
+            "satisfied_when": null
+          }
         ],
         "L5": [
-          { "id": "rel.l5.dynamic_resource", "statement_zh": "动态工作流结构调整与资源自适应分配", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.dynamic_resource_allocation", "satisfied_when": null },
-          { "id": "rel.l5.predictive_scaling", "statement_zh": "对可预测负载提前执行扩容", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.predictive_scaling", "satisfied_when": null },
-          { "id": "rel.l5.auto_remediation", "statement_zh": "中高危故障自动运行修复 Runbook", "kind": "attested", "indicator_id": null, "posture_key": "efficient_reliability.auto_remediation", "satisfied_when": null }
+          {
+            "id": "rel.l5.dynamic_resource",
+            "statement_zh": "动态工作流结构调整与资源自适应分配",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.dynamic_resource_allocation",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l5.predictive_scaling",
+            "statement_zh": "对可预测负载提前执行扩容",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.predictive_scaling",
+            "satisfied_when": null
+          },
+          {
+            "id": "rel.l5.auto_remediation",
+            "statement_zh": "中高危故障自动运行修复 Runbook",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "efficient_reliability.auto_remediation",
+            "satisfied_when": null
+          }
         ]
       }
     },
@@ -77,31 +284,164 @@
       "levels": {
         "L1": [],
         "L2": [
-          { "id": "sec.l2.sso_mfa", "statement_zh": "人员访问企业 AI 应用统一走 SSO 与 MFA", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.sso_mfa", "satisfied_when": null },
-          { "id": "sec.l2.independent_nhi", "statement_zh": "AI 工作负载使用独立 NHI", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.independent_nhi", "satisfied_when": null },
-          { "id": "sec.l2.initial_risk_assessment", "statement_zh": "对主要 AI 项目执行初始风险评估", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.initial_risk_assessment", "satisfied_when": null },
-          { "id": "sec.l2.incident_response", "statement_zh": "事件响应计划中加入 AI 相关内容", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.ai_incident_response", "satisfied_when": null },
-          { "id": "sec.l2.acceptable_use_policy", "statement_zh": "建立 AI 可接受使用政策", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.acceptable_use_policy", "satisfied_when": null }
+          {
+            "id": "sec.l2.sso_mfa",
+            "statement_zh": "人员访问企业 AI 应用统一走 SSO 与 MFA",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.sso_mfa",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l2.independent_nhi",
+            "statement_zh": "AI 工作负载使用独立 NHI",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.independent_nhi",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l2.initial_risk_assessment",
+            "statement_zh": "对主要 AI 项目执行初始风险评估",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.initial_risk_assessment",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l2.incident_response",
+            "statement_zh": "事件响应计划中加入 AI 相关内容",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.ai_incident_response",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l2.acceptable_use_policy",
+            "statement_zh": "建立 AI 可接受使用政策",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.acceptable_use_policy",
+            "satisfied_when": null
+          }
         ],
         "L3": [
-          { "id": "sec.l3.oauth_scope", "statement_zh": "MCP/Tool 调用使用 OAuth + 细粒度 scope（强制）", "kind": "measured", "indicator_id": "scope_deny_rate", "posture_key": null, "satisfied_when": "sample_size >= 1" },
-          { "id": "sec.l3.guardrail_blocking", "statement_zh": "Response/Agent-Action 护栏阻断生效", "kind": "measured", "indicator_id": "block_rate", "posture_key": null, "satisfied_when": "sample_size >= 1" },
-          { "id": "sec.l3.dual_identity_chain", "statement_zh": "Agent 与用户身份分离形成双身份链路", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.dual_identity_chain", "satisfied_when": null },
-          { "id": "sec.l3.actions_to_siem", "statement_zh": "Prompt/Response/Agent-Action 接入 SIEM", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.actions_to_siem", "satisfied_when": null },
-          { "id": "sec.l3.supply_chain_inventory", "statement_zh": "模型版本固定，供应链纳入库存管理", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.supply_chain_inventory", "satisfied_when": null },
-          { "id": "sec.l3.cicd_security_checks", "statement_zh": "关键 AI 应用在 CI/CD 中执行专项安全检查", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.cicd_security_checks", "satisfied_when": null }
+          {
+            "id": "sec.l3.oauth_scope",
+            "statement_zh": "MCP/Tool 调用使用 OAuth + 细粒度 scope（强制）",
+            "kind": "measured",
+            "indicator_id": "scope_deny_rate",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          },
+          {
+            "id": "sec.l3.guardrail_blocking",
+            "statement_zh": "Response/Agent-Action 护栏阻断生效",
+            "kind": "measured",
+            "indicator_id": "block_rate",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          },
+          {
+            "id": "sec.l3.dual_identity_chain",
+            "statement_zh": "Agent 与用户身份分离形成双身份链路",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.dual_identity_chain",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l3.actions_to_siem",
+            "statement_zh": "Prompt/Response/Agent-Action 接入 SIEM",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.actions_to_siem",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l3.supply_chain_inventory",
+            "statement_zh": "模型版本固定，供应链纳入库存管理",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.supply_chain_inventory",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l3.cicd_security_checks",
+            "statement_zh": "关键 AI 应用在 CI/CD 中执行专项安全检查",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.cicd_security_checks",
+            "satisfied_when": null
+          }
         ],
         "L4": [
-          { "id": "sec.l4.central_gateway", "statement_zh": "用中央 AI Gateway 管理生产流量与策略", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.central_gateway", "satisfied_when": null },
-          { "id": "sec.l4.continuous_mediation", "statement_zh": "对 Agent 调用工具的持续中介与态势管理", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.continuous_tool_mediation", "satisfied_when": null },
-          { "id": "sec.l4.model_provenance", "statement_zh": "模型签名与来源证明", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.model_provenance_signing", "satisfied_when": null },
-          { "id": "sec.l4.compliance_auto", "statement_zh": "合规证据自动采集", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.compliance_evidence_auto", "satisfied_when": null }
+          {
+            "id": "sec.l4.central_gateway",
+            "statement_zh": "用中央 AI Gateway 管理生产流量与策略",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.central_gateway",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l4.continuous_mediation",
+            "statement_zh": "对 Agent 调用工具的持续中介与态势管理",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.continuous_tool_mediation",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l4.model_provenance",
+            "statement_zh": "模型签名与来源证明",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.model_provenance_signing",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l4.compliance_auto",
+            "statement_zh": "合规证据自动采集",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.compliance_evidence_auto",
+            "satisfied_when": null
+          }
         ],
         "L5": [
-          { "id": "sec.l5.jit_credentials", "statement_zh": "Agent 使用 JIT 临时凭证", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.jit_credentials", "satisfied_when": null },
-          { "id": "sec.l5.multiagent_validation", "statement_zh": "多 Agent 委托链校验", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.multiagent_chain_validation", "satisfied_when": null },
-          { "id": "sec.l5.guardrail_autoevolve", "statement_zh": "护栏随攻击模式自动演进", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.guardrail_autoevolve", "satisfied_when": null },
-          { "id": "sec.l5.highrisk_autocontain", "statement_zh": "高危 AI 事件自动遏制", "kind": "attested", "indicator_id": null, "posture_key": "security_alignment.highrisk_autocontain", "satisfied_when": null }
+          {
+            "id": "sec.l5.jit_credentials",
+            "statement_zh": "Agent 使用 JIT 临时凭证",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.jit_credentials",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l5.multiagent_validation",
+            "statement_zh": "多 Agent 委托链校验",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.multiagent_chain_validation",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l5.guardrail_autoevolve",
+            "statement_zh": "护栏随攻击模式自动演进",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.guardrail_autoevolve",
+            "satisfied_when": null
+          },
+          {
+            "id": "sec.l5.highrisk_autocontain",
+            "statement_zh": "高危 AI 事件自动遏制",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "security_alignment.highrisk_autocontain",
+            "satisfied_when": null
+          }
         ]
       }
     },
@@ -112,25 +452,116 @@
       "levels": {
         "L1": [],
         "L2": [
-          { "id": "trn.l2.asset_inventory", "statement_zh": "建立 AI 资产发现与台账", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.ai_asset_inventory", "satisfied_when": null },
-          { "id": "trn.l2.min_logging", "statement_zh": "RAG/向量库/日志最低留存要求", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.min_logging_retention", "satisfied_when": null },
-          { "id": "trn.l2.approval_owner", "statement_zh": "书面明确 AI 采购与上线审批责任人", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.approval_owner_documented", "satisfied_when": null }
+          {
+            "id": "trn.l2.asset_inventory",
+            "statement_zh": "建立 AI 资产发现与台账",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.ai_asset_inventory",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l2.min_logging",
+            "statement_zh": "RAG/向量库/日志最低留存要求",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.min_logging_retention",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l2.approval_owner",
+            "statement_zh": "书面明确 AI 采购与上线审批责任人",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.approval_owner_documented",
+            "satisfied_when": null
+          }
         ],
         "L3": [
-          { "id": "trn.l3.deployment_registry", "statement_zh": "权威 AI 部署注册表（所有生产 AI 在册）", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.deployment_registry", "satisfied_when": null },
-          { "id": "trn.l3.full_chain_trace", "statement_zh": "全链路决策可追溯（闭环）", "kind": "measured", "indicator_id": "unclosed_loop_rate", "posture_key": null, "satisfied_when": "value <= 0" },
-          { "id": "trn.l3.audit_chain_intact", "statement_zh": "审计 seq 连续性 / 哈希链完整", "kind": "measured", "indicator_id": "chain_integrity", "posture_key": null, "satisfied_when": "value >= 1" },
-          { "id": "trn.l3.ai_council", "statement_zh": "建立 AI Council 或 AI CoE", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.ai_council", "satisfied_when": null },
-          { "id": "trn.l3.role_training", "statement_zh": "按角色划分 AI 培训体系", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.role_based_training", "satisfied_when": null }
+          {
+            "id": "trn.l3.deployment_registry",
+            "statement_zh": "权威 AI 部署注册表（所有生产 AI 在册）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.deployment_registry",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l3.full_chain_trace",
+            "statement_zh": "全链路决策可追溯（闭环）",
+            "kind": "measured",
+            "indicator_id": "unclosed_loop_rate",
+            "posture_key": null,
+            "satisfied_when": "value <= 0"
+          },
+          {
+            "id": "trn.l3.audit_chain_intact",
+            "statement_zh": "审计 seq 连续性 / 哈希链完整",
+            "kind": "measured",
+            "indicator_id": "chain_integrity",
+            "posture_key": null,
+            "satisfied_when": "value >= 1"
+          },
+          {
+            "id": "trn.l3.ai_council",
+            "statement_zh": "建立 AI Council 或 AI CoE",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.ai_council",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l3.role_training",
+            "statement_zh": "按角色划分 AI 培训体系",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.role_based_training",
+            "satisfied_when": null
+          }
         ],
         "L4": [
-          { "id": "trn.l4.trace_baseline", "statement_zh": "跨代码/云/端点全视角决策追溯量化基线", "kind": "measured", "indicator_id": "chain_integrity", "posture_key": null, "satisfied_when": "sample_size >= 100" },
-          { "id": "trn.l4.telemetry_intervention_decoupled", "statement_zh": "行为遥测与运行时干预解耦", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.telemetry_intervention_decoupled", "satisfied_when": null },
-          { "id": "trn.l4.e2e_delegation_audit", "statement_zh": "端到端委托链审计", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.e2e_delegation_audit", "satisfied_when": null }
+          {
+            "id": "trn.l4.trace_baseline",
+            "statement_zh": "跨代码/云/端点全视角决策追溯量化基线",
+            "kind": "measured",
+            "indicator_id": "chain_integrity",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 100"
+          },
+          {
+            "id": "trn.l4.telemetry_intervention_decoupled",
+            "statement_zh": "行为遥测与运行时干预解耦",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.telemetry_intervention_decoupled",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l4.e2e_delegation_audit",
+            "statement_zh": "端到端委托链审计",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.e2e_delegation_audit",
+            "satisfied_when": null
+          }
         ],
         "L5": [
-          { "id": "trn.l5.human_ai_coevolution", "statement_zh": "人类-AI 协同进化闭环（干预反哺决策框架）", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.human_ai_coevolution", "satisfied_when": null },
-          { "id": "trn.l5.governance_autoflow", "statement_zh": "治理证据与例外处理自动流转", "kind": "attested", "indicator_id": null, "posture_key": "transparency_accountability.governance_evidence_autoflow", "satisfied_when": null }
+          {
+            "id": "trn.l5.human_ai_coevolution",
+            "statement_zh": "人类-AI 协同进化闭环（干预反哺决策框架）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.human_ai_coevolution",
+            "satisfied_when": null
+          },
+          {
+            "id": "trn.l5.governance_autoflow",
+            "statement_zh": "治理证据与例外处理自动流转",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "transparency_accountability.governance_evidence_autoflow",
+            "satisfied_when": null
+          }
         ]
       }
     },
@@ -141,24 +572,108 @@
       "levels": {
         "L1": [],
         "L2": [
-          { "id": "prv.l2.redaction", "statement_zh": "基础敏感数据发现与脱敏（正则/NER）", "kind": "measured", "indicator_id": "redaction_hit_ratio", "posture_key": null, "satisfied_when": "sample_size >= 1" },
-          { "id": "prv.l2.retention_deletion", "statement_zh": "明确数据保留期限与删除流程", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.retention_deletion_process", "satisfied_when": null },
-          { "id": "prv.l2.pia_triggers", "statement_zh": "建立隐私影响评估触发条件", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.pia_trigger_conditions", "satisfied_when": null }
+          {
+            "id": "prv.l2.redaction",
+            "statement_zh": "基础敏感数据发现与脱敏（正则/NER）",
+            "kind": "measured",
+            "indicator_id": "redaction_hit_ratio",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 1"
+          },
+          {
+            "id": "prv.l2.retention_deletion",
+            "statement_zh": "明确数据保留期限与删除流程",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.retention_deletion_process",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l2.pia_triggers",
+            "statement_zh": "建立隐私影响评估触发条件",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.pia_trigger_conditions",
+            "satisfied_when": null
+          }
         ],
         "L3": [
-          { "id": "prv.l3.lifecycle_protection", "statement_zh": "全生命周期标准化保护规程（收集/存储/使用/删除）", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.lifecycle_protection", "satisfied_when": null },
-          { "id": "prv.l3.conversation_isolation", "statement_zh": "对话数据用户级隔离", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.conversation_isolation", "satisfied_when": null },
-          { "id": "prv.l3.minors_protection", "statement_zh": "对未成年人数据实行特殊保护（《办法》合规）", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.minors_protection", "satisfied_when": null }
+          {
+            "id": "prv.l3.lifecycle_protection",
+            "statement_zh": "全生命周期标准化保护规程（收集/存储/使用/删除）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.lifecycle_protection",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l3.conversation_isolation",
+            "statement_zh": "对话数据用户级隔离",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.conversation_isolation",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l3.minors_protection",
+            "statement_zh": "对未成年人数据实行特殊保护（《办法》合规）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.minors_protection",
+            "satisfied_when": null
+          }
         ],
         "L4": [
-          { "id": "prv.l4.risk_metrics", "statement_zh": "量化隐私风险指标（重识别率/泄露影响面/违反率）", "kind": "measured", "indicator_id": "pii_exposure_surface", "posture_key": null, "satisfied_when": "sample_size >= 100" },
-          { "id": "prv.l4.periodic_pia", "statement_zh": "定期输出隐私影响评估报告", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.periodic_pia_reports", "satisfied_when": null },
-          { "id": "prv.l4.low_risk_verifiable", "statement_zh": "低隐私风险可验证", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.low_risk_verifiable", "satisfied_when": null }
+          {
+            "id": "prv.l4.risk_metrics",
+            "statement_zh": "量化隐私风险指标（重识别率/泄露影响面/违反率）",
+            "kind": "measured",
+            "indicator_id": "pii_exposure_surface",
+            "posture_key": null,
+            "satisfied_when": "sample_size >= 100"
+          },
+          {
+            "id": "prv.l4.periodic_pia",
+            "statement_zh": "定期输出隐私影响评估报告",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.periodic_pia_reports",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l4.low_risk_verifiable",
+            "statement_zh": "低隐私风险可验证",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.low_risk_verifiable",
+            "satisfied_when": null
+          }
         ],
         "L5": [
-          { "id": "prv.l5.data_sovereignty", "statement_zh": "用户数据主权落地（查看/导出/删除）", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.data_sovereignty", "satisfied_when": null },
-          { "id": "prv.l5.unlearning", "statement_zh": "遗忘机制可在限定时间内生效并验证", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.unlearning_verifiable", "satisfied_when": null },
-          { "id": "prv.l5.minors_guardian_ui", "statement_zh": "未成年人数据监护人可操作的决策界面", "kind": "attested", "indicator_id": null, "posture_key": "privacy_data_protection.minors_guardian_ui", "satisfied_when": null }
+          {
+            "id": "prv.l5.data_sovereignty",
+            "statement_zh": "用户数据主权落地（查看/导出/删除）",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.data_sovereignty",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l5.unlearning",
+            "statement_zh": "遗忘机制可在限定时间内生效并验证",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.unlearning_verifiable",
+            "satisfied_when": null
+          },
+          {
+            "id": "prv.l5.minors_guardian_ui",
+            "statement_zh": "未成年人数据监护人可操作的决策界面",
+            "kind": "attested",
+            "indicator_id": null,
+            "posture_key": "privacy_data_protection.minors_guardian_ui",
+            "satisfied_when": null
+          }
         ]
       }
     }
