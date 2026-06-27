@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>可信 AI 成熟度模型 · Trustworthy-AI Maturity Model</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 92 60" width="48" height="31" fill="currentColor"
+             role="img" aria-label="treval logo">
+          <!-- "<" chevron — 5 modules stacked top → bottom -->
+          <rect x="24.75" y="0.75"  width="10.5" height="10.5" rx="2.2"/>
+          <rect x="12.75" y="12.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="0.75"  y="24.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="12.75" y="36.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="24.75" y="48.75" width="10.5" height="10.5" rx="2.2"/>
+          <!-- "口" hollow square — 12-module 4×4 ring, height-matched to "<" -->
+          <rect x="45" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
+          <rect x="57" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
+          <rect x="69" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
+          <rect x="81" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
+          <rect x="45" y="18.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="81" y="18.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="45" y="30.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="81" y="30.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="45" y="42.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="57" y="42.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="69" y="42.75" width="10.5" height="10.5" rx="2.2"/>
+          <rect x="81" y="42.75" width="10.5" height="10.5" rx="2.2"/>
+        </svg>
+      </span>
+      <div class="titles">
+        <h1>可信 AI 成熟度模型 <span class="en">Trustworthy-AI Maturity Model</span></h1>
+        <p class="subtitle">
+          5 维度 × 5 等级 · {{ objective_count }} 个控制目标 ·
+          <span class="ro">只读标准视图 read-only</span>
+        </p>
+      </div>
+    </div>
+    <div class="legend" aria-label="图例">
+      <span class="legend-item"><span class="swatch swatch--measured"></span>测量 measured · 运行时指标</span>
+      <span class="legend-item"><span class="swatch swatch--attested"></span>声明 attested · posture_key</span>
+    </div>
+  </header>
+
+  <main class="grid-wrap">
+    <div class="grid" style="--cols: {{ levels_meta | length }}">
+      <div class="corner" aria-hidden="true"></div>
+      {% for lvl in levels_meta %}
+      <div class="col-head">
+        <span class="lvl-id">{{ lvl.id }}</span>
+        <span class="lvl-zh">{{ lvl.name_zh }}</span>
+        <span class="lvl-en">{{ lvl.name_en }}</span>
+      </div>
+      {% endfor %}
+
+      {% for dim in dimensions %}
+      <div class="row-head">
+        <span class="dim-zh">{{ dim.title_zh }}</span>
+        <span class="dim-en">{{ dim.title_en }}</span>
+        <code class="dim-id">{{ dim.id }}</code>
+      </div>
+      {% for lvl in levels_meta %}
+      {% set objs = dim.levels[lvl.id] %}
+      <div class="cell{% if not objs %} cell--empty{% endif %}">
+        {% if objs %}
+          {% for o in objs %}
+          <details class="obj obj--{{ o.kind }}">
+            <summary><span class="stmt">{{ o.statement_zh }}</span></summary>
+            <div class="obj-body">
+              <div class="kv"><span class="k">id</span><code class="v">{{ o.id }}</code></div>
+              {% if o.kind == 'measured' %}
+              <div class="kv"><span class="k">indicator</span><code class="v">{{ o.indicator_id }}</code></div>
+              <div class="kv"><span class="k">satisfied_when</span><code class="v">{{ o.satisfied_when }}</code></div>
+              {% else %}
+              <div class="kv"><span class="k">posture_key</span><code class="v">{{ o.posture_key }}</code></div>
+              {% endif %}
+            </div>
+          </details>
+          {% endfor %}
+        {% else %}
+          <span class="na" title="L1 baseline — no controls in place">N/A</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% endfor %}
+    </div>
+  </main>
+
+  <footer class="foot">
+    数据源 <code>GET /api/registry</code> · 来自 EV-6 已加载的 DimensionRegistry ·
+    <code>docs/MATURITY_MODEL.md</code> 为内容源
+  </footer>
+</body>
+</html>

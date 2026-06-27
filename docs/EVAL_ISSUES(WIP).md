@@ -38,6 +38,36 @@ license CI 扩展到 `treval`。③ `satisfied_when` 是**锁定迷你文法**
 
 ---
 
+## 第 3 轮转向：成熟度可信度（active-eval / 框架吸收 / 行审计）
+
+**背景**：成熟度模型 **82% 声明（attested）/18% 测量**，大量沿袭 CSA AISMM 的厂商/流程
+条款，可信度存疑。三份新文档定调：`MATURITY_ROW_AUDIT.md`（逐行审计）、
+`FRAMEWORK_ALIGNMENT.md`（CSA 核对 + OWASP/ISO42001/CAICT 吸收）、
+`ACTIVE_EVAL_CORPUS_DESIGN.md`（主动评估语料库）。
+
+| 决策（已拍板） | 影响 |
+|---|---|
+| **效用为基准**（Q-R1）：`sample_size>=1` 等"存在阈值"是缺陷，每个测量行须测**效用** | 全维度 registry 内容；新指标 |
+| **主动评估语料库**（OWASP 种子，**有界**：内置参考语料 + BYO target/corpus 接口） | 新 workstream **EV-AE**；是 82%→可信的关键杠杆 |
+| **框架吸收不加第 6 维**：OWASP→测量内容；ISO42001→声明侧锚点（regulation 列）；CAICT→国内认可 + SafetyAI Bench 测试集 | registry 内容；regulation 列 |
+| **Affordable 升华**＝"无厂商锁定即可评估"——挡掉 CSA 厂商天花板条款 | 行审计的纳入/剔除门 |
+| **定位**：非认证机构，只报 **"已验证 L_n"**（Core 实测满足的最高级）vs 客户自声明级，不报"已认证" | EV-7 report；EV-W* 展示 |
+
+**重排序**（关键路径不变，新增 active-eval 支线）：
+- **EV-4（SDK + block_rate）仍是下一个**——主动评估指标也是 `Indicator`，复用 SDK，EV-4 是地基。
+- **EV-AE（主动评估）= EV-4 之后的新优先支线**：先做 **LLM01 注入 → `injection_catch_rate`**
+  纵切（设计见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §3），再按 OWASP 路线图逐类薄 issue。
+  依赖运行中的 gateway+model，CI integration-gated（同 PG 套件）。
+- **EV-9（网关 tag 被动维度指标）降级**：active-eval 是 Robustness/Security 更强的测量源；
+  EV-9 仍有效但次于 EV-AE。
+- **行审计是内容轨**（非编码 issue）：驱动 registry YAML 的剔除/改写 + 决定要建哪些指标；
+  与引擎/UI 并行推进，`detection_to_siem` 已剔（Q-R2）。
+
+新增 issue 占位：**EV-AE0**（语料格式 + Target 接口 + runner + LLM01 纵切），
+**EV-AE1+**（按 OWASP 类逐个补指标）。详细 brief 待 EV-4 落地后据设计文档展开。
+
+---
+
 ## 依赖图
 
 ```
