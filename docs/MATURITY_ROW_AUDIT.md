@@ -185,6 +185,18 @@ on **M-infra** — SLA/cross-AZ/IaC/network-isolation are infra-scan measurable;
 Security & Alignment is the most attested at 89% and most depends on the gateway's
 scope engine #5a landing.)
 
+> **Seed finding (surfaced by the EV-4 review, 2026-06-27) — Security & Alignment.**
+> `sec.l3.guardrail_blocking` ("Response/Agent-Action 护栏阻断生效" — guardrail blocking
+> is *effective*) is wired to **`block_rate`** with **`satisfied_when: sample_size >= 1`**.
+> Two defects in one row: (a) Q-R1 presence-threshold (`sample_size>=1` proves a
+> decision happened, not efficacy); (b) **wrong indicator** — `block_rate` is *what
+> fraction of all traffic got blocked* (an **activity** signal: high = possible
+> over-blocking, low = clean traffic *or* dead guardrail), **not** an efficacy measure
+> of catching attacks. **Fix when EV-AE0 lands:** re-point → **`injection_catch_rate`**
+> (% of known-attack corpus blocked) with an efficacy threshold (e.g. `value >= 0.9`);
+> `block_rate` becomes supporting context, not the satisfier. `block_rate` itself is a
+> correct, useful measured indicator — just mis-assigned here.
+
 ---
 
 ## 8. Decisions log (resolved 2026-06-27)
