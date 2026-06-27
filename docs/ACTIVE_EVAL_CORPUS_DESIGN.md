@@ -1,222 +1,255 @@
-# Active-Eval Corpus — Design
+# Active-Eval Corpus — Design (settled)
 
 > **Why.** The maturity model is 82% attested because the only wired evidence source
-> is *passive* gateway audit. The **active-eval harness** is the lever that converts
-> attested rows → measured: run an adversarial corpus through a target, observe how
-> the governed system behaves, and **measure efficacy** (does it catch / prevent),
-> not mere presence (Q-R1: the model is efficacy-based). Content is **OWASP LLM Top
-> 10**-seeded (see `FRAMEWORK_ALIGNMENT.md` §2.1). Scope is **bounded** (Q-INPUT-1):
-> core ships a reference corpus *and* a bring-your-own seam so it never expands
-> without limit — mirroring the open conformance-suite pattern.
+> is *passive* gateway audit. The **active-eval harness** converts attested rows →
+> measured: run an adversarial corpus through a target, observe how the governed
+> system behaves, and **measure efficacy** (does it catch / prevent), not presence
+> (Q-R1). Content is **OWASP LLM Top 10**-seeded (`FRAMEWORK_ALIGNMENT.md` §2.1).
+> Scope is **bounded** (Q-INPUT-1): core ships a small reference corpus + a
+> bring-your-own seam.
+>
+> **Status: settled** — incorporates Platform's Q-AE2 answer (request_id + eval
+> tenant; **no platform change**) and the corpus-interface / licensing decisions
+> (Q-AE3). Ready to brief as **EV-AE0**.
 
-Pairs with: `FRAMEWORK_ALIGNMENT.md` (framework sourcing), `MATURITY_ROW_AUDIT.md`
-(which rows this promotes), `EVAL_ARCHITECTURE(WIP).md` §2.2 (the `Indicator` it reuses).
-
----
-
-## 1. The core idea — generate evidence, then measure it
-
-Passive indicators (EV-4/5) read audit records the gateway *already* wrote. Active
-eval **generates** the records by driving a target with known-adversarial inputs,
-then measures the outcomes with the **same `Indicator` machinery**. The only new
-parts are the **corpus** and the **runner that drives a target**; measurement reuses
-the existing SDK.
-
-```
- corpus (OWASP-seeded YAML)         target (the governed system)
-   ┌──────────────────────┐         ┌───────────────────────────┐
-   │ case: input + success │──run──▶ │ Gateway → rules → model    │
-   │ criterion + dimension │         └──────────┬────────────────┘
-   └──────────────────────┘                     │ outcome (decision + response)
-              │                                  ▼
-              │                      AuditEvidence (the WAL records the run)
-              └──────────────────────────────┬───┘
-                                              ▼
-                          Indicator.measure(evidence)  ── reused EV-4 SDK
-                                              ▼
-                     Measurement: injection_catch_rate = caught / total
-                     (efficacy-based, dimension-attributed, evidence_refs populated)
-```
-
-**Key property:** because the run flows through the real gateway and lands in the
-WAL, every measured number is **traceable to chain-verified audit records** (the
-same zero-trust property as passive eval) — a customer can re-run the corpus and
-reproduce the score.
+Pairs with: `FRAMEWORK_ALIGNMENT.md`, `MATURITY_ROW_AUDIT.md`,
+`EVAL_ARCHITECTURE(WIP).md` §2.2 (the `Measurement` it reuses), `POSTGRES_READ_CONTRACT.md`
+(`request_id` is the canonical correlation key).
 
 ---
 
-## 2. Components
+## 1. Core idea — generate evidence, then measure it
 
-### 2.1 Corpus — open, versioned, bounded
+Passive indicators (EV-4/5) read records the gateway *already* wrote. Active eval
+**generates** records by driving a target with known-adversarial inputs, then
+measures the outcomes. The new parts are the **corpus** and the **runner that drives
+a target**; the output is the same `Measurement` the rubric consumes.
 
-A directory of self-describing YAML cases (the adversarial analogue of
-`trustworthy_ai_conformance/`). One case = one adversarial probe + its success
-criterion. **Core ships a curated reference corpus seeded from OWASP**; it is *not*
-meant to be exhaustive (that's the BYO seam, §2.4).
+```
+ corpus (cases: input + success_when + dimension)
+        │  run under a reserved eval tenant (§4)
+        ▼
+ Target.probe ── HTTP/MCP invoke ──▶ Gateway → rules → model   (the REAL governance path)
+        │                                   │
+        │  response: request_id (body + x-request-id header), decision, output
+        ▼                                   ▼
+ ProbeResult  ◀── join by request_id ── WAL record (E1: final_decision, rule_evaluations[tags], hint)
+        ▼
+ CorpusIndicator.measure(ProbeResult[]) ─▶ Measurement
+        injection_catch_rate = caught / total   (efficacy, dimension-tagged, evidence_refs=request_ids)
+```
+
+**Trust property preserved:** every probe is an ordinary governed request landing in
+the hash-chained WAL, correlated by `request_id` — so a customer re-runs the corpus
+and reproduces the score from chain-verified records. No eval-special path.
+
+---
+
+## 2. Correlation & isolation (Q-AE2 — Platform answer, zero platform change)
+
+**Correlate by `request_id`; isolate under a reserved eval tenant. Do NOT add a
+`case_id` field to the audit schema.**
+
+- **Correlation = `request_id`.** The gateway already returns it on every probe
+  (response body **and** `x-request-id` header). The harness holds
+  `case_id → request_id` the instant it gets the response; `evidence_ref = request_id`
+  (core's canonical key, `POSTGRES_READ_CONTRACT`). A `case_id` field would be a
+  net-new **strong-contract** change (Charter §3) bleeding an *eval* concept into the
+  *governance* WAL — wrong side of the platform/core split. The integrity property
+  comes from `request_id` alone (the record is hash-chained regardless).
+- **Isolation = reserved eval tenant** (e.g. `__eval__`) — **required, not optional.**
+  Eval probes become real audit records; without isolation they would **contaminate**:
+  - D1 `soc2-critical-operations` = `terminal ∈ {BLOCKED,ERROR}` → every caught
+    injection (a BLOCK) would pollute a customer's SOC2/等保 compliance report;
+  - `total_tokens_by_agent` (eval burns tokens) and the passive maturity signals
+    (eval BLOCK-rate skews real Robustness numbers).
+  `tenant_id` already filters `/audit:report`, token stats, and search, and is
+  required everywhere (Charter §7) — so a dedicated eval tenant gives
+  correlation-by-filter **and** keeps eval out of real governance data. Pure
+  convention, no schema change.
+- **Never make the gateway eval-aware** (Platform comment #1) — an eval-mode the
+  gateway special-cases would invalidate the test ("does eval behave differently?").
+  The gateway governs a probe identically to real traffic; correlation/isolation live
+  *outside* the governance record.
+
+---
+
+## 3. Components
+
+### 3.1 Corpus — open, versioned, bounded
+
+Self-describing YAML cases (the adversarial analogue of `trustworthy_ai_conformance/`).
 
 ```yaml
 # corpus/llm01_prompt_injection/direct_ignore_instructions_001.yaml
 id: llm01.direct.ignore_instructions.001
-owasp: LLM01                       # the OWASP 2025 category
-dimension: robustness              # which trust dimension this evidences
+owasp: LLM01
+dimension: robustness
 attack_class: direct_prompt_injection
-input: "<adversarial prompt — pulled from an open source, see §5; NOT authored here>"
-success_when: blocked_or_flagged   # the governed system SHOULD block or flag this
+input: "<adversarial prompt>"        # provenance + sourcing rules in §5
+success_when: blocked_or_flagged     # the efficacy criterion (whitelisted vocab below)
 severity: high
-source: "owasp-genai / promptfoo redteam / garak"   # provenance, for auditability
+source: "core-authored | promptfoo:<path> | garak:<probe> | pyrit:<id>"
 ```
 
-`success_when` vocabulary (the efficacy criterion — extensible, whitelisted like
-`satisfied_when`): `blocked_or_flagged` · `not_leaked(<canary>)` ·
-`no_unauthorized_tool_call` · `output_escaped` · `within_cost_budget`. Each maps to a
-deterministic check over the run's outcome — **no free-form assertion, no code eval**
-(Charter §4).
+`success_when` vocabulary (whitelisted, deterministic checks — no code eval, Charter §4):
 
-### 2.2 Target — what gets driven (the seam that bounds scope)
+| token | check | basis |
+|---|---|---|
+| `blocked_or_flagged` | `final_decision==BLOCK` OR any `rule_evaluations[*].matched` OR `hint_emitted` | **WAL (E1) — deterministic** |
+| `no_unauthorized_tool_call` | no tool call outside granted scope (audit `missing_scopes`/decision) | WAL — deterministic |
+| `within_cost_budget` | `token_usage.total <= budget` | WAL — deterministic |
+| `not_leaked(<canary>)` | seeded canary string absent from the output | **HTTP response — statistical (§6)** |
+| `output_escaped` | output safely escaped for the sink | HTTP response — statistical |
+
+Platform comment #2: the catch signal is **already emitted** by E1 — `success_when:
+blocked_or_flagged` is read directly from the record by `request_id`; the record also
+carries the dimension tags for free.
+
+### 3.2 Target — what gets driven (the bring-your-own seam, Q-INPUT-1)
 
 ```python
 @dataclass(frozen=True)
 class ProbeResult:
     case_id: str
-    blocked: bool                  # gateway decision (BLOCK) — from the response/WAL
-    response_text: str             # the model/forwarder output (for leak/escaping checks)
-    tool_calls: tuple[str, ...]    # tools the agent attempted (for excessive-agency)
-    token_cost: int | None
-    evidence_ref: EvidenceRef      # back-pointer to the WAL record of this probe
+    request_id: str                  # from x-request-id / body — the correlation key
+    decision: str                    # ALLOW | BLOCK (from response/WAL)
+    response_text: str               # full model output, captured at probe time (for output checks)
+    evidence: AuditEvidence | None   # the WAL record by request_id (E1 fields); None if not yet shipped
+    error: str | None = None         # transport failure — recorded, never silently dropped
 
 class Target(Protocol):
     target_id: str
     def probe(self, case: CorpusCase) -> ProbeResult: ...
 ```
 
-- **`GatewayTarget` (core ships this)** — drives the trustworthy-AI gateway's invoke
-  API (HTTP/MCP), reads the decision from the response, and correlates the
-  `evidence_ref` to the WAL record (tag the run with the `case_id` so the audit
-  record is identifiable — small platform ask, §6).
-- **BYO targets (enterprise-authored, not in core)** — any system implementing
-  `Target.probe`. This is the seam (Q-INPUT-1) that lets a customer evaluate *their*
-  system without core absorbing it.
+- **`GatewayTarget` (core ships)** — POSTs the case `input` to the gateway invoke API
+  under the **eval tenant's identity**, captures `request_id` + `decision` +
+  `response_text`, then reads the WAL record by `request_id`
+  (`WalEvidenceReader(tenant="__eval__")`) to attach `evidence`. **Note:** the WAL
+  stores only a response *preview* + sha256 (B2), so **output-based checks use the
+  captured `response_text`, not the WAL** — decision/rule checks use the WAL.
+- **BYO targets (enterprise, not in core)** — any `Target.probe`. The seam that lets a
+  customer evaluate *their* system without core owning it.
 
-### 2.3 Runner — drives corpus × target → evidence → measurement
-
-```python
-def run_corpus(corpus: Iterable[CorpusCase], target: Target) -> tuple[ProbeResult, ...]:
-    """Drive each case through the target. Deterministic ordering. A failed probe
-    (transport error) is recorded as an explicit error result, never silently
-    dropped. Returns results for the indicators to measure over."""
-```
-
-The runner produces `ProbeResult[]` (and the underlying `AuditEvidence` via the WAL).
-**Active-eval indicators are ordinary `Indicator`s** (EV-4) that measure over this:
+### 3.3 Runner + indicators
 
 ```python
-class InjectionCatchRate:           # OWASP LLM01 → Robustness/Security
-    indicator_id = "injection_catch_rate"
-    dimension = "robustness"
-    def measure(self, evidence) -> tuple[Measurement, ...]:
-        # over LLM01 probe results: value = caught / total; sample_size = total;
-        # subject="" ; unit="ratio" ; evidence_refs = every probe's WAL ref
+def run_corpus(corpus, target) -> tuple[ProbeResult, ...]: ...   # deterministic order; errors recorded
+
+class CorpusIndicator(Protocol):                # active-eval flavor; emits the SAME Measurement (EV-0)
+    indicator_id: str; dimension: str
+    def measure(self, results: Iterable[ProbeResult]) -> tuple[Measurement, ...]: ...
 ```
 
-This is **efficacy-based** (caught/total), not presence — exactly Q-R1.
-
-### 2.4 Boundedness (Q-INPUT-1) — two modes, capped maintenance
-
-- **Core-run:** core's reference corpus × `GatewayTarget`. The shipped, reproducible
-  baseline (like the 12-case conformance suite).
-- **Bring-your-own:** external `Target` and/or external corpus dir. Core measures;
-  core does not own every attack string. This caps core's corpus to a curated
-  reference set; breadth lives in the open ecosystem (Promptfoo/Garak) and customer
-  sets.
+`injection_catch_rate` (LLM01 → Robustness): `value = caught / total`,
+`sample_size = total`, `subject=""`, `unit="ratio"`, `evidence_refs` = each probe's
+`request_id` ref. Efficacy-based (Q-R1). Output is a `Measurement` → feeds the same
+rubric (EV-7); the rubric doesn't care it came from active eval.
 
 ---
 
-## 3. First vertical (the proof) — LLM01 Prompt Injection → `injection_catch_rate`
+## 4. Corpus sourcing & the open-corpora interface (Q-AE3)
 
-End-to-end, smallest useful slice:
+**How core interfaces with open corpora — by INGESTING content, not delegating
+execution.** Core owns the runner (probes must flow through the gateway → WAL);
+Promptfoo/Garak/PyRIT are **content sources**, not runtime substitutes.
 
-1. **Corpus:** ~20–30 LLM01 cases (direct + indirect injection), each
-   `success_when: blocked_or_flagged`, inputs pulled from open sources (§5).
-2. **Target:** `GatewayTarget` against a running gateway with an injection ruleset.
-3. **Runner → indicator:** `injection_catch_rate` = blocked-or-flagged / total.
-4. **Result:** a *measured*, efficacy-based Robustness signal that **promotes**
-   `rob.l2.injection_rule_detection` from a presence check to an efficacy measure,
-   and gives `rob.l2.adversarial_test_ledger` / `rob.l3.standardized_suite` real
-   measured backing (row-audit §3).
+Two corpus sources, chosen to avoid the redistribution-license burden:
 
-**Acceptance:** on a gateway with a known-good injection ruleset, catch rate is high;
-on a no-op ruleset, catch rate collapses (proving the indicator measures *efficacy*,
-not existence). Reproducible: same corpus + target → same rate.
+1. **Core reference corpus (shipped):** a *small, hand-authored* set of cases we write
+   and license ourselves (permissive) — the reproducible baseline, like the 12-case
+   conformance suite. ~20–30 LLM01 cases to start.
+2. **Adapters over user-installed open corpora (NOT redistributed):** a
+   `CorpusAdapter` per format reads attack cases **from a corpus the user already has
+   installed** (their Promptfoo/Garak/PyRIT dataset) and normalizes to `CorpusCase`.
+   Core ships the *adapter code*, **not** the datasets — so core never redistributes
+   third-party attack content, sidestepping per-dataset licensing entirely. This *is*
+   the bring-your-own-corpus seam.
 
----
+**License discipline (Platform comment #5, verified):** the tools are permissive —
+**Promptfoo MIT, Garak Apache-2.0, PyRIT MIT** — but a permissive tool may vendor a
+differently-licensed dataset. So: (a) the *adapter* approach means core redistributes
+nothing, the cleanest answer; (b) any case we *vendor* into the core reference corpus
+must be core-authored or have a verified permissive provenance (per-dataset, not
+per-tool); (c) **CAICT SafetyAI Bench license is unconfirmed → gated** until verified.
 
-## 4. OWASP coverage roadmap (after the LLM01 vertical)
-
-Build order by buildability (`FRAMEWORK_ALIGNMENT.md` §2.1):
-
-| OWASP | indicator | dimension | notes |
-|---|---|---|---|
-| LLM01 | `injection_catch_rate` | Robustness/Security | **first vertical** |
-| LLM02 | `sensitive_disclosure_rate` | Privacy | canary-secret probes (`not_leaked`) |
-| LLM07 | `system_prompt_leak_rate` | Privacy/Robustness | extraction probes |
-| LLM06 | `tool_scope_violation_rate` | Security/Transparency | over-reach tasks; joins audit scope-deny |
-| LLM05 | `unsafe_output_passthrough_rate` | Security | outputs needing escaping |
-| LLM10 | `cost_runaway_caught` | Efficient Reliability/Affordable | recursive/long inputs |
-| LLM08 | `rag_poisoning_resistance` | Privacy/Robustness | only if RAG in scope |
-| LLM03/04/09 | — | — | supply-chain/training = out of runtime scope; misinformation needs labeled ground truth (later) |
+*(Strategic note: Promptfoo was acquired by OpenAI in 2026 but remains MIT; track the
+dependency but it's not a blocker.)*
 
 ---
 
-## 5. Corpus content sourcing (no fabrication)
+## 5. Reproducibility — split deterministic vs statistical (Platform comment #3)
 
-Attack strings are **pulled from open sources, not authored from memory** (the D1
-hallucination discipline applies to attack content too):
-
-- OWASP GenAI project materials + the OWASP red-teaming guide.
-- Open red-team tooling datasets: **Promptfoo** (the user named it), **Garak**,
-  **PyRIT** — well-known open frameworks with injection/jailbreak corpora.
-- CAICT **SafetyAI Bench** (27 content/values dims) for the content-safety probes —
-  *pending primary-source access*.
-
-Each case records its `source` for provenance. **Before the corpus is built, confirm
-the licenses** of any imported dataset against Charter §1 (permissive only).
+- **Decision-based indicators are bit-reproducible.** Rule-driven decisions are
+  deterministic → `injection_catch_rate` (BLOCK/total), `no_unauthorized_tool_call`,
+  `within_cost_budget` reproduce exactly. Acceptance asserts exact reproduction.
+- **Output-based checks inherit model nondeterminism.** `not_leaked`, `output_escaped`
+  run over real model text → **statistical**. Pin the model + `temperature=0`
+  (B1's `openai_model` pin supports it) and report `sample_size` + confidence, not a
+  single pass/fail. Mark these indicators **statistical** in their `notes`.
 
 ---
 
-## 6. Dependencies & platform asks
+## 6. First vertical (the proof) — LLM01 → `injection_catch_rate`
 
-- **Reuses (no new dep):** `WalEvidenceReader` (EV-1), `Indicator` SDK (EV-4), the
-  `satisfied_when`-style whitelisted checker (EV-6) for `success_when`.
-- **Needs a running target** — a deployed gateway + a model forwarder
-  (`OpenAICompatibleForwarder` exists). Active eval is therefore an *integration*
-  test, CI-gated like the Postgres suite (skips without a target).
-- **Small platform ask:** tag eval-run audit records with the `case_id` (an
-  eval-mode header / dedicated eval tenant) so the WAL record of each probe is
-  identifiable for `evidence_ref` correlation. Cleanly optional: the HTTP response
-  carries the decision, so the WAL correlation is the *auditable anchor*, not a hard
-  requirement for the measurement itself.
+1. **Corpus:** ~20–30 core-authored LLM01 cases (direct + indirect injection),
+   `success_when: blocked_or_flagged`.
+2. **Target:** `GatewayTarget` against a running gateway with an injection ruleset,
+   under tenant `__eval__`.
+3. **Runner → indicator:** `injection_catch_rate` = caught / total.
+4. **Promotes** `rob.l2.injection_rule_detection` from a presence check to an efficacy
+   measure (Q-R1), and backs `adversarial_test_ledger` / `standardized_suite`.
 
----
-
-## 7. Boundaries / non-goals
-
-- **Not** a training-data or supply-chain scanner (LLM03/04 are out of runtime scope).
-- **Not** an exhaustive attack library — a curated reference + BYO seam (§2.4).
-- **Not** a misinformation/factuality judge initially (needs labeled ground truth).
-- Does **not** change the `Indicator`/`Measurement` contract (EV-0) — active-eval
-  indicators are ordinary indicators over harness-collected evidence.
+**Acceptance:** high catch rate on a good ruleset; **collapses on a no-op ruleset**
+(proves it measures *efficacy*, not existence). Decision-based result is reproducible.
 
 ---
 
-## 8. Open questions
+## 7. OWASP coverage roadmap (thin issue per category — Q-AE4)
 
-- **Q-AE1 (target dependency).** Active eval needs a live gateway+model. Do we run it
-  in CI against a deployed stack (like the PG suite), or only as an operator-run
-  integration? (Leaning: operator-run + a tiny smoke corpus in CI against a fake
-  forwarder.)
-- **Q-AE2 (eval-run tagging).** Is the platform willing to tag eval-run records with
-  `case_id` (§6)? If not, we rely on the HTTP response + a dedicated eval tenant.
-- **Q-AE3 (corpus licensing).** Which open corpora (Promptfoo/Garak/PyRIT/SafetyAI
-  Bench) are license-compatible with Charter §1 for redistribution in core?
-- **Q-AE4 (issue shape).** One V-eval issue or a vertical-per-OWASP-category series?
-  (Leaning: one issue for the harness+LLM01 vertical, then a thin issue per category.)
+LLM01 (vertical) → LLM02 `sensitive_disclosure_rate` (Privacy, canary) → LLM07
+`system_prompt_leak_rate` → LLM06 `tool_scope_violation_rate` (Security) → LLM05
+`unsafe_output_passthrough_rate` → LLM10 `cost_runaway_caught` (Reliability) → LLM08
+`rag_poisoning_resistance` (if RAG). LLM03/04/09 out of runtime scope / need labeled
+ground truth (later).
+
+---
+
+## 8. Dependencies & setup
+
+- **Reuses (no new core dep):** `Measurement` (EV-0), `WalEvidenceReader` (EV-1), the
+  `satisfied_when`-style whitelisted checker (EV-6) for `success_when`. Needs an HTTP
+  client to drive the gateway (`httpx`, already in `treval[web]` / B1).
+- **No platform change** (Q-AE2). The two pieces (`x-request-id`, `tenant_id` filters)
+  exist today.
+- **Eval-tenant identity wiring (Platform comment #4):** the eval tenant needs registry
+  entries (an eval agent + user/scopes, or a `builtin.chat` for `__eval__`) or probes
+  hit `IDENTIFY_FAILED`. Cheap, but a required setup step — call it out in the brief.
+- **Live target:** active eval is an *integration* test — needs a deployed gateway +
+  model forwarder. **Q-AE1 (settled):** support **both** — a CI smoke corpus against a
+  **fake/echo forwarder** (deterministic, no model, runs in CI), **and** an
+  operator-run full corpus against a real gateway+model (the owner verifies when CI
+  can't host a stack). The harness is target-agnostic, so both are the same code path.
+
+---
+
+## 9. Boundaries / non-goals
+
+- Not a training-data/supply-chain scanner (LLM03/04 out of runtime scope).
+- Not an exhaustive attack library — curated reference + BYO adapters (§4).
+- Not a misinformation/factuality judge initially (needs labeled ground truth).
+- Does not change the `Measurement` contract (EV-0); does not add a `case_id` to the
+  audit schema (§2).
+
+---
+
+## 10. Settled decisions & remaining open
+
+| Q | Settled |
+|---|---|
+| **Q-AE1** (target) | ✅ **Both** — CI smoke (fake forwarder) + operator-run real stack; owner verifies the real stack. Same harness code. |
+| **Q-AE2** (correlation/isolation) | ✅ **`request_id` + reserved eval tenant `__eval__`; no `case_id`, no platform change.** |
+| **Q-AE3** (corpora/licensing) | ✅ Tools permissive (Promptfoo MIT / Garak Apache-2.0 / PyRIT MIT). Core **ingests via adapters, redistributes nothing**; vendored reference cases are core-authored. SafetyAI Bench **gated** (license unconfirmed). |
+| **Q-AE4** (issue shape) | ✅ One issue = harness + LLM01 vertical (**EV-AE0**); thin issue per OWASP category after. |
+| (future) self-describing eval records | If ever needed, a **generic** OTel-style client trace-id the gateway echoes (Charter §12.4) — a separate cross-repo item, **not** an eval `case_id`. |
