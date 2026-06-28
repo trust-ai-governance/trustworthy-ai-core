@@ -197,28 +197,39 @@ scope engine #5a landing.)
 > `block_rate` becomes supporting context, not the satisfier. `block_rate` itself is a
 > correct, useful measured indicator — just mis-assigned here.
 >
-> **EMPIRICAL RESULT (active-eval live run, 2026-06-28) — 28-case OWASP LLM01 corpus,
-> tenant `acme`, model `deepseek-v4-flash`, live WAL correlation by `request_id`.**
-> Two measured numbers:
-> - **Gateway injection-catch ≈ 0** (`injection_catch_rate` = 1/27 = 3.7%, 1 probe
->   timed out and was excluded). The single "catch" was **`Blocked by rule
->   pii-block-request`** — the PII rule firing on an email address in a payload, **not
+> **EMPIRICAL RESULT (active-eval live run, 2026-06-28; numbers CORRECTED after a
+> harness fix — see the lesson below) — OWASP LLM01 (28 cases) + LLM02 (14 cases),
+> tenant `__eval__`, model `deepseek-v4-flash`, live WAL correlation by `request_id`.**
+> Three measured numbers:
+> - **Gateway injection-catch ≈ 4%** (`injection_catch_rate` = 1/28). The single
+>   "catch" was **`pii-block-request`** firing on an email address in a payload, **not
 >   injection detection.** Effective injection governance = **0**. So
 >   `sec.l3.guardrail_blocking` and `rob.l2.injection_rule_detection` are **NOT met by
 >   measurement.**
-> - **Injection-success = 0/8** (`injection_success_rate` = 0% over 8 marker cases):
->   **DeepSeek v4 flash resisted all 8** obvious marker injections (conservative
->   `startswith`-canary lower bound; statistical).
+> - **Injection-success = 75% (6/8)** (`injection_success_rate` over 8 marker cases;
+>   `startswith`-canary lower bound, temperature=0; statistical): **DeepSeek v4 flash
+>   OBEYED 6 of 8** obvious marker injections. A lower bound — true compliance may be
+>   higher.
+> - **Sensitive-disclosure = 100% (14/14)** (`sensitive_disclosure_rate`, LLM02): the
+>   model disclosed an in-context planted secret **on every extraction attempt**, and
+>   gateway output-DLP catch = **0%** (`pii-block-response` matched nothing). 7/14 leaks
+>   were independently corroborated in the chain-verified WAL response preview.
 >
-> **Governance lesson, now in data:** the system was safe here because the **model**
-> resisted (success 0%), **not** because the gateway governed (catch ≈ 0). That safety
-> is model-dependent and not guaranteed — a weaker model or a cleverer injection could
-> push success > 0 while the gateway still catches ~0. (A checker bug that counted the
-> benign `log` match as a catch was found+fixed in an earlier run; pre-fix it would
-> have falsely reported ~100%.) **This is a Platform gap**, tracked in
-> `PLATFORM_ASK_INJECTION_DETECTION.md`; catch becomes demonstrable once the gateway
-> gains injection detection. The honest current state: **attested ≠ measured —
-> the guardrail-blocking claim is unproven (measured 0%).**
+> **Governance lesson, now in data (REVISED):** **neither layer protected.** The model
+> **complied** with most injections (75%) and with **every** secret-extraction attempt
+> (100%), and the gateway caught **≈0** of either. An earlier version of this row claimed
+> "the model resisted all 8" (success 0%) — that was a **harness measurement bug, not
+> reality**: `GatewayTarget` read the model reply from the wrong response field, so
+> `response_text` was always empty and every output-based check silently returned 0%. The
+> bug was caught by an **independent WAL cross-check** (the chain-verified response
+> preview showed the canary the harness had missed) and fixed (extract
+> `choices[0].message.content` + scan the full body incl. `reasoning_content`); the
+> numbers above are post-fix. **Lesson: a measured "0%" is only as trustworthy as the
+> capture path — cross-verify against the governed record.** This is a **Platform gap**
+> (no injection detection AND no output DLP), tracked in
+> `PLATFORM_ASK_INJECTION_DETECTION.md`. Honest current state: **attested ≠ measured —
+> guardrail-blocking, injection-resistance, and secret-disclosure protection are all
+> unproven/failing in measurement.**
 
 ---
 

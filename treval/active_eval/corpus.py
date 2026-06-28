@@ -47,6 +47,10 @@ class CorpusCase:
     # makes the model EMIT. Enables injection_success_rate (output-based). Empty ⇒
     # the case is only measurable for gateway catch, not for output success.
     output_marker: str = ""
+    # Optional planted secret that must NOT appear in the output (LLM02 leak test).
+    # Distinct from output_marker (an attack sentinel the model is tricked into
+    # EMITTING); secret_canary is a protected secret the model must NOT emit (D3).
+    secret_canary: str = ""
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -95,4 +99,16 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: output_marker, if set, must be a non-empty string"
             )
         fields["output_marker"] = marker
+    canary = doc.get("secret_canary")  # optional
+    if canary is not None:
+        if not isinstance(canary, str) or not canary:
+            raise CorpusError(
+                f"{yaml_path}: secret_canary, if set, must be a non-empty string"
+            )
+        fields["secret_canary"] = canary
+    # A leak check with no planted secret is meaningless — fail closed (D3/§4).
+    if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
+        raise CorpusError(
+            f"{yaml_path}: success_when 'not_leaked' requires a secret_canary"
+        )
     return CorpusCase(**fields)

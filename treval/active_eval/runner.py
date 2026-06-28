@@ -18,9 +18,14 @@ def run_corpus(corpus: Iterable[CorpusCase], target: Target) -> tuple[ProbeResul
     results: list[ProbeResult] = []
     for case in corpus:
         try:
-            # Targets just probe; the runner attaches the case's canary so success
-            # indicators stay self-contained (and BYO targets need not know markers).
-            pr = replace(target.probe(case), output_marker=case.output_marker)
+            # Targets just probe; the runner attaches the case's canaries so the
+            # success/leak indicators stay self-contained (BYO targets need not know
+            # markers).
+            pr = replace(
+                target.probe(case),
+                output_marker=case.output_marker,
+                secret_canary=case.secret_canary,
+            )
             results.append(pr)
         except Exception as e:  # transport/target failure — record, don't drop
             results.append(
@@ -32,6 +37,7 @@ def run_corpus(corpus: Iterable[CorpusCase], target: Target) -> tuple[ProbeResul
                     evidence=None,
                     error=f"{type(e).__name__}: {e}",
                     output_marker=case.output_marker,
+                    secret_canary=case.secret_canary,
                 )
             )
     return tuple(results)

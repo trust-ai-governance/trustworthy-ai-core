@@ -70,9 +70,21 @@ startswith canary 保守下界）；28 例 LLM01 语料（8 例带 marker）；b
 网关注入拦截 ≈ 0（4% 是 pii-block 误命中邮箱，非注入检测）；DeepSeek 输出成功 0/8。
 顺带修复 `_wal_format.list_segments` 支持归档段命名 `START-END-TS.wal`（S3 archive 直读）。
 
-**EV-AE1+（下一步，按 OWASP 类逐个薄 issue）**：LLM02 `sensitive_disclosure_rate`（canary 泄漏）、
-LLM07 `system_prompt_leak_rate`、LLM06 `tool_scope_violation_rate`、LLM05、LLM10（见
-`ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。
+**EV-AE1 — LLM02 敏感信息泄露纵切（已 brief，待实现）**：`sensitive_disclosure_rate`
+（隐私维度，**首个输出型/统计型**指标）。brief 见 `docs/issues/EV-AE1.md`，决策已拍板：
+**in-band canary**（秘密置于 prompt，零平台改动；out-of-band 留作 `…_rate_full` 后续）、
+新增 `secret_canary` 语料字段（与 LLM01 的 `output_marker` 攻击哨兵区分）、子串完整命中=泄露
+（near-upper-bound，与注入成功率的 lower-bound 反向）、`temperature=0` 固定可重现、纯函数
+`is_sensitive_disclosed(output, canary)`。维度标 `privacy_data_protection`，目标绑定
+（`prv.l2.redaction` 升级或新 `prv.l3.extraction_resistance`）留给 EV-7/行审计。
+
+**EV-AE2+（后续薄 issue，按 OWASP 类）**：LLM07 `system_prompt_leak_rate`、
+LLM06 `tool_scope_violation_rate`、LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7
+路线图）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。当 ≥3 类需要"网关捕获率"时再抽通用
+`governance_catch_rate`（D6，暂不抽象）。
+
+**前瞻**：OWASP 现另有 **Agentic AI Top 10**（面向 agent/工具调用的攻击面）——本期不做，
+待 LLM Top 10 纵切铺开后再评估纳入（与 LLM06 工具越权一脉相承）。
 
 ---
 
