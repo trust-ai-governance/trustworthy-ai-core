@@ -1,0 +1,7 @@
+# Optional active-eval extra (EV-AE0 GatewayTarget). NOT required by the core
+# library, CLI, or the CI harness tests (those use FakeTarget) — `import treval`
+# and `import treval.active_eval` work without this. Install with:
+#   pip install -r requirements-eval.txt
+# Permissive-licensed (BSD/MIT), per Charter §1.2.
+httpx>=0.27          # drives the live gateway invoke API in GatewayTarget.probe()
+pytest-dotenv>=0.5.2  # MIT — auto-loads repo-root .env (TREVAL_EVAL_*) for the integration test
