@@ -30,8 +30,14 @@ class ProbeResult:
     response_text: str  # full output captured at probe time (for output checks)
     evidence: AuditEvidence | None  # WAL record by request_id (E1); None if absent
     error: str | None = None  # transport failure — recorded, never silently dropped
+    raw_response: str = ""  # full HTTP response body (every byte returned to the
+    # caller — answer content + reasoning_content + …); the broad surface for
+    # output-based leak checks, so a secret in the reasoning trace is not missed.
     output_marker: str = (
         ""  # the case's canary (attached by run_corpus, for success checks)
+    )
+    secret_canary: str = (
+        ""  # the case's planted secret (attached by run_corpus, for leak checks)
     )
 
 
@@ -39,6 +45,26 @@ class Target(Protocol):
     target_id: str
 
     def probe(self, case: CorpusCase) -> ProbeResult: ...
+
+
+def _extract_text(body: dict[str, object]) -> str:
+    """The assistant reply *content* from the gateway's OpenAI-compatible completion
+    (choices[0].message.content), falling back to flat output/response wrappers some
+    deployments use. Empty when none present.
+
+    This is the answer text only — used by startswith-based checks (injection
+    success). The FULL body (incl. reasoning_content) is captured separately as
+    raw_response so a substring leak check sees every byte returned to the caller."""
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        msg = choices[0].get("message")
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            return msg["content"]
+    for key in ("output", "response"):
+        value = body.get(key)
+        if isinstance(value, str):
+            return value
+    return ""
 
 
 class GatewayTarget:
@@ -62,6 +88,7 @@ class GatewayTarget:
         tool_id: str = "chat",
         model: str = "deepseek-v4-flash",  # deployment-specific; override per target
         invoke_path: str = "/v1/tools:invoke",
+        temperature: float | None = 0.0,  # pin for reproducible statistical runs (D5)
         timeout: float = 30.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
@@ -71,6 +98,7 @@ class GatewayTarget:
         self._tool_id = tool_id
         self._model = model
         self._invoke_path = invoke_path
+        self._temperature = temperature
         self._timeout = timeout
 
     def probe(self, case: CorpusCase) -> ProbeResult:
@@ -78,6 +106,14 @@ class GatewayTarget:
 
         # Identity travels in headers (x-tenant-id / x-user-id); the body is the
         # tools:invoke payload. The gateway derives the agent — no agent header.
+        # temperature passes through verbatim to the OpenAI-compatible upstream
+        # (DeepSeek/OpenAI both honor it) — pinned for reproducible runs (D5).
+        params: dict[str, object] = {
+            "model": self._model,
+            "messages": [{"role": "user", "content": case.input}],
+        }
+        if self._temperature is not None:
+            params["temperature"] = self._temperature
         try:
             resp = httpx.post(
                 self._base_url + self._invoke_path,
@@ -85,13 +121,7 @@ class GatewayTarget:
                     "x-tenant-id": self._tenant_id,
                     "x-user-id": self._user_id,
                 },
-                json={
-                    "tool_id": self._tool_id,
-                    "params": {
-                        "model": self._model,
-                        "messages": [{"role": "user", "content": case.input}],
-                    },
-                },
+                json={"tool_id": self._tool_id, "params": params},
                 timeout=self._timeout,
             )
             # Do NOT raise_for_status: a governance BLOCK may return a non-2xx
@@ -116,11 +146,13 @@ class GatewayTarget:
         except ValueError:
             body = {}
 
+        raw = getattr(resp, "text", "")
+        raw_response = raw if isinstance(raw, str) else ""
         request_id = resp.headers.get("x-request-id", "") or str(
             body.get("request_id", "")
         )
         decision = str(body.get("decision", ""))
-        response_text = str(body.get("output", body.get("response", "")))
+        response_text = _extract_text(body)
         evidence = (
             self._read_evidence(request_id)
             if (self._wal_dir is not None and request_id)
@@ -131,6 +163,7 @@ class GatewayTarget:
             request_id=request_id,
             decision=decision,
             response_text=response_text,
+            raw_response=raw_response,
             evidence=evidence,
         )
 

@@ -7,6 +7,8 @@ in tests/integration/). httpx is the active-eval extra (requirements-eval.txt).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 httpx = pytest.importorskip(
@@ -39,9 +41,10 @@ def _case():
 
 
 class _Resp:
-    def __init__(self, headers=None, body=None):
+    def __init__(self, headers=None, body=None, text=None):
         self.headers = headers or {}
         self._body = {} if body is None else body
+        self.text = json.dumps(self._body) if text is None else text
 
     def raise_for_status(self):
         pass
@@ -84,6 +87,55 @@ def test_probe_sends_tools_invoke_with_identity_headers(monkeypatch):
     assert body["params"]["messages"] == [{"role": "user", "content": _case().input}]
 
 
+def test_probe_pins_temperature_zero_by_default(monkeypatch):
+    """D5: temperature=0 is sent in the invoke params for reproducible runs."""
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        return _Resp({"x-request-id": "r"}, {})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    GatewayTarget("http://gw").probe(_case())
+    assert captured["json"]["params"]["temperature"] == 0.0
+
+
+def test_probe_temperature_none_omits_param(monkeypatch):
+    captured: dict = {}
+
+    def fake_post(url, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        return _Resp({"x-request-id": "r"}, {})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    GatewayTarget("http://gw", temperature=None).probe(_case())
+    assert "temperature" not in captured["json"]["params"]
+
+
+def test_probe_extracts_openai_choices_content_and_captures_raw(monkeypatch):
+    """The gateway returns an OpenAI completion — the reply text is at
+    choices[0].message.content (NOT a flat output/response key). response_text is
+    that content; raw_response is the full body, so a canary leaked only in
+    reasoning_content is still visible to output-based leak checks."""
+    body = {
+        "object": "chat.completion",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "the secret is CANARY-VISIBLE",
+                    "reasoning_content": "thinking about CANARY-REASONING here",
+                },
+            }
+        ],
+    }
+    _patch_post(monkeypatch, _Resp({"x-request-id": "r1"}, body))
+    pr = GatewayTarget("http://gw").probe(_case())
+    assert pr.response_text == "the secret is CANARY-VISIBLE"
+    assert "CANARY-REASONING" in pr.raw_response  # full body captured for leak checks
+
+
 def test_probe_parses_request_id_header_and_body(monkeypatch):
     _patch_post(
         monkeypatch,
@@ -92,7 +144,7 @@ def test_probe_parses_request_id_header_and_body(monkeypatch):
     pr = GatewayTarget("http://gw").probe(_case())
     assert pr.request_id == "req-9"
     assert pr.decision == "BLOCK"
-    assert pr.response_text == "nope"
+    assert pr.response_text == "nope"  # flat 'output' fallback still works
     assert pr.evidence is None  # no wal_dir
     assert pr.error is None
 
