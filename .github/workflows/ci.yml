@@ -56,6 +56,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           if [ -f requirements-web.txt ]; then pip install -r requirements-web.txt; fi
+          if [ -f requirements-eval.txt ]; then pip install -r requirements-eval.txt; fi
 
       - name: Detect Python sources
         id: detect

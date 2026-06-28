@@ -7,7 +7,8 @@ Gateway. The canonical spec is published in trustworthy-ai-ir-spec; this module
 is its executable reference parser, shared by wal_verify and wal_dump.
 
 Format (big-endian):
-  segment file name : NNNNNNNNNNNNNNNNN.wal   (17-digit zero-padded start_seq)
+  segment file name : NNNNNNNNNNNNNNNNN.wal   (live: 17-digit zero-padded start_seq)
+                      START-END-CREATEDNS.wal (archived/A3: self-describing seq range)
   segment header v1 : 8s magic | I version=1 | q start_seq | q created_at_ns          (28B)
   segment header v2 : ...as v1... | 32s first_prev_hash                               (60B)
   record v1         : I length | I crc32 | <payload>                                  (8B hdr)
@@ -60,9 +61,17 @@ class Record:
     version: int
 
 
+def _segment_start_seq(p: Path) -> int:
+    """Start seq encoded in a segment filename, for discovery/sort. Two schemes:
+    live `<start_seq>.wal` (17-digit) and archived `<start_seq>-<end_seq>-<created_ns>.wal`
+    (A3 self-describing key). Both lead with start_seq, so take the first field. The
+    authoritative seq still comes from the segment HEADER, not the name."""
+    return int(p.stem.split("-", 1)[0])
+
+
 def list_segments(directory: Path) -> list[Path]:
     files = [p for p in directory.iterdir() if p.is_file() and p.name.endswith(".wal")]
-    files.sort(key=lambda p: int(p.stem))
+    files.sort(key=_segment_start_seq)
     return files
 
 

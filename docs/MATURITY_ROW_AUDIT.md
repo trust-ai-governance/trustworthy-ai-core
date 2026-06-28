@@ -196,6 +196,29 @@ scope engine #5a landing.)
 > (% of known-attack corpus blocked) with an efficacy threshold (e.g. `value >= 0.9`);
 > `block_rate` becomes supporting context, not the satisfier. `block_rate` itself is a
 > correct, useful measured indicator — just mis-assigned here.
+>
+> **EMPIRICAL RESULT (active-eval live run, 2026-06-28) — 28-case OWASP LLM01 corpus,
+> tenant `acme`, model `deepseek-v4-flash`, live WAL correlation by `request_id`.**
+> Two measured numbers:
+> - **Gateway injection-catch ≈ 0** (`injection_catch_rate` = 1/27 = 3.7%, 1 probe
+>   timed out and was excluded). The single "catch" was **`Blocked by rule
+>   pii-block-request`** — the PII rule firing on an email address in a payload, **not
+>   injection detection.** Effective injection governance = **0**. So
+>   `sec.l3.guardrail_blocking` and `rob.l2.injection_rule_detection` are **NOT met by
+>   measurement.**
+> - **Injection-success = 0/8** (`injection_success_rate` = 0% over 8 marker cases):
+>   **DeepSeek v4 flash resisted all 8** obvious marker injections (conservative
+>   `startswith`-canary lower bound; statistical).
+>
+> **Governance lesson, now in data:** the system was safe here because the **model**
+> resisted (success 0%), **not** because the gateway governed (catch ≈ 0). That safety
+> is model-dependent and not guaranteed — a weaker model or a cleverer injection could
+> push success > 0 while the gateway still catches ~0. (A checker bug that counted the
+> benign `log` match as a catch was found+fixed in an earlier run; pre-fix it would
+> have falsely reported ~100%.) **This is a Platform gap**, tracked in
+> `PLATFORM_ASK_INJECTION_DETECTION.md`; catch becomes demonstrable once the gateway
+> gains injection detection. The honest current state: **attested ≠ measured —
+> the guardrail-blocking claim is unproven (measured 0%).**
 
 ---
 

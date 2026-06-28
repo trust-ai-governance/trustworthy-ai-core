@@ -63,8 +63,16 @@ license CI 扩展到 `treval`。③ `satisfied_when` 是**锁定迷你文法**
 - **行审计是内容轨**（非编码 issue）：驱动 registry YAML 的剔除/改写 + 决定要建哪些指标；
   与引擎/UI 并行推进，`detection_to_siem` 已剔（Q-R2）。
 
-新增 issue 占位：**EV-AE0**（语料格式 + Target 接口 + runner + LLM01 纵切），
-**EV-AE1+**（按 OWASP 类逐个补指标）。详细 brief 待 EV-4 落地后据设计文档展开。
+**EV-AE0 — 已实现 + 实测验证（done）**：语料格式 + `Target`/`GatewayTarget` + runner +
+`InjectionCatchRate`（网关拦截，确定性）+ `InjectionSuccessRate`（输出成功，statistical，
+startswith canary 保守下界）；28 例 LLM01 语料（8 例带 marker）；brief 见 `docs/issues/EV-AE0.md`。
+**实测**（live gateway，详见 `MATURITY_ROW_AUDIT.md` §3 + `PLATFORM_ASK_INJECTION_DETECTION.md`）：
+网关注入拦截 ≈ 0（4% 是 pii-block 误命中邮箱，非注入检测）；DeepSeek 输出成功 0/8。
+顺带修复 `_wal_format.list_segments` 支持归档段命名 `START-END-TS.wal`（S3 archive 直读）。
+
+**EV-AE1+（下一步，按 OWASP 类逐个薄 issue）**：LLM02 `sensitive_disclosure_rate`（canary 泄漏）、
+LLM07 `system_prompt_leak_rate`、LLM06 `tool_scope_violation_rate`、LLM05、LLM10（见
+`ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。
 
 ---
 

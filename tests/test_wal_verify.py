@@ -12,6 +12,7 @@ from tools._wal_format import (
     REC_FMT_V2,
     REC_SIZE_V2,
     SEG_SIZE_V2,
+    list_segments,
 )
 from walgen import NAME, build_v2_wal, write_v1_segment, write_v2_segment
 
@@ -30,6 +31,40 @@ def test_single_archived_segment_self_verifies(tmp_path):
     middle = sorted(tmp_path.glob("*.wal"))[1]
     rep = wal_verify.verify(middle, full=True)
     assert rep.ok and rep.records == 10
+
+
+def _archive_name(start: int, end: int, created_ns: int) -> str:
+    # A3 self-describing archive key: <start_seq>-<end_seq>-<created_ns>.wal
+    return f"{start:017d}-{end:017d}-{created_ns}.wal"
+
+
+def test_archived_segment_naming_is_discovered_and_sorted(tmp_path):
+    # Archived segments use START-END-CREATEDNS.wal, not <seq>.wal. They must be
+    # discovered AND sorted by start_seq (regression: int(p.stem) choked on hyphens).
+    s1 = [f"a-{i}".encode() for i in range(10)]  # seq 0..9
+    s2 = [f"b-{i}".encode() for i in range(10)]  # seq 10..19
+    head = write_v2_segment(tmp_path / _archive_name(0, 9, 111), 0, s1, GENESIS)
+    # write the LATER segment with an earlier-sorting filesystem name to prove the
+    # sort uses start_seq, not name/creation order.
+    write_v2_segment(tmp_path / _archive_name(10, 19, 222), 10, s2, head)
+
+    segs = list_segments(tmp_path)
+    assert [p.name.split("-", 1)[0] for p in segs] == [
+        "00000000000000000",
+        "00000000000000010",
+    ]
+
+    rep = wal_verify.verify(tmp_path, full=True)
+    assert rep.ok and rep.records == 20  # chain continuous across archived segments
+
+
+def test_mixed_live_and_archived_names_sort_by_start_seq(tmp_path):
+    # A live segment (seq 0) + an archived continuation (seq 10..19) interleave fine.
+    head = build_v2_wal(tmp_path, total=10, per_segment=10)  # live NAME 0..9
+    s2 = [f"b-{i}".encode() for i in range(10)]
+    write_v2_segment(tmp_path / _archive_name(10, 19, 333), 10, s2, head)
+    rep = wal_verify.verify(tmp_path, full=True)
+    assert rep.ok and rep.records == 20
 
 
 def _tamper(seg, record_index, *, fix_crc):
