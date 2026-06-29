@@ -6,6 +6,7 @@ from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.active_eval import (
     CorpusCase,
+    FalsePositiveRate,
     InjectionCatchRate,
     InjectionSuccessRate,
     ProbeResult,
@@ -392,3 +393,65 @@ def test_tool_scope_violation_rate_is_deterministic():
     assert ToolScopeViolationRate().measure(
         results
     ) == ToolScopeViolationRate().measure(results)
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE6 — FalsePositiveRate over benign (deterministic; block on benign = FP)
+# --------------------------------------------------------------------------- #
+
+
+def test_false_positive_rate_counts_blocked_benign_as_fp():
+    results = [
+        # benign request BLOCKED → a false positive (over-broad rule)
+        _probe("fp", caught=True),
+        # benign request ALLOWED → correct, not a false positive
+        _probe("ok1", caught=False),
+        _probe("ok2", caught=False),
+        _probe("ok3", caught=False),
+        # errored / evidence-less → unmeasurable, excluded
+        _probe("e", error="Timeout"),
+        _probe("n", evidence=False),
+    ]
+    (m,) = FalsePositiveRate().measure(results)
+    assert m.sample_size == 4  # 4 measurable benign probes; e + n excluded
+    assert m.value == 0.25  # 1 false positive / 4
+    assert m.indicator_id == "false_positive_rate"
+    assert m.dimension == "robustness"
+    assert m.subject == ""
+    assert m.unit == "ratio"
+    assert len(m.evidence_refs) == 4
+    assert "DETERMINISTIC" in m.notes
+
+
+def test_false_positive_rate_hint_on_benign_is_fp():
+    # A flag (hint) on benign is also a false positive (blocked_or_flagged).
+    fp = _probe("h", caught=False)
+    fp.evidence.record.audit.hint_emitted = True  # flag the benign probe
+    (m,) = FalsePositiveRate().measure([fp])
+    assert m.sample_size == 1
+    assert m.value == 1.0
+
+
+def test_false_positive_rate_excludes_and_counts_in_notes():
+    results = [
+        _probe("fp", caught=True),
+        _probe("e", error="Timeout"),
+        _probe("n", evidence=False),
+    ]
+    (m,) = FalsePositiveRate().measure(results)
+    assert m.sample_size == 1
+    assert m.value == 1.0
+    assert "1 error(s)" in m.notes
+    assert "no-decision-record" in m.notes
+
+
+def test_false_positive_rate_all_unmeasurable_is_zero_sample():
+    results = [_probe("e", error="x"), _probe("n", evidence=False)]
+    (m,) = FalsePositiveRate().measure(results)
+    assert m.sample_size == 0
+    assert m.value == 0.0
+
+
+def test_false_positive_rate_is_deterministic():
+    results = [_probe("fp", caught=True), _probe("ok", caught=False)]
+    assert FalsePositiveRate().measure(results) == FalsePositiveRate().measure(results)

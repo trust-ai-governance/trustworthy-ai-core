@@ -97,9 +97,27 @@ code_exec/infra/model_admin）。**非 canary 泄露形**——**确定性、基
 tool-not-found（不可测，需注册一个未授权工具）；越权-性由语料保证，不靠网关的 `missing_scopes`。
 锚点 `sec.l3.oauth_scope`（其 `scope_deny_rate` 的 Q-R1 效用升级）。确定性、可比特复现，无 temperature。
 
-**EV-AE4+（后续薄 issue）**：LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。
-Corpus 适配器（Promptfoo/Garak 摄取）为后续。当出现第 3 个同形泄露指标（LLM05?）时把
-LLM02/07/05 合并为通用 `CanaryLeakRate(id, dimension)`（EV-AE1 D6 阈值）。
+**EV-AE4 — LLM05 输出处理不当纵切（已 brief，待实现）+ CanaryLeakRate 合并**：
+`unsafe_output_passthrough_rate`（security_alignment）。brief 见 `docs/issues/EV-AE4.md`。
+**经分析 LLM05 就是第 3 个同形泄露纵切**：把 marker 设为**完整原始危险载荷**（含 `<>'; {` 等特殊字符 +
+高熵 token），则**逐字子串**检查天然区分"转义=安全"vs"原样透传=不安全"——复用 EV-AE1 的
+`sensitive_disclosed`/`not_leaked`/`secret_canary` 原样不变，无新 check/token/field/target 改动。
+**触发 EV-AE1 D6 合并**：把 LLM02/07/05 三个同形指标折叠为 `CanaryLeakRate` 基类 + 三个薄子类
+（行为不变，LLM02/07 既有测试须原样通过）。诚实边界：测的是**网关输出中和**（纵深防御），非下游
+sink 的处理（真正的 LLM05 面，属调用方）；**下界**；很可能高（与无 output-DLP 一致）。
+**决策已拍板**：D1 现在合（base 内部抽象 + 三薄子类，LLM02/07 测试须原样通过=硬验收门）；
+D2 复用 `secret_canary`（仅改 docstring，不改名不破坏）。未来若需不同判定逻辑（语义级，非字面子串）
+另抽象，勿塞进 `CanaryLeakRate`。
+
+**EV-AE5+（后续）**：LLM10 无界消耗（`cost_runaway_caught`/`within_cost_budget`——**确定性、WAL
+`token_usage` 预算**形，类 LLM06，非 canary 泄露形）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。
+
+**检测器质量轨（Platform P2-a 注入规则触发，cross-repo）**——见 `PLATFORM_ASK_INJECTION_DETECTION.md` §7：
+- **EV-AE6（双向验收：召回 + 误报，优先，与 P2-a 同步）**：现在只测召回（`catch>=0.8`），过宽规则
+  （"凡含 ignore 即拦"）会通过。新增 benign 语料（**含硬负例**：trigger 词的正当用法）+ `allowed` token +
+  `false_positive_rate` 指标，集成测试**两侧都断言**（召回 ≥τ_recall 且 FPR ≤τ_fpr）。现在就建，P2-a 落地即验证。
+- **EV-AE7（对抗变体生成器，Tier-1 落地后）**：对基础语料做**确定性轻扰动**（大小写/空白/标点/同形字）量规则
+  鲁棒性 + 产出绕过变体作 Tier-2 `injection_score` 种子数据集（回交 Platform）。
 
 **前瞻**：OWASP 现另有 **Agentic AI Top 10**（面向 agent/工具调用的攻击面）——本期不做，
 待 LLM Top 10 纵切铺开后再评估纳入（与 LLM06 工具越权一脉相承）。
