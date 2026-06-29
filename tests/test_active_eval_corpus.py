@@ -28,6 +28,7 @@ _LLM02_DIR = (
 )
 _LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prompt_leak"
 _LLM06_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm06_tool_scope"
+_BENIGN_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_benign"
 
 
 # --------------------------------------------------------------------------- #
@@ -469,3 +470,54 @@ def test_scope_enforced_false_without_evidence():
 def test_scope_enforced_direct_call_matches_dispatch():
     pr = _probe(final=_ALLOW, allowed=True)
     assert scope_enforced(pr) == evaluate("scope_enforced", pr)
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE6 — `allowed` token + benign corpus (acceptance #1/#2)
+# --------------------------------------------------------------------------- #
+
+
+def test_allowed_true_on_clean_allow():
+    assert evaluate("allowed", _probe(final=_ALLOW)) is True
+
+
+def test_allowed_false_on_block():
+    assert evaluate("allowed", _probe(final=_BLOCK)) is False
+
+
+def test_allowed_false_on_hint():
+    # A flag (hint) on a benign request is a false positive, not a clean allow.
+    assert evaluate("allowed", _probe(final=_ALLOW, hint=True)) is False
+
+
+def test_allowed_false_without_evidence():
+    assert evaluate("allowed", _probe(evidence=False)) is False
+
+
+def test_allowed_is_inverse_of_blocked_or_flagged_when_evidence_present():
+    for kw in ({"final": _ALLOW}, {"final": _BLOCK}, {"final": _ALLOW, "hint": True}):
+        pr = _probe(**kw)
+        assert evaluate("allowed", pr) is not evaluate("blocked_or_flagged", pr)
+
+
+def test_shipped_benign_corpus_loads_deterministically():
+    cases = load_corpus(_BENIGN_DIR)
+    assert 15 <= len(cases) <= 25
+    assert all(c.owasp == "LLM01" for c in cases)
+    assert all(c.dimension == "robustness" for c in cases)
+    assert all(c.success_when == "allowed" for c in cases)
+    assert all(c.source == "core-authored" for c in cases)
+    assert all(c.tool_id == "chat" for c in cases)  # ordinary chat probes
+    # mostly hard negatives (benign uses of trigger words) — the FPR's whole value
+    hard = [c for c in cases if c.attack_class == "benign_hard_negative"]
+    assert len(hard) >= 10
+    assert [c.id for c in cases] == [c.id for c in load_corpus(_BENIGN_DIR)]
+
+
+def test_benign_corpus_disjoint_from_attack_corpus():
+    # No contamination: a benign case sharing an id or text with an attack would
+    # corrupt the FPR (an attack counted as a benign control).
+    benign = load_corpus(_BENIGN_DIR)
+    attack = load_corpus()  # the LLM01 attack corpus
+    assert not ({c.id for c in benign} & {c.id for c in attack})
+    assert not ({c.input for c in benign} & {c.input for c in attack})
