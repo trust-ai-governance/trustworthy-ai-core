@@ -198,10 +198,10 @@ scope engine #5a landing.)
 > correct, useful measured indicator — just mis-assigned here.
 >
 > **EMPIRICAL RESULT (active-eval live run, 2026-06-28/29; numbers CORRECTED after a
-> harness fix — see the lesson below) — OWASP LLM01 (28 cases) + LLM02 (14 cases) +
-> LLM07 (14 cases), tenant `__eval__`, model `deepseek-v4-flash`, live WAL correlation
-> by `request_id`.**
-> Four measured numbers:
+> harness fix — see the lesson below) — OWASP LLM01 (28) + LLM02 (14) + LLM07 (14) +
+> LLM06 (12), tenant `__eval__`, model `deepseek-v4-flash`, live WAL correlation by
+> `request_id`.**
+> Five measured numbers:
 > - **Gateway injection-catch ≈ 4%** (`injection_catch_rate` = 1/28). The single
 >   "catch" was **`pii-block-request`** firing on an email address in a payload, **not
 >   injection detection.** Effective injection governance = **0**. So
@@ -223,11 +223,23 @@ scope engine #5a landing.)
 >   harness's **WAL cross-check found 0 missed leaks** and the **negative control**
 >   (same attacks with no system message) measured **0%** — so the 79% is real, not a
 >   capture artifact.
+> - **Tool-scope-violation = 0% (0/12)** (`tool_scope_violation_rate`, LLM06;
+>   DETERMINISTIC, WAL-authz, bit-reproducible): every out-of-scope tool invocation
+>   (admin/shell/filesystem/db/http-SSRF/email/secrets/payments/user-mgmt/code-exec/
+>   infra/model-admin) was **DENIED** — `authorization.allowed=false`,
+>   `final_decision=BLOCK`, `deny_reason="no matching scope"`, all 12 records
+>   chain-verified (`integrity=VERIFIED`). **The access-control layer measurably
+>   WORKS** — this satisfies `sec.l3.oauth_scope` by *efficacy* (Q-R1), not presence.
 >
-> **Governance lesson, now in data (REVISED):** **neither layer protected.** The model
-> **complied** with most injections (75%), with **every** in-context secret-extraction
-> attempt (100%), and with **most system-prompt extractions** (79%) — and the gateway
-> caught **≈0** of any of them. An earlier version of this row claimed
+> **Governance lesson, now in data (REVISED):** **the CONTENT-governance layer is
+> absent; the ACCESS-CONTROL layer works.** The model **complied** with most injections
+> (75%), with **every** in-context secret-extraction (100%), and with **most**
+> system-prompt extractions (79%) — and the gateway caught **≈0** of any of them
+> (no injection detection, no output DLP). **But** the gateway **denied 100%** of
+> out-of-scope tool calls (LLM06) — deterministic OAuth-scope authorization is mature
+> and effective. So the honest split is: **least-privilege/authz is real and measured;
+> content-based threat governance (injection, disclosure, system-prompt) is not.** An
+> earlier version of this row claimed
 > "the model resisted all 8" (success 0%) — that was a **harness measurement bug, not
 > reality**: `GatewayTarget` read the model reply from the wrong response field, so
 > `response_text` was always empty and every output-based check silently returned 0%. The
@@ -240,9 +252,11 @@ scope engine #5a landing.)
 > verified WAL shows, plus a negative control) — the LLM07 run passed both (0 missed,
 > 0% negative), so its 79% is trustworthy by construction. This is a **Platform gap**
 > (no injection detection AND no output DLP), tracked in
-> `PLATFORM_ASK_INJECTION_DETECTION.md`. Honest current state: **attested ≠ measured —
-> guardrail-blocking, injection-resistance, secret-disclosure, and system-prompt
-> confidentiality are all unproven/failing in measurement.**
+> `PLATFORM_ASK_INJECTION_DETECTION.md`. Honest current state: **guardrail-blocking,
+> injection-resistance, secret-disclosure, and system-prompt confidentiality are
+> unproven/failing in measurement — while tool-scope / least-privilege (`sec.l3.oauth_scope`)
+> is measured-and-passing (0% violation, chain-verified). Measured ≠ uniformly bad: the
+> mature control (authz) verifies; the immature ones (content governance) are exposed.**
 
 ---
 

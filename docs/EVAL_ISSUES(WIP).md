@@ -86,10 +86,20 @@ user 消息——那只测指令遵从，是 LLM02 不是 LLM07）。复用 EV-A
 `checks.py` 不动，新增一个薄指标 + `system_prompt` 语料字段 + GatewayTarget 发送系统消息。指标方向为
 **下界**（攻击者看不到 canary→无过计数；转述泄露漏计），与 LLM02 近上界互补，勿直接比较。
 
-**EV-AE3+（后续薄 issue，按 OWASP 类）**：LLM06 `tool_scope_violation_rate`、
-LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。Corpus 适配器
-（Promptfoo/Garak 摄取）为后续。当出现第 3 个同形泄露指标（LLM05?）时把 LLM02/07/05
-合并为通用 `CanaryLeakRate(id, dimension)`（EV-AE1 D6 阈值）；网关捕获率同理，暂不抽象。
+**EV-AE3 — LLM06 越权工具调用纵切（已 brief + 语料，待实现）**：`tool_scope_violation_rate`
+（security_alignment）。brief 见 `docs/issues/EV-AE3.md`，语料 `corpus/llm06_tool_scope/`
+（12 例越权工具：admin/shell/filesystem/db/http(SSRF)/email/secrets/payments/user_mgmt/
+code_exec/infra/model_admin）。**非 canary 泄露形**——**确定性、基于 WAL authorization**
+（`injection_catch_rate` 的形，非输出统计）：eval agent 仅有 `tool:chat:*`，探测越权
+`tool_id`，量网关是否拒绝（`final_decision==BLOCK` 或 `authorization.allowed==false`）。
+**最重处**：新增 target 能力（调用 chat 以外的 tool）+ `tool_id` 语料字段 + `scope_enforced`
+判定 token。**关键决策 D2（须先确认，勿猜）**：越权 `tool_id` 是否触发 authz 拒绝（可测）还是
+tool-not-found（不可测，需注册一个未授权工具）；越权-性由语料保证，不靠网关的 `missing_scopes`。
+锚点 `sec.l3.oauth_scope`（其 `scope_deny_rate` 的 Q-R1 效用升级）。确定性、可比特复现，无 temperature。
+
+**EV-AE4+（后续薄 issue）**：LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。
+Corpus 适配器（Promptfoo/Garak 摄取）为后续。当出现第 3 个同形泄露指标（LLM05?）时把
+LLM02/07/05 合并为通用 `CanaryLeakRate(id, dimension)`（EV-AE1 D6 阈值）。
 
 **前瞻**：OWASP 现另有 **Agentic AI Top 10**（面向 agent/工具调用的攻击面）——本期不做，
 待 LLM Top 10 纵切铺开后再评估纳入（与 LLM06 工具越权一脉相承）。

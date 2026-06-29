@@ -15,6 +15,7 @@ from treval.active_eval import (
     injection_succeeded,
     is_sensitive_disclosed,
     load_corpus,
+    scope_enforced,
     sensitive_disclosed,
 )
 from treval.active_eval.target import ProbeResult
@@ -26,6 +27,7 @@ _LLM02_DIR = (
     Path(__file__).resolve().parents[1] / "corpus" / "llm02_sensitive_disclosure"
 )
 _LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prompt_leak"
+_LLM06_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm06_tool_scope"
 
 
 # --------------------------------------------------------------------------- #
@@ -153,6 +155,7 @@ def _probe(
     marker="",
     canary="",
     raw="",
+    allowed=None,
 ):
     ev = None
     if evidence:
@@ -160,6 +163,8 @@ def _probe(
         ctx.envelope.request_id = "req-1"
         if final is not None:
             ctx.decision.final_decision = final  # type: ignore[assignment]
+        if allowed is not None:
+            ctx.decision.authorization.allowed = allowed
         if matched:
             r = ctx.decision.rules_evaluated.add()
             r.rule_id = "r"
@@ -400,3 +405,67 @@ def test_not_leaked_false_when_canary_present():
 def test_not_leaked_false_without_canary():
     pr = _probe(final=_ALLOW, response_text="anything", canary="")
     assert evaluate("not_leaked", pr) is False
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE3 — LLM06 tool-scope corpus (acceptance #1/#2)
+# --------------------------------------------------------------------------- #
+
+
+def test_shipped_llm06_corpus_loads_deterministically():
+    cases = load_corpus(_LLM06_DIR)
+    assert 10 <= len(cases) <= 14
+    assert all(c.owasp == "LLM06" for c in cases)
+    assert all(c.dimension == "security_alignment" for c in cases)
+    assert all(c.success_when == "scope_enforced" for c in cases)
+    assert all(c.source == "core-authored" for c in cases)
+    # every case is an out-of-scope tool (non-"chat"); diverse privilege classes
+    assert all(c.tool_id and c.tool_id != "chat" for c in cases)
+    assert len({c.tool_id for c in cases}) == len(cases)  # distinct tools
+    # no canary / system_prompt / marker — this is a deterministic authz vertical
+    assert all(not c.secret_canary and not c.system_prompt for c in cases)
+    assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM06_DIR)]
+
+
+def test_tool_id_defaults_to_chat(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.tool_id == "chat"  # LLM01/02/07 cases invoke chat
+
+
+def test_tool_id_loads_when_set(tmp_path):
+    doc = _valid_doc(success_when="scope_enforced", tool_id="admin")
+    (case,) = load_corpus(_write_case(tmp_path, doc))
+    assert case.tool_id == "admin"
+
+
+def test_empty_tool_id_raises(tmp_path):
+    with pytest.raises(CorpusError, match="tool_id"):
+        load_corpus(_write_case(tmp_path, _valid_doc(tool_id="")))
+
+
+# --------------------------------------------------------------------------- #
+# scope_enforced token — deterministic WAL-authz (acceptance #4)
+# --------------------------------------------------------------------------- #
+
+
+def test_scope_enforced_true_on_block():
+    # BLOCK enforces regardless of the allowed flag.
+    assert evaluate("scope_enforced", _probe(final=_BLOCK, allowed=True)) is True
+
+
+def test_scope_enforced_true_when_authorization_denied():
+    # allowed=false denies even if the final decision is not BLOCK.
+    assert evaluate("scope_enforced", _probe(final=_ALLOW, allowed=False)) is True
+
+
+def test_scope_enforced_false_when_allowed_is_a_violation():
+    assert evaluate("scope_enforced", _probe(final=_ALLOW, allowed=True)) is False
+
+
+def test_scope_enforced_false_without_evidence():
+    assert evaluate("scope_enforced", _probe(evidence=False)) is False
+
+
+def test_scope_enforced_direct_call_matches_dispatch():
+    pr = _probe(final=_ALLOW, allowed=True)
+    assert scope_enforced(pr) == evaluate("scope_enforced", pr)

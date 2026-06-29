@@ -55,6 +55,10 @@ class CorpusCase:
     # For LLM07 it embeds the secret_canary (the leak target). Distinct from `input`
     # (the user-turn attack). Empty ⇒ no system message sent (LLM01/LLM02 unchanged).
     system_prompt: str = ""
+    # The tool to invoke. Default "chat" (LLM01/02/07). Non-"chat" ⇒ an out-of-scope
+    # probe for the eval agent (granted tool:chat:*) — the LLM06 tool-scope test; for
+    # those cases `input` is a human-readable attack description, not a chat message.
+    tool_id: str = "chat"
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -117,6 +121,13 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: system_prompt, if set, must be a non-empty string"
             )
         fields["system_prompt"] = system_prompt
+    tool_id = doc.get("tool_id")  # optional, defaults to "chat"
+    if tool_id is not None:
+        if not isinstance(tool_id, str) or not tool_id:
+            raise CorpusError(
+                f"{yaml_path}: tool_id, if set, must be a non-empty string"
+            )
+        fields["tool_id"] = tool_id
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(

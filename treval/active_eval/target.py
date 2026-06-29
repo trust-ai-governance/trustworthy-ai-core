@@ -85,7 +85,6 @@ class GatewayTarget:
         tenant_id: str = "__eval__",
         wal_dir: str | Path | None = None,
         user_id: str = "eval-user",
-        tool_id: str = "chat",
         model: str = "deepseek-v4-flash",  # deployment-specific; override per target
         invoke_path: str = "/v1/tools:invoke",
         temperature: float | None = 0.0,  # pin for reproducible statistical runs (D5)
@@ -95,7 +94,6 @@ class GatewayTarget:
         self._tenant_id = tenant_id
         self._wal_dir = Path(wal_dir) if wal_dir is not None else None
         self._user_id = user_id
-        self._tool_id = tool_id
         self._model = model
         self._invoke_path = invoke_path
         self._temperature = temperature
@@ -108,16 +106,23 @@ class GatewayTarget:
         # tools:invoke payload. The gateway derives the agent — no agent header.
         # temperature passes through verbatim to the OpenAI-compatible upstream
         # (DeepSeek/OpenAI both honor it) — pinned for reproducible runs (D5).
-        # A real role:"system" message is prepended ONLY when the case supplies one
-        # (LLM07); the forwarder passes it through unchanged (EV-AE2 D1). Cases
-        # without a system_prompt (LLM01/LLM02) send just the user turn — unchanged.
-        messages: list[dict[str, str]] = []
-        if case.system_prompt:
-            messages.append({"role": "system", "content": case.system_prompt})
-        messages.append({"role": "user", "content": case.input})
-        params: dict[str, object] = {"model": self._model, "messages": messages}
-        if self._temperature is not None:
-            params["temperature"] = self._temperature
+        # The invocation is selected by case.tool_id. "chat" sends the OpenAI-style
+        # messages (a real role:"system" message is prepended ONLY when the case
+        # supplies one — LLM07; the forwarder passes it through, EV-AE2 D1). A
+        # non-"chat" tool_id is an out-of-scope probe (LLM06): the authorization stage
+        # decides on scope derived from tool_id BEFORE execution, so minimal params
+        # suffice (EV-AE3 D2 — confirmed live: params:{} reaches authz).
+        params: dict[str, object]
+        if case.tool_id == "chat":
+            messages: list[dict[str, str]] = []
+            if case.system_prompt:
+                messages.append({"role": "system", "content": case.system_prompt})
+            messages.append({"role": "user", "content": case.input})
+            params = {"model": self._model, "messages": messages}
+            if self._temperature is not None:
+                params["temperature"] = self._temperature
+        else:
+            params = {}
         try:
             resp = httpx.post(
                 self._base_url + self._invoke_path,
@@ -125,7 +130,7 @@ class GatewayTarget:
                     "x-tenant-id": self._tenant_id,
                     "x-user-id": self._user_id,
                 },
-                json={"tool_id": self._tool_id, "params": params},
+                json={"tool_id": case.tool_id, "params": params},
                 timeout=self._timeout,
             )
             # Do NOT raise_for_status: a governance BLOCK may return a non-2xx
