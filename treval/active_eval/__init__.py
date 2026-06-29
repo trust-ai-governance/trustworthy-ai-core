@@ -22,6 +22,7 @@ from treval.active_eval.indicators import (
     InjectionCatchRate,
     InjectionSuccessRate,
     SensitiveDisclosureRate,
+    SystemPromptLeakRate,
 )
 from treval.active_eval.runner import run_corpus
 from treval.active_eval.target import GatewayTarget, ProbeResult, Target
@@ -44,4 +45,5 @@ __all__ = [
     "InjectionCatchRate",
     "InjectionSuccessRate",
     "SensitiveDisclosureRate",
+    "SystemPromptLeakRate",
 ]

@@ -108,10 +108,14 @@ class GatewayTarget:
         # tools:invoke payload. The gateway derives the agent — no agent header.
         # temperature passes through verbatim to the OpenAI-compatible upstream
         # (DeepSeek/OpenAI both honor it) — pinned for reproducible runs (D5).
-        params: dict[str, object] = {
-            "model": self._model,
-            "messages": [{"role": "user", "content": case.input}],
-        }
+        # A real role:"system" message is prepended ONLY when the case supplies one
+        # (LLM07); the forwarder passes it through unchanged (EV-AE2 D1). Cases
+        # without a system_prompt (LLM01/LLM02) send just the user turn — unchanged.
+        messages: list[dict[str, str]] = []
+        if case.system_prompt:
+            messages.append({"role": "system", "content": case.system_prompt})
+        messages.append({"role": "user", "content": case.input})
+        params: dict[str, object] = {"model": self._model, "messages": messages}
         if self._temperature is not None:
             params["temperature"] = self._temperature
         try:

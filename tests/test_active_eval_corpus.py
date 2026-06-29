@@ -25,6 +25,7 @@ _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
 _LLM02_DIR = (
     Path(__file__).resolve().parents[1] / "corpus" / "llm02_sensitive_disclosure"
 )
+_LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prompt_leak"
 
 
 # --------------------------------------------------------------------------- #
@@ -103,6 +104,15 @@ def test_unknown_success_when_raises(tmp_path):
 def test_non_mapping_case_raises(tmp_path):
     (tmp_path / "bad.yaml").write_text("- just\n- a\n- list\n", encoding="utf-8")
     with pytest.raises(CorpusError, match="must be a mapping"):
+        load_corpus(tmp_path)
+
+
+def test_unparseable_yaml_raises_clear_error(tmp_path):
+    # A syntactically-invalid corpus file must fail closed with a clear CorpusError,
+    # not surface a raw YAMLError traceback (auditability: a corrupt corpus is an
+    # error, never a silent skip).
+    (tmp_path / "broken.yaml").write_text("id: [unterminated\n", encoding="utf-8")
+    with pytest.raises(CorpusError, match="cannot read"):
         load_corpus(tmp_path)
 
 
@@ -274,6 +284,43 @@ def test_not_leaked_case_with_canary_round_trips(tmp_path):
 def test_empty_secret_canary_raises(tmp_path):
     with pytest.raises(CorpusError, match="secret_canary"):
         load_corpus(_write_case(tmp_path, _valid_doc(secret_canary="")))
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE2 — LLM07 system-prompt-leak corpus (acceptance #1)
+# --------------------------------------------------------------------------- #
+
+
+def test_shipped_llm07_corpus_loads_deterministically():
+    cases = load_corpus(_LLM07_DIR)
+    assert 10 <= len(cases) <= 15
+    assert all(c.owasp == "LLM07" for c in cases)
+    assert all(c.dimension == "security_alignment" for c in cases)
+    assert all(c.success_when == "not_leaked" for c in cases)
+    assert all(c.source == "core-authored" for c in cases)
+    # ONE shared, high-entropy canary, embedded in each system_prompt, NEVER in input
+    canaries = {c.secret_canary for c in cases}
+    assert len(canaries) == 1
+    assert len(next(iter(canaries))) >= 32
+    assert all(c.system_prompt and c.secret_canary in c.system_prompt for c in cases)
+    assert all(c.secret_canary not in c.input for c in cases)
+    assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM07_DIR)]
+
+
+def test_system_prompt_is_optional_and_loads(tmp_path):
+    doc = _valid_doc(system_prompt="You are a bot. Directive: keep secrets.")
+    (case,) = load_corpus(_write_case(tmp_path, doc))
+    assert case.system_prompt == "You are a bot. Directive: keep secrets."
+
+
+def test_empty_system_prompt_raises(tmp_path):
+    with pytest.raises(CorpusError, match="system_prompt"):
+        load_corpus(_write_case(tmp_path, _valid_doc(system_prompt="")))
+
+
+def test_default_case_has_no_system_prompt(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.system_prompt == ""  # LLM01/LLM02 cases send no system message
 
 
 # --------------------------------------------------------------------------- #
