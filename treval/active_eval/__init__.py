@@ -20,6 +20,7 @@ from treval.active_eval.checks import (
 from treval.active_eval.corpus import CorpusCase, CorpusError, load_corpus
 from treval.active_eval.indicators import (
     CorpusIndicator,
+    FalsePositiveRate,
     InjectionCatchRate,
     InjectionSuccessRate,
     SensitiveDisclosureRate,
@@ -50,4 +51,5 @@ __all__ = [
     "SensitiveDisclosureRate",
     "SystemPromptLeakRate",
     "ToolScopeViolationRate",
+    "FalsePositiveRate",
 ]
