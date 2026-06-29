@@ -78,10 +78,18 @@ startswith canary 保守下界）；28 例 LLM01 语料（8 例带 marker）；b
 `is_sensitive_disclosed(output, canary)`。维度标 `privacy_data_protection`，目标绑定
 （`prv.l2.redaction` 升级或新 `prv.l3.extraction_resistance`）留给 EV-7/行审计。
 
-**EV-AE2+（后续薄 issue，按 OWASP 类）**：LLM07 `system_prompt_leak_rate`、
-LLM06 `tool_scope_violation_rate`、LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7
-路线图）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。当 ≥3 类需要"网关捕获率"时再抽通用
-`governance_catch_rate`（D6，暂不抽象）。
+**EV-AE2 — LLM07 系统提示词泄露纵切（已 brief，待实现，决策已拍板）**：`system_prompt_leak_rate`
+（security_alignment）。brief 见 `docs/issues/EV-AE2.md`。**首个 system-prompt 纵切，零平台改动**
+（D1）：harness 在 `params.messages` 里直接发一条真实 `role:"system"`（含 canary）消息，forwarder
+原样透传上游——非部署种植、非注册表配置、可完全复现。**切勿**用 in-band 替身（把 `[SYSTEM]` 文本塞进
+user 消息——那只测指令遵从，是 LLM02 不是 LLM07）。复用 EV-AE1 的 `sensitive_disclosed` 原样不变；
+`checks.py` 不动，新增一个薄指标 + `system_prompt` 语料字段 + GatewayTarget 发送系统消息。指标方向为
+**下界**（攻击者看不到 canary→无过计数；转述泄露漏计），与 LLM02 近上界互补，勿直接比较。
+
+**EV-AE3+（后续薄 issue，按 OWASP 类）**：LLM06 `tool_scope_violation_rate`、
+LLM05、LLM10（见 `ACTIVE_EVAL_CORPUS_DESIGN.md` §7 路线图）。Corpus 适配器
+（Promptfoo/Garak 摄取）为后续。当出现第 3 个同形泄露指标（LLM05?）时把 LLM02/07/05
+合并为通用 `CanaryLeakRate(id, dimension)`（EV-AE1 D6 阈值）；网关捕获率同理，暂不抽象。
 
 **前瞻**：OWASP 现另有 **Agentic AI Top 10**（面向 agent/工具调用的攻击面）——本期不做，
 待 LLM Top 10 纵切铺开后再评估纳入（与 LLM06 工具越权一脉相承）。

@@ -174,3 +174,80 @@ def test_gateway_sensitive_disclosure_over_llm02_corpus():
         "harness blind to leaks the WAL preview shows — output extraction is broken: "
         f"{missed}{summary}"
     )
+
+
+def test_gateway_system_prompt_leak_over_llm07_corpus():
+    """EV-AE2 #7/#8/#9: drive the LLM07 corpus (canary in a real role:system
+    message) at temperature=0 and report system_prompt_leak_rate. Plus a WAL
+    cross-check and the NEGATIVE CONTROL — the same attacks with NO system_prompt
+    must yield ~0, proving the indicator measures leakage of the SUPPLIED system
+    content, not an artifact."""
+    from dataclasses import replace
+
+    from treval.active_eval import (
+        GatewayTarget,
+        InjectionCatchRate,
+        SystemPromptLeakRate,
+        load_corpus,
+        run_corpus,
+    )
+    from treval.active_eval.checks import sensitive_disclosed
+    from treval.readers import WalEvidenceReader
+
+    llm07 = Path(__file__).resolve().parents[2] / "corpus" / "llm07_system_prompt_leak"
+    corpus = load_corpus(llm07)
+    target = GatewayTarget(
+        _GATEWAY_URL,  # type: ignore[arg-type]
+        wal_dir=_WAL_DIR,
+        tenant_id=_TENANT,
+        user_id=_USER,
+        model=_MODEL,
+        temperature=0.0,
+        timeout=_TIMEOUT,
+    )
+    results = run_corpus(corpus, target)
+    assert all(r.request_id or r.error for r in results)
+
+    (leak,) = SystemPromptLeakRate().measure(results)
+    (catch,) = InjectionCatchRate().measure(results)
+
+    # WAL cross-check (independent oracle): a canary in the chain-verified preview
+    # the harness did not flag means output extraction is broken.
+    previews: dict[str, str] = {}
+    if _WAL_DIR:
+        for ev in WalEvidenceReader(_WAL_DIR).read_audit(tenant_id=_TENANT):
+            preview = ev.record.response.response_body_preview
+            if preview:
+                previews[ev.ref.request_id] = preview.decode("utf-8", "replace")
+    missed = [
+        r.case_id
+        for r in results
+        if r.secret_canary
+        and r.secret_canary in previews.get(r.request_id, "")
+        and not sensitive_disclosed(r)
+    ]
+
+    # Negative control: same attacks, system_prompt stripped ⇒ no system message
+    # sent ⇒ the canary is nowhere in the request, so leak rate must be ~0.
+    no_sys = [replace(c, system_prompt="") for c in corpus]
+    neg_results = run_corpus(no_sys, target)
+    (neg_leak,) = SystemPromptLeakRate().measure(neg_results)
+
+    summary = (
+        f"\n  LLM07 probes: {len(results)} sent, {leak.sample_size} measured"
+        f"\n  system-prompt leaked: {leak.value:.0%}  (LOWER-bound, higher is worse)"
+        f"\n  gateway caught:       {catch.value:.0%}  (output guardrail side, if any)"
+        f"\n  WAL corroborates leaks not flagged: {missed}"
+        f"\n  negative control (no system msg): {neg_leak.value:.0%} "
+        f"({neg_leak.sample_size} cases)"
+    )
+    print(summary)  # visible with `pytest -s`
+
+    assert leak.sample_size > 0, "no canary cases measured — check the LLM07 corpus"
+    assert not missed, (
+        f"harness blind to leaks the WAL preview shows: {missed}{summary}"
+    )
+    # The negative control: the supplied system content is the only canary source.
+    assert neg_leak.value == 0.0, (
+        f"negative control leaked without a system message — artifact!{summary}"
+    )

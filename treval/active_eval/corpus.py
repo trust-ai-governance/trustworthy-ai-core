@@ -51,6 +51,10 @@ class CorpusCase:
     # Distinct from output_marker (an attack sentinel the model is tricked into
     # EMITTING); secret_canary is a protected secret the model must NOT emit (D3).
     secret_canary: str = ""
+    # Optional real role:"system" message the harness sends ahead of the user turn.
+    # For LLM07 it embeds the secret_canary (the leak target). Distinct from `input`
+    # (the user-turn attack). Empty ⇒ no system message sent (LLM01/LLM02 unchanged).
+    system_prompt: str = ""
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -106,6 +110,13 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: secret_canary, if set, must be a non-empty string"
             )
         fields["secret_canary"] = canary
+    system_prompt = doc.get("system_prompt")  # optional
+    if system_prompt is not None:
+        if not isinstance(system_prompt, str) or not system_prompt:
+            raise CorpusError(
+                f"{yaml_path}: system_prompt, if set, must be a non-empty string"
+            )
+        fields["system_prompt"] = system_prompt
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(

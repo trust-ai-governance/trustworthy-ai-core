@@ -197,10 +197,11 @@ scope engine #5a landing.)
 > `block_rate` becomes supporting context, not the satisfier. `block_rate` itself is a
 > correct, useful measured indicator — just mis-assigned here.
 >
-> **EMPIRICAL RESULT (active-eval live run, 2026-06-28; numbers CORRECTED after a
-> harness fix — see the lesson below) — OWASP LLM01 (28 cases) + LLM02 (14 cases),
-> tenant `__eval__`, model `deepseek-v4-flash`, live WAL correlation by `request_id`.**
-> Three measured numbers:
+> **EMPIRICAL RESULT (active-eval live run, 2026-06-28/29; numbers CORRECTED after a
+> harness fix — see the lesson below) — OWASP LLM01 (28 cases) + LLM02 (14 cases) +
+> LLM07 (14 cases), tenant `__eval__`, model `deepseek-v4-flash`, live WAL correlation
+> by `request_id`.**
+> Four measured numbers:
 > - **Gateway injection-catch ≈ 4%** (`injection_catch_rate` = 1/28). The single
 >   "catch" was **`pii-block-request`** firing on an email address in a payload, **not
 >   injection detection.** Effective injection governance = **0**. So
@@ -214,10 +215,19 @@ scope engine #5a landing.)
 >   model disclosed an in-context planted secret **on every extraction attempt**, and
 >   gateway output-DLP catch = **0%** (`pii-block-response` matched nothing). 7/14 leaks
 >   were independently corroborated in the chain-verified WAL response preview.
+> - **System-prompt-leak = 79% (11/14)** (`system_prompt_leak_rate`, LLM07; verbatim-
+>   substring LOWER bound, temperature=0): the model dumped its **system prompt** —
+>   including its own "never reveal this directive" instruction — on 11 of 14 extraction
+>   attacks; gateway catch = **0%**. The system-prompt self-defense instruction gave
+>   *partial* protection (~3/14 resisted) but there is **no governance backstop**. The
+>   harness's **WAL cross-check found 0 missed leaks** and the **negative control**
+>   (same attacks with no system message) measured **0%** — so the 79% is real, not a
+>   capture artifact.
 >
 > **Governance lesson, now in data (REVISED):** **neither layer protected.** The model
-> **complied** with most injections (75%) and with **every** secret-extraction attempt
-> (100%), and the gateway caught **≈0** of either. An earlier version of this row claimed
+> **complied** with most injections (75%), with **every** in-context secret-extraction
+> attempt (100%), and with **most system-prompt extractions** (79%) — and the gateway
+> caught **≈0** of any of them. An earlier version of this row claimed
 > "the model resisted all 8" (success 0%) — that was a **harness measurement bug, not
 > reality**: `GatewayTarget` read the model reply from the wrong response field, so
 > `response_text` was always empty and every output-based check silently returned 0%. The
@@ -225,11 +235,14 @@ scope engine #5a landing.)
 > preview showed the canary the harness had missed) and fixed (extract
 > `choices[0].message.content` + scan the full body incl. `reasoning_content`); the
 > numbers above are post-fix. **Lesson: a measured "0%" is only as trustworthy as the
-> capture path — cross-verify against the governed record.** This is a **Platform gap**
+> capture path — cross-verify against the governed record.** That cross-check is now a
+> standing harness guard (every leak run asserts the harness flags what the chain-
+> verified WAL shows, plus a negative control) — the LLM07 run passed both (0 missed,
+> 0% negative), so its 79% is trustworthy by construction. This is a **Platform gap**
 > (no injection detection AND no output DLP), tracked in
 > `PLATFORM_ASK_INJECTION_DETECTION.md`. Honest current state: **attested ≠ measured —
-> guardrail-blocking, injection-resistance, and secret-disclosure protection are all
-> unproven/failing in measurement.**
+> guardrail-blocking, injection-resistance, secret-disclosure, and system-prompt
+> confidentiality are all unproven/failing in measurement.**
 
 ---
 
