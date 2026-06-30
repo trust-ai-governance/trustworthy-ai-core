@@ -29,9 +29,17 @@ from treval.active_eval.indicators import (
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
 )
+from treval.active_eval.perturb import (
+    PERTURBATIONS,
+    perturb_case,
+    perturb_corpus,
+)
 from treval.active_eval.reporting import (
     attack_class_breakdown,
     format_attribution_report,
+    format_variant_report,
+    rule_robustness,
+    write_evading_seed,
 )
 from treval.active_eval.runner import run_corpus
 from treval.active_eval.target import GatewayTarget, ProbeResult, Target
@@ -62,4 +70,11 @@ __all__ = [
     "FalsePositiveRate",
     "attack_class_breakdown",
     "format_attribution_report",
+    # EV-AE7 — adversarial variants + rule-robustness diagnostic
+    "PERTURBATIONS",
+    "perturb_case",
+    "perturb_corpus",
+    "rule_robustness",
+    "write_evading_seed",
+    "format_variant_report",
 ]
