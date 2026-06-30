@@ -199,3 +199,68 @@ needing `error_code`:
 So the **§8 attribution key = `rule_id`/`tags`/`decided_by`, not `error_code`** — taxonomies
 stay decoupled (Core owns attacks, the gateway owns rules; they meet at "was it blocked").
 No Core change needed.
+
+### 7.4 Counting a Tier-2 SHADOW catch — emit `hint_emitted` (Option A), NOT Core re-thresholding the score
+P2-b v1 is a **shadow** detector (llm-judge, domestic model): it DETECTS but does not BLOCK
+(full enforcement is a later multi-week build). Core's answer to "how does Core count a
+shadow catch":
+
+**Option A — the shadow detection sets `hint_emitted`** in the WAL decision record; Core's
+existing `blocked_or_flagged` (= `final_decision==BLOCK` OR `hint_emitted`) counts it
+**unchanged**. ✅ Recommended. **NOT** Option B (Core reads `injection_score ≥ τ` as a
+catch). Reasons:
+- **Emit/interpret separation (the foundational split):** the gateway emits facts, Core
+  interprets. The detector's *decision* ("flag this") is the fact to emit — a hint. The raw
+  `injection_score` is also a fact, but the thresholding `score ≥ τ → detection` is the
+  **detector's** decision; the gateway makes it and emits the hint. If Core read the score
+  and applied its own τ, Core would re-implement the detector and could measure a *different*
+  τ than the detector enforces — measuring something other than the detector's real decisions.
+- **No Core change; fits the shipped criterion.** `blocked_or_flagged` was built for exactly
+  a flag-that-doesn't-block. A shadow detection *is* a flag.
+- **The detector owns τ** — when Platform tunes it, Core's measurement tracks automatically
+  (reads the resulting hint, not a hard-coded threshold).
+- **Also unblocks the P2-a shadow tier** (a reusable seam), and **no conflation in v1**:
+  Tier-1 BLOCKs, so in shadow v1 the only hint-emitter is the Tier-2 shadow detector →
+  `hint_emitted` cleanly == Tier-2 shadow detection.
+
+Platform notes:
+- Make the shadow hint **AUDIT-only** (recorded in the WAL, does not alter the client
+  response) — that *is* shadow mode; Core reads it from the WAL, the client sees nothing.
+- **Also emit `injection_score` as an audit fact** (E1 `score_deltas` / a tag) — Core uses
+  it for **detector-quality diagnostics** (threshold sweeps / ROC / picking τ, like EV-AE6's
+  FPR), but the CATCH signal is the hint, not Core re-thresholding the score.
+- **Tier-2 catch is STATISTICAL** (the llm-judge is non-deterministic) — unlike Tier-1's
+  bit-reproducible keyword/regex. Core reports Tier-2 recall with `sample_size` and pins the
+  judge temperature=0 if the domestic model supports it.
+- **Future refinement:** when Platform later emits *enforced* hints alongside shadow ones,
+  add a `tags["mode"]="shadow"` on the rule_evaluation so Core can separate shadow-recall
+  from enforced-catch. Not needed for v1.
+
+Strategic: the **llm-judge / semantic** approach is well-aimed at the measured Tier-1 misses
+(paraphrase, language-switch, translate, no-keyword reframing — exactly what keyword/regex
+can't reach). Shadow-first is the right sequence: measure → tune τ on Core's score
+diagnostics + EV-AE7's evading-variant seed → then enforce.
+
+### 7.5 Async shadow record type — new `AUDIT_RECORD_TYPE_ASYNC_GOVERNANCE` (Option 1), not `decision.made` + magic rule_id
+The Tier-2 shadow detection is ASYNC: the original `decision.made` already ALLOWed and is
+immutable/hash-chained, so the detection lands as a *separate, later* WAL record. How to
+type it:
+
+**Option 1 — a new `AUDIT_RECORD_TYPE_ASYNC_GOVERNANCE` enum value** (a small additive
+ir-spec evolution of the A/B pattern). ✅ Recommended over Option 2 (reuse `decision.made`
++ a distinguishable `rule_id="inj.tier2.shadow"`, correlate by request_id+rule_id). Reasons:
+- **The ir-spec change is tiny + safe** — an additive enum value (Charter §3: additive,
+  never reuse numbers). "Zero-ir-spec" buys almost nothing here.
+- **Not throwaway** — shadow → enforcement builds on the *same* async record, so typing it
+  now avoids a later migration (Option 2 → typed would be one).
+- **Self-describing audit** — Core (and any reader) keys on `record_type`, not a magic
+  `rule_id` string convention. Overloading `decision.made` to mean "primary decision OR
+  async shadow detection" muddies the audit semantics.
+- **Clean A/B-pattern evolution** — `decision.made` + `response.observed` → + `async.governance`.
+
+**Core-side note (either option):** the shadow `hint_emitted` (§7.4) lives in the *async*
+record, not the original `decision.made`. So when the shadow tier lands, Core's catch logic
+**OR-reduces the catch signal across all records for a `request_id`** — today `_read_evidence`
+returns the *first* match (`decision.made`) and would miss the async hint. A small Core
+harness change ships with the shadow tier; Option 1's typed record makes that read cleanest
+(key on `record_type`).

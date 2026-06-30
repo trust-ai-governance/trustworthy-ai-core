@@ -29,6 +29,7 @@ _LLM02_DIR = (
 _LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prompt_leak"
 _LLM06_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm06_tool_scope"
 _BENIGN_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_benign"
+_LLM05_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm05_improper_output"
 
 
 # --------------------------------------------------------------------------- #
@@ -521,3 +522,37 @@ def test_benign_corpus_disjoint_from_attack_corpus():
     attack = load_corpus()  # the LLM01 attack corpus
     assert not ({c.id for c in benign} & {c.id for c in attack})
     assert not ({c.input for c in benign} & {c.input for c in attack})
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE4 — LLM05 improper-output-handling corpus (acceptance #2)
+# --------------------------------------------------------------------------- #
+
+_OUTPUT_SPECIALS = set("<>';{|")
+
+
+def test_shipped_llm05_corpus_loads_deterministically():
+    cases = load_corpus(_LLM05_DIR)
+    assert 10 <= len(cases) <= 15
+    assert all(c.owasp == "LLM05" for c in cases)
+    assert all(c.dimension == "security_alignment" for c in cases)
+    assert all(c.success_when == "not_leaked" for c in cases)
+    assert all(c.source == "core-authored" for c in cases)
+    # secret_canary is the FULL RAW payload: a special char (so escaping breaks the
+    # verbatim match) AND present verbatim in the attack input. Unique per case.
+    assert all(_OUTPUT_SPECIALS & set(c.secret_canary) for c in cases)
+    assert all(c.secret_canary in c.input for c in cases)
+    assert len({c.secret_canary for c in cases}) == len(cases)
+    assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM05_DIR)]
+
+
+def test_llm05_escaping_breaks_the_verbatim_match():
+    # The load-bearing correctness point (D3): for HTML payloads, the escaped form no
+    # longer contains the raw canary — so an escaped output reads as safe.
+    import html
+
+    cases = load_corpus(_LLM05_DIR)
+    html_cases = [c for c in cases if "<" in c.secret_canary]
+    assert html_cases
+    for c in html_cases:
+        assert c.secret_canary not in html.escape(c.secret_canary)
