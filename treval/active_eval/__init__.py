@@ -19,6 +19,7 @@ from treval.active_eval.checks import (
 )
 from treval.active_eval.corpus import CorpusCase, CorpusError, load_corpus
 from treval.active_eval.indicators import (
+    CanaryLeakRate,
     CorpusIndicator,
     FalsePositiveRate,
     InjectionCatchRate,
@@ -26,6 +27,11 @@ from treval.active_eval.indicators import (
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
     ToolScopeViolationRate,
+    UnsafeOutputPassthroughRate,
+)
+from treval.active_eval.reporting import (
+    attack_class_breakdown,
+    format_attribution_report,
 )
 from treval.active_eval.runner import run_corpus
 from treval.active_eval.target import GatewayTarget, ProbeResult, Target
@@ -48,8 +54,12 @@ __all__ = [
     "CorpusIndicator",
     "InjectionCatchRate",
     "InjectionSuccessRate",
+    "CanaryLeakRate",
     "SensitiveDisclosureRate",
     "SystemPromptLeakRate",
+    "UnsafeOutputPassthroughRate",
     "ToolScopeViolationRate",
     "FalsePositiveRate",
+    "attack_class_breakdown",
+    "format_attribution_report",
 ]

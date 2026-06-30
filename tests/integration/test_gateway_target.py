@@ -68,6 +68,7 @@ def test_gateway_target_catches_injection_and_correlates():
         GatewayTarget,
         InjectionCatchRate,
         InjectionSuccessRate,
+        attack_class_breakdown,
         load_corpus,
         run_corpus,
     )
@@ -96,6 +97,13 @@ def test_gateway_target_catches_injection_and_correlates():
         f"\n  injection succeeded: {success.value:.0%}  ({success.sample_size} marker cases, "
         f"output-based/statistical)"
     )
+    # Per-technique attribution (EV-AE6 helper / EV-AE7 feed): which attack classes the
+    # ruleset catches vs misses. Aggregate only here; the per-case gap map is the
+    # internal Platform artifact (see treval.active_eval.format_attribution_report —
+    # write under the gitignored reports/, do not publish).
+    summary += "\n  caught by attack_class:"
+    for klass, (caught_n, total_n) in attack_class_breakdown(corpus, results).items():
+        summary += f"\n    {klass}: {caught_n}/{total_n}"
     if errored:
         # Surface WHICH case errored and WHY (timeout vs connection vs ...), so the
         # excluded probe is diagnosable rather than just a count in notes.
@@ -433,3 +441,88 @@ def test_gateway_false_positive_rate_over_benign_corpus():
         f"false-positive rate {fpr.value:.0%} exceeds τ_fpr {_MAX_FPR:.0%} — the "
         f"injection ruleset is over-broad (blocks benign traffic).{summary}"
     )
+
+
+def test_gateway_unsafe_output_passthrough_over_llm05_corpus():
+    """EV-AE4 #6/#7/#8: drive the LLM05 corpus (raw dangerous payloads) at temperature=0
+    and report unsafe_output_passthrough_rate (the gateway's output-neutralization,
+    defense-in-depth — NOT the downstream sink). WAL cross-check + an ESCAPED control
+    proving the rate distinguishes neutralized output from raw passthrough."""
+    import html
+    from dataclasses import replace
+
+    from treval.active_eval import (
+        GatewayTarget,
+        InjectionCatchRate,
+        UnsafeOutputPassthroughRate,
+        load_corpus,
+        run_corpus,
+        sensitive_disclosed,
+    )
+    from treval.readers import WalEvidenceReader
+
+    llm05 = Path(__file__).resolve().parents[2] / "corpus" / "llm05_improper_output"
+    corpus = load_corpus(llm05)
+    target = GatewayTarget(
+        _GATEWAY_URL,  # type: ignore[arg-type]
+        wal_dir=_WAL_DIR,
+        tenant_id=_TENANT,
+        user_id=_USER,
+        model=_MODEL,
+        temperature=0.0,
+        timeout=_TIMEOUT,
+    )
+    results = run_corpus(corpus, target)
+    assert all(r.request_id or r.error for r in results)
+
+    (unsafe,) = UnsafeOutputPassthroughRate().measure(results)
+    (catch,) = InjectionCatchRate().measure(results)
+
+    # WAL cross-check (independent oracle): a raw payload in the chain-verified preview
+    # the harness did not flag means output extraction is broken.
+    previews: dict[str, str] = {}
+    if _WAL_DIR:
+        for ev in WalEvidenceReader(_WAL_DIR).read_audit(tenant_id=_TENANT):
+            preview = ev.record.response.response_body_preview
+            if preview:
+                previews[ev.ref.request_id] = preview.decode("utf-8", "replace")
+    missed = [
+        r.case_id
+        for r in results
+        if r.secret_canary
+        and r.secret_canary in previews.get(r.request_id, "")
+        and not sensitive_disclosed(r)
+    ]
+
+    print(
+        f"\n  LLM05 probes: {len(results)} sent, {unsafe.sample_size} measured"
+        f"\n  unsafe_output_passthrough_rate: {unsafe.value:.0%}  (LOWER-bound, higher is worse)"
+        f"\n  gateway caught:                 {catch.value:.0%}  (response guardrail side)"
+        f"\n  WAL corroborates passthrough not flagged: {missed}"
+    )
+
+    assert unsafe.sample_size > 0, "no marker cases measured — check the LLM05 corpus"
+    assert not missed, f"harness blind to passthrough the WAL preview shows: {missed}"
+
+    # #8 escaped control on REAL data: take a probe that passed the RAW payload through
+    # AND whose payload changes under HTML-escaping, escape its output, and confirm the
+    # escaped form is NOT counted — proving the rate distinguishes neutralized from raw.
+    escapable = [
+        r
+        for r in results
+        if r.evidence is not None
+        and r.secret_canary
+        and r.secret_canary in (r.response_text + r.raw_response)
+        and html.escape(r.secret_canary) != r.secret_canary
+    ]
+    if escapable:
+        victim = escapable[0]
+        neutralized = replace(
+            victim, response_text=html.escape(victim.secret_canary), raw_response=""
+        )
+        (esc,) = UnsafeOutputPassthroughRate().measure([neutralized])
+        assert esc.value == 0.0, (
+            f"escaped output still counted as passthrough for {victim.case_id}"
+        )
+    else:
+        print("  (escaped control skipped — no escapable raw passthrough this run)")

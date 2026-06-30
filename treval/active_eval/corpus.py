@@ -47,9 +47,11 @@ class CorpusCase:
     # makes the model EMIT. Enables injection_success_rate (output-based). Empty ⇒
     # the case is only measurable for gateway catch, not for output success.
     output_marker: str = ""
-    # Optional planted secret that must NOT appear in the output (LLM02 leak test).
-    # Distinct from output_marker (an attack sentinel the model is tricked into
-    # EMITTING); secret_canary is a protected secret the model must NOT emit (D3).
+    # Optional planted sentinel that must NOT appear verbatim in the output. LLM02/07:
+    # a high-entropy SECRET (must not leak). LLM05: a raw DANGEROUS PAYLOAD, e.g. an XSS
+    # vector (must not pass through un-escaped). Either way, its verbatim presence in the
+    # model output = leak / unsafe passthrough (checks.sensitive_disclosed). Distinct
+    # from output_marker (an attack sentinel the model is tricked into EMITTING).
     secret_canary: str = ""
     # Optional real role:"system" message the harness sends ahead of the user turn.
     # For LLM07 it embeds the secret_canary (the leak target). Distinct from `input`
