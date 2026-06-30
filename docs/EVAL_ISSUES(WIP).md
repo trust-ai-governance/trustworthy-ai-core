@@ -113,9 +113,11 @@ D2 复用 `secret_canary`（仅改 docstring，不改名不破坏）。未来若
 `token_usage` 预算**形，类 LLM06，非 canary 泄露形）。Corpus 适配器（Promptfoo/Garak 摄取）为后续。
 
 **检测器质量轨（Platform P2-a 注入规则触发，cross-repo）**——见 `PLATFORM_ASK_INJECTION_DETECTION.md` §7：
-- **EV-AE6（双向验收：召回 + 误报，优先，与 P2-a 同步）**：现在只测召回（`catch>=0.8`），过宽规则
-  （"凡含 ignore 即拦"）会通过。新增 benign 语料（**含硬负例**：trigger 词的正当用法）+ `allowed` token +
-  `false_positive_rate` 指标，集成测试**两侧都断言**（召回 ≥τ_recall 且 FPR ≤τ_fpr）。现在就建，P2-a 落地即验证。
+- **EV-AE6（双向验收：召回 + 误报）— 已合并**：benign 语料（20 例，含硬负例）+ `allowed` token +
+  `false_positive_rate` 指标（确定性），集成测试两侧都断言（召回 ≥τ_recall 且 FPR ≤τ_fpr，已确认
+  τ_recall≥0.80/τ_fpr≤0.05）。**实测验证 P2-a Tier-1：召回 4%→43%（39% 纯注入），FPR 0%——精确不过宽。**
+  附带 `attack_class_breakdown`/`format_attribution_report` 助手（每类技术捕获率，EV-AE7 喂料）；
+  **逐例 caught/missed 报告是部署网关的实时绕过图，内部交 Platform，gitignore `reports/`，不入公共库。**
 - **EV-AE7（对抗变体生成器，Tier-1 落地后）**：对基础语料做**确定性轻扰动**（大小写/空白/标点/同形字）量规则
   鲁棒性 + 产出绕过变体作 Tier-2 `injection_score` 种子数据集（回交 Platform）。
 
