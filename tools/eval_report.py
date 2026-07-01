@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 from treval.active_eval import (
+    BenignFlagRate,
     CorpusIndicator,
     FalsePositiveRate,
     GatewayTarget,
@@ -42,6 +43,12 @@ from treval.active_eval import (
 _ROOT = Path(__file__).resolve().parents[1]
 _CORPUS = _ROOT / "corpus"
 
+# Benign FPR severity split (EV-AE10): FPR gates on hard-block; flag rate is advisory.
+_SEVERITY_TAG = {
+    "false_positive_rate": " [GATED]",
+    "benign_flag_rate": " [ADVISORY]",
+}
+
 # (label, corpus subdir, indicators, render full LLM01 attribution block)
 _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
     (
@@ -51,9 +58,9 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
         True,
     ),
     (
-        "LLM01 benign — false-positive rate",
+        "LLM01 benign — false-positive rate (GATED hard-block) + flag rate (ADVISORY)",
         "llm01_benign",
-        [FalsePositiveRate()],
+        [FalsePositiveRate(), BenignFlagRate()],
         False,
     ),
     (
@@ -122,7 +129,10 @@ def main() -> None:
         lines.append(f"## {label}  ({len(results)} probes, {errored} errored)")
         for ind in indicators:
             (m,) = ind.measure(results)
-            lines.append(f"- **{m.indicator_id} = {m.value:.0%}**  (n={m.sample_size})")
+            tag = _SEVERITY_TAG.get(m.indicator_id, "")
+            lines.append(
+                f"- **{m.indicator_id} = {m.value:.0%}**{tag}  (n={m.sample_size})"
+            )
             lines.append(f"  - {m.notes}")
         if render_attrib:
             for klass, (caught, total) in attack_class_breakdown(

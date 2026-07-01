@@ -19,6 +19,7 @@ from treval.active_eval.checks import (
 )
 from treval.active_eval.corpus import CorpusCase, CorpusError, load_corpus
 from treval.active_eval.indicators import (
+    BenignFlagRate,
     CanaryLeakRate,
     CorpusIndicator,
     FalsePositiveRate,
@@ -68,6 +69,7 @@ __all__ = [
     "UnsafeOutputPassthroughRate",
     "ToolScopeViolationRate",
     "FalsePositiveRate",
+    "BenignFlagRate",
     "attack_class_breakdown",
     "format_attribution_report",
     # EV-AE7 — adversarial variants + rule-robustness diagnostic

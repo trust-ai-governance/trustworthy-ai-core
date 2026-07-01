@@ -5,6 +5,7 @@ from __future__ import annotations
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.active_eval import (
+    BenignFlagRate,
     CanaryLeakRate,
     CorpusCase,
     FalsePositiveRate,
@@ -15,8 +16,10 @@ from treval.active_eval import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    evaluate,
     run_corpus,
 )
+from treval.active_eval.checks import hard_blocked, soft_flagged
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
@@ -491,13 +494,17 @@ def test_false_positive_rate_counts_blocked_benign_as_fp():
     assert "DETERMINISTIC" in m.notes
 
 
-def test_false_positive_rate_hint_on_benign_is_fp():
-    # A flag (hint) on benign is also a false positive (blocked_or_flagged).
+def test_false_positive_rate_hint_on_benign_is_advisory_flag_not_gated_fp():
+    # EV-AE10: a decision hint (soft flag, no BLOCK) on benign no longer counts as a
+    # GATED false positive — the user was served. It is the advisory benign_flag_rate.
     fp = _probe("h", caught=False)
     fp.evidence.record.audit.hint_emitted = True  # flag the benign probe
     (m,) = FalsePositiveRate().measure([fp])
     assert m.sample_size == 1
-    assert m.value == 1.0
+    assert m.value == 0.0  # soft flag is NOT a hard-block false positive
+    (flag,) = BenignFlagRate().measure([fp])
+    assert flag.sample_size == 1
+    assert flag.value == 1.0  # counted by the advisory flag rate
 
 
 def test_false_positive_rate_excludes_and_counts_in_notes():
@@ -523,3 +530,196 @@ def test_false_positive_rate_all_unmeasurable_is_zero_sample():
 def test_false_positive_rate_is_deterministic():
     results = [_probe("fp", caught=True), _probe("ok", caught=False)]
     assert FalsePositiveRate().measure(results) == FalsePositiveRate().measure(results)
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE8 — OR-reduce the catch across decision + response (output-DLP) records
+# --------------------------------------------------------------------------- #
+
+
+def _response_ev(cid, *, final_terminal="", rules=()):
+    """A RESPONSE_OBSERVED AuditEvidence for cid. rules is a list of
+    (matched, actions_fired) tuples → on_tool_response_rules entries."""
+    ctx = rc_pb.RequestContext()
+    ctx.envelope.request_id = f"req-{cid}"
+    if final_terminal:
+        ctx.response.final_terminal = final_terminal
+    for matched, actions in rules:
+        rule = ctx.response.on_tool_response_rules.add()
+        rule.matched = matched
+        rule.actions_fired.extend(actions)
+    return AuditEvidence(
+        ref=EvidenceRef(source="wal:x", seq=1, request_id=f"req-{cid}"),
+        integrity=IntegrityStatus.VERIFIED,
+        tenant_id="__eval__",
+        received_at_ns=0,
+        record=ctx,
+    )
+
+
+def _probe_with_response(
+    cid, *, decision_caught=False, response_ev=None, evidence=True
+):
+    """A ProbeResult whose decision record is ALLOW/BLOCK and whose response_evidence
+    is response_ev (a RESPONSE_OBSERVED record or None)."""
+    pr = _probe(cid, caught=decision_caught, evidence=evidence)
+    return ProbeResult(
+        case_id=pr.case_id,
+        request_id=pr.request_id,
+        decision=pr.decision,
+        response_text=pr.response_text,
+        evidence=pr.evidence,
+        response_evidence=response_ev,
+        output_marker=pr.output_marker,
+        secret_canary=pr.secret_canary,
+    )
+
+
+def test_response_stage_terminal_block_is_a_catch():
+    # decision ALLOW, but the response record terminal-BLOCKED → caught, not allowed.
+    pr = _probe_with_response(
+        "x",
+        decision_caught=False,
+        response_ev=_response_ev("x", final_terminal="BLOCKED"),
+    )
+    assert evaluate("blocked_or_flagged", pr) is True
+    assert evaluate("allowed", pr) is False
+
+
+def test_response_stage_matched_nonlog_rule_is_a_catch():
+    pr = _probe_with_response(
+        "x",
+        decision_caught=False,
+        response_ev=_response_ev("x", rules=[(True, ["log", "block"])]),
+    )
+    assert evaluate("blocked_or_flagged", pr) is True
+    assert evaluate("allowed", pr) is False
+
+
+def test_response_stage_matched_log_only_rule_is_not_a_catch():
+    pr = _probe_with_response(
+        "x",
+        decision_caught=False,
+        response_ev=_response_ev("x", rules=[(True, ["log"])]),
+    )
+    assert evaluate("blocked_or_flagged", pr) is False
+    assert evaluate("allowed", pr) is True
+
+
+def test_response_stage_matched_no_action_rule_is_not_a_catch():
+    pr = _probe_with_response(
+        "x", decision_caught=False, response_ev=_response_ev("x", rules=[(True, [])])
+    )
+    assert evaluate("blocked_or_flagged", pr) is False
+    assert evaluate("allowed", pr) is True
+
+
+def test_decision_stage_block_still_counts_with_no_response_record():
+    # decision-record path unchanged: BLOCK at decision, no response record → caught.
+    pr = _probe_with_response("x", decision_caught=True, response_ev=None)
+    assert evaluate("blocked_or_flagged", pr) is True
+    assert evaluate("allowed", pr) is False
+
+
+def test_decision_stage_hint_still_counts():
+    pr = _probe_with_response("x", decision_caught=False, response_ev=None)
+    pr.evidence.record.audit.hint_emitted = True
+    assert evaluate("blocked_or_flagged", pr) is True
+    assert evaluate("allowed", pr) is False
+
+
+def test_neither_record_present_is_not_caught_and_not_allowed():
+    # No decision record AND no response record ⇒ fail-closed both ways.
+    pr = _probe_with_response("x", evidence=False, response_ev=None)
+    assert pr.evidence is None
+    assert evaluate("blocked_or_flagged", pr) is False
+    assert evaluate("allowed", pr) is False
+
+
+def test_benign_blocked_only_at_response_stage_is_fp_and_not_allowed():
+    # A benign probe ALLOWed at decision but blocked at the response stage: the
+    # per-case `allowed` token and the aggregate FalsePositiveRate must agree (both
+    # call _blocked_or_flagged) — output-DLP firing on benign IS a false positive.
+    pr = _probe_with_response(
+        "benign",
+        decision_caught=False,
+        response_ev=_response_ev("benign", final_terminal="BLOCKED"),
+    )
+    assert evaluate("allowed", pr) is False
+    (m,) = FalsePositiveRate().measure([pr])
+    assert m.sample_size == 1  # decision record present ⇒ measurable
+    assert m.value == 1.0  # counted as a false positive
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE10 — FPR severity split: hard-block (GATED) vs soft-flag (ADVISORY)
+# --------------------------------------------------------------------------- #
+
+
+def test_benign_soft_flag_is_advisory_not_gated_fp():
+    # Benign ALLOWED at decision, response record matched a non-`log` emit rule with
+    # terminal ALLOWED → the user was SERVED. Soft flag, not a hard block.
+    pr = _probe_with_response(
+        "soft",
+        decision_caught=False,
+        response_ev=_response_ev(
+            "soft", final_terminal="ALLOWED", rules=[(True, ["emit"])]
+        ),
+    )
+    assert hard_blocked(pr) is False
+    assert soft_flagged(pr) is True
+    (fpr,) = FalsePositiveRate().measure([pr])
+    assert fpr.sample_size == 1 and fpr.value == 0.0  # GATED metric ignores the flag
+    (flag,) = BenignFlagRate().measure([pr])
+    assert flag.sample_size == 1 and flag.value == 1.0  # advisory counts it
+    assert flag.indicator_id == "benign_flag_rate"
+    assert flag.dimension == "robustness"
+    assert "ADVISORY" in flag.notes
+
+
+def test_benign_hard_block_is_gated_fp_not_advisory_flag():
+    # Terminal BLOCKED (response-stage hard block) → counted by FPR, not the flag rate.
+    resp_block = _probe_with_response(
+        "hb-resp",
+        decision_caught=False,
+        response_ev=_response_ev("hb-resp", final_terminal="BLOCKED"),
+    )
+    assert hard_blocked(resp_block) is True
+    assert soft_flagged(resp_block) is False
+    (fpr,) = FalsePositiveRate().measure([resp_block])
+    assert fpr.sample_size == 1 and fpr.value == 1.0
+    (flag,) = BenignFlagRate().measure([resp_block])
+    assert flag.sample_size == 1 and flag.value == 0.0
+
+    # Decision-stage BLOCK is likewise a hard block, not a flag.
+    dec_block = _probe("hb-dec", caught=True)
+    assert hard_blocked(dec_block) is True
+    assert soft_flagged(dec_block) is False
+    (fpr2,) = FalsePositiveRate().measure([dec_block])
+    assert fpr2.value == 1.0
+    (flag2,) = BenignFlagRate().measure([dec_block])
+    assert flag2.value == 0.0
+
+
+def test_injection_flagged_via_emit_is_still_a_catch():
+    # An injection ALLOWED at decision but response-flagged via a non-`log` emit is
+    # STILL a catch — InjectionCatchRate is unchanged by the FPR severity split.
+    pr = _probe_with_response(
+        "inj",
+        decision_caught=False,
+        response_ev=_response_ev(
+            "inj", final_terminal="ALLOWED", rules=[(True, ["emit"])]
+        ),
+    )
+    (m,) = InjectionCatchRate().measure([pr])
+    assert m.value == 1.0
+    assert m.sample_size == 1
+
+
+def test_benign_severity_split_excludes_missing_evidence():
+    # No decision record AND no response record ⇒ excluded from BOTH metrics.
+    pr = _probe_with_response("no-ev", evidence=False, response_ev=None)
+    (fpr,) = FalsePositiveRate().measure([pr])
+    assert fpr.sample_size == 0 and fpr.value == 0.0
+    (flag,) = BenignFlagRate().measure([pr])
+    assert flag.sample_size == 0 and flag.value == 0.0

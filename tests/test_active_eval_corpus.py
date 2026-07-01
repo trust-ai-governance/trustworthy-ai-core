@@ -265,10 +265,64 @@ def test_shipped_llm02_corpus_loads_deterministically():
     assert all(c.success_when == "not_leaked" for c in cases)
     assert all(c.source == "core-authored" for c in cases)
     # every case carries a unique, high-entropy canary planted in its own input
-    assert all(c.secret_canary and len(c.secret_canary) >= 32 for c in cases)
+    # (production secret shapes are shorter than the old bare sentinel: AKIA total = 20)
+    assert all(c.secret_canary and len(c.secret_canary) >= 20 for c in cases)
     assert len({c.secret_canary for c in cases}) == len(cases)
     assert all(c.secret_canary in c.input for c in cases)
     assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM02_DIR)]
+
+
+def test_shipped_llm02_canaries_match_production_patterns():
+    # The EV-AE9 coupling, made self-checking: each LLM02 canary is shaped like a
+    # real secret so the *production* `secret-block-response` rule (ruleset
+    # `&p_secret`) catches a verbatim leak — turning the eval-canary seam-demo into a
+    # per-format coverage map. This test pins the canaries to the production patterns.
+    #
+    # source: Platform Architect / P2-dlp `&p_secret` ruleset — reviewed-not-yet-committed;
+    # update in lockstep if Platform forwards a pattern delta (EV-AE9 §1.1).
+    import re
+
+    OPENAI = r"\bsk-[A-Za-z0-9]{20,}\b"
+    AWS = r"\bAKIA[0-9A-Z]{16}\b"
+    BEARER = r"(?i:bearer)\s+[A-Za-z0-9._\-]{20,}"
+    KV = r"(?i:\b(?:api[_-]?key|secret|token|password)\b)\s*[:=]\s*[A-Za-z0-9._\-]{16,}"
+    PROD = [OPENAI, AWS, BEARER, KV]
+    EVAL = r"\bCANARY-[A-Za-z0-9]{16,}\b"
+
+    cases = load_corpus(_LLM02_DIR)
+    baseline = [c for c in cases if c.secret_canary.startswith("CANARY-")]
+    production = [c for c in cases if not c.secret_canary.startswith("CANARY-")]
+
+    # the seam-vs-production split: exactly 2 bare baseline cases (the eval-only rule)
+    assert len(baseline) == 2
+
+    # every production canary matches at least one `&p_secret` branch
+    for c in production:
+        assert any(re.search(p, c.secret_canary) for p in PROD), c.secret_canary
+
+    # every baseline canary matches the eval rule AND none of `&p_secret` (proves the
+    # bare sentinel is exactly what production does NOT cover — the gap when the
+    # eval-only `dlp-canary-response` rule retires)
+    for c in baseline:
+        assert re.search(EVAL, c.secret_canary), c.secret_canary
+        assert not any(re.search(p, c.secret_canary) for p in PROD), c.secret_canary
+
+    # coverage: all 4 production branches + all 4 kv keywords are represented
+    hit: set[str] = set()
+    kv_keywords = ("api_key", "secret", "token", "password")
+    for c in production:
+        if re.search(OPENAI, c.secret_canary):
+            hit.add("sk")
+        if re.search(AWS, c.secret_canary):
+            hit.add("AKIA")
+        if re.search(BEARER, c.secret_canary):
+            hit.add("bearer")
+        if re.search(KV, c.secret_canary):
+            for kw in kv_keywords:
+                # the keyword is the literal prefix of the kv canary (api_key=…, secret: …)
+                if c.secret_canary.startswith(kw):
+                    hit.add(f"kv:{kw}")
+    assert hit == {"sk", "AKIA", "bearer"} | {f"kv:{kw}" for kw in kv_keywords}
 
 
 def test_not_leaked_requires_secret_canary(tmp_path):
