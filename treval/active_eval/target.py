@@ -27,7 +27,8 @@ from treval.readers import WalEvidenceReader
 # request emits a DECISION_MADE record (the authorization/decision stage) and, when
 # governance observes the response, a RESPONSE_OBSERVED record (output-DLP etc.).
 _RECORD_TYPE = rc_pb.RequestContext.DESCRIPTOR.fields_by_name["record_type"].enum_type
-assert _RECORD_TYPE is not None  # record_type is an enum field — descriptor always set
+if _RECORD_TYPE is None:  # record_type is an enum field — descriptor always set
+    raise RuntimeError("record_type field descriptor has no enum_type")
 _DECISION_MADE = _RECORD_TYPE.values_by_name["AUDIT_RECORD_TYPE_DECISION_MADE"].number
 _RESPONSE_OBSERVED = _RECORD_TYPE.values_by_name[
     "AUDIT_RECORD_TYPE_RESPONSE_OBSERVED"
