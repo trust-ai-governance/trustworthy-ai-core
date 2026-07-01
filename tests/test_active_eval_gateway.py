@@ -295,6 +295,11 @@ def test_probe_tolerates_non_json_body(monkeypatch):
 def test_probe_attaches_wal_evidence_by_request_id(monkeypatch):
     ctx = rc_pb.RequestContext()
     ctx.envelope.request_id = "req-7"
+    ctx.record_type = (
+        rc_pb.RequestContext.DESCRIPTOR.fields_by_name["record_type"]
+        .enum_type.values_by_name["AUDIT_RECORD_TYPE_DECISION_MADE"]
+        .number
+    )
     ev = AuditEvidence(
         ref=EvidenceRef(source="wal:x", seq=3, request_id="req-7"),
         integrity=IntegrityStatus.VERIFIED,
@@ -316,5 +321,6 @@ def test_probe_attaches_wal_evidence_by_request_id(monkeypatch):
     target = GatewayTarget("http://gw", wal_dir="/tmp/wal")
     pr = target.probe(_case())
     assert pr.evidence is ev
-    # a request_id with no matching record yields None, not an error
-    assert target._read_evidence("absent") is None
+    assert pr.response_evidence is None  # no RESPONSE_OBSERVED record present
+    # a request_id with no matching record yields (None, None), not an error
+    assert target._read_evidence("absent") == (None, None)

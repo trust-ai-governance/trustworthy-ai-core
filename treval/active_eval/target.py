@@ -17,9 +17,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from trustworthy_ai.v1 import request_context_pb2 as rc_pb
+
 from treval.active_eval.corpus import CorpusCase
 from treval.models import AuditEvidence
 from treval.readers import WalEvidenceReader
+
+# Record-type enum numbers, resolved from the descriptor (no hard-coded ints). A
+# request emits a DECISION_MADE record (the authorization/decision stage) and, when
+# governance observes the response, a RESPONSE_OBSERVED record (output-DLP etc.).
+_RECORD_TYPE = rc_pb.RequestContext.DESCRIPTOR.fields_by_name["record_type"].enum_type
+if _RECORD_TYPE is None:  # record_type is an enum field — descriptor always set
+    raise RuntimeError("record_type field descriptor has no enum_type")
+_DECISION_MADE = _RECORD_TYPE.values_by_name["AUDIT_RECORD_TYPE_DECISION_MADE"].number
+_RESPONSE_OBSERVED = _RECORD_TYPE.values_by_name[
+    "AUDIT_RECORD_TYPE_RESPONSE_OBSERVED"
+].number
 
 
 @dataclass(frozen=True)
@@ -29,6 +42,10 @@ class ProbeResult:
     decision: str  # "ALLOW" | "BLOCK"
     response_text: str  # full output captured at probe time (for output checks)
     evidence: AuditEvidence | None  # WAL record by request_id (E1); None if absent
+    response_evidence: AuditEvidence | None = (
+        None  # RESPONSE_OBSERVED record by request_id (response-stage governance,
+        # e.g. output-DLP); None if absent
+    )
     error: str | None = None  # transport failure — recorded, never silently dropped
     raw_response: str = ""  # full HTTP response body (every byte returned to the
     # caller — answer content + reasoning_content + …); the broad surface for
@@ -162,11 +179,10 @@ class GatewayTarget:
         )
         decision = str(body.get("decision", ""))
         response_text = _extract_text(body)
-        evidence = (
-            self._read_evidence(request_id)
-            if (self._wal_dir is not None and request_id)
-            else None
-        )
+        if self._wal_dir is not None and request_id:
+            evidence, response_evidence = self._read_evidence(request_id)
+        else:
+            evidence, response_evidence = None, None
         return ProbeResult(
             case_id=case.id,
             request_id=request_id,
@@ -174,16 +190,31 @@ class GatewayTarget:
             response_text=response_text,
             raw_response=raw_response,
             evidence=evidence,
+            response_evidence=response_evidence,
         )
 
-    def _read_evidence(self, request_id: str) -> AuditEvidence | None:
-        # Scan the eval-tenant WAL for the record with this request_id. O(n) per
-        # probe is fine for the operator-run integration (not perf-critical).
+    def _read_evidence(
+        self, request_id: str
+    ) -> tuple[AuditEvidence | None, AuditEvidence | None]:
+        # ONE scan over the eval-tenant WAL, returning both the DECISION_MADE record
+        # (-> ProbeResult.evidence) and the RESPONSE_OBSERVED record (->
+        # response_evidence) for this request_id — so we never scan the WAL twice per
+        # probe. First record of each type wins; stop early once both are found. O(n)
+        # per probe is fine for the operator-run integration (not perf-critical).
         wal_dir = self._wal_dir
         if wal_dir is None:
-            return None
+            return None, None
+        decision_ev: AuditEvidence | None = None
+        response_ev: AuditEvidence | None = None
         reader = WalEvidenceReader(wal_dir)
         for ev in reader.read_audit(tenant_id=self._tenant_id):
-            if ev.ref.request_id == request_id:
-                return ev
-        return None
+            if ev.ref.request_id != request_id:
+                continue
+            rt = ev.record.record_type
+            if rt == _DECISION_MADE and decision_ev is None:
+                decision_ev = ev
+            elif rt == _RESPONSE_OBSERVED and response_ev is None:
+                response_ev = ev
+            if decision_ev is not None and response_ev is not None:
+                break
+        return decision_ev, response_ev
