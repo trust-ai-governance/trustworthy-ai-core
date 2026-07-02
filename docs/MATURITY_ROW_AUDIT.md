@@ -241,18 +241,27 @@ scope engine #5a landing.)
 >   per-case caught/missed map is a live bypass map for the deployed gateway — kept
 >   INTERNAL to Platform, not published here; via `format_attribution_report` under the
 >   gitignored `reports/`.)*
-> - **Sensitive-disclosure = 100% (14/14)** (`sensitive_disclosure_rate`, LLM02): the
->   model disclosed an in-context planted secret **on every extraction attempt**, and
->   gateway output-DLP catch = **0%** (`pii-block-response` matched nothing). 7/14 leaks
->   were independently corroborated in the chain-verified WAL response preview.
-> - **System-prompt-leak = 79% (11/14)** (`system_prompt_leak_rate`, LLM07; verbatim-
->   substring LOWER bound, temperature=0): the model dumped its **system prompt** —
->   including its own "never reveal this directive" instruction — on 11 of 14 extraction
->   attacks; gateway catch = **0%**. The system-prompt self-defense instruction gave
->   *partial* protection (~3/14 resisted) but there is **no governance backstop**. The
->   harness's **WAL cross-check found 0 missed leaks** and the **negative control**
->   (same attacks with no system message) measured **0%** — so the 79% is real, not a
->   capture artifact.
+> - **Sensitive-disclosure: ~100% baseline → 0% after P2-dlp** (`sensitive_disclosure_rate`,
+>   LLM02). Baseline: the model disclosed the planted secret on ~every attempt, gateway
+>   output-DLP = **0%** (no response-leg rule saw the output). **After P2-dlp (the
+>   `response.body.*` var-provider) merged + a response rule:** `dlp-canary-response`
+>   fires at the **response stage** and BLOCKs the leak on **13/14** cases
+>   (`final_terminal=BLOCKED`) → disclosure **0%, deterministically** (the canary never
+>   reaches the caller; verified per-case in the WAL `on_tool_response_rules`). **The
+>   output-DLP SEAM is proven end-to-end.** **Both original caveats are now CLOSED by Core
+>   follow-ups (2026-07-01):** (a) **EV-AE9** reshaped the LLM02 canaries to **production
+>   secret formats** (`sk-`/`AKIA`/`bearer`/`api_key=`/`secret:`/`token=`/`password=` + a
+>   bare-`CANARY` baseline pair), so `sensitive_disclosure_rate` now measures **production
+>   `secret-block-response` coverage per-format**, not just the eval sentinel (a self-checking
+>   corpus test pins each canary→branch); (b) **EV-AE8** **OR-reduced** the catch signal across
+>   the decision **and** response records, so the catch metric now credits the response-stage
+>   block — LLM02 gateway-catch reads **~100%** (was flat 7%), matching the 13/14 response-stage
+>   blocks. (Both merged; the eval-only `dlp-canary-response` can retire behind the bare-CANARY
+>   baseline, which shows the exact seam-vs-production gap.)
+> - **System-prompt-leak: ~79% baseline → 0% after P2-dlp** (`system_prompt_leak_rate`,
+>   LLM07): same mechanism — `dlp-canary-response` blocks the leaked system-prompt canary
+>   at the response stage (**9/14** fired; the rest didn't leak) → **0%**. (The pre-P2-dlp
+>   79% was real, not an artifact — WAL cross-check 0 missed + negative control 0%.)
 > - **Tool-scope-violation = 0% (0/12)** (`tool_scope_violation_rate`, LLM06;
 >   DETERMINISTIC, WAL-authz, bit-reproducible): every out-of-scope tool invocation
 >   (admin/shell/filesystem/db/http-SSRF/email/secrets/payments/user-mgmt/code-exec/
@@ -260,6 +269,24 @@ scope engine #5a landing.)
 >   `final_decision=BLOCK`, `deny_reason="no matching scope"`, all 12 records
 >   chain-verified (`integrity=VERIFIED`). **The access-control layer measurably
 >   WORKS** — this satisfies `sec.l3.oauth_scope` by *efficacy* (Q-R1), not presence.
+> - **False-positive rate — the eval caught a real governance regression (EV-AE8/AE10 →
+>   P2-dlp.1), 2026-07-01.** FPR was **0%** pre-P2-out. When Platform shipped response-side
+>   output rules (P2-out) and **EV-AE8** made the response stage *visible* to the catch metric,
+>   the benign FPR jumped to a **blended 30%** — a regression the decision-only metric had been
+>   structurally blind to. Core decomposed it (internal `reports/fpr_benign_attribution.md`):
+>   **request-phase (Tier-1) = 0% (clean)**; the entire rise was **response-side**, and mostly
+>   **soft flags** (`llm05-unsafe-output-flag` `emit`, user still served) — only **1 hard block**
+>   (`pii-block-response` on a benign SQL-tutorial answer). **EV-AE10** then split the metric by
+>   severity (ratified policy: gate on **hard-block FPR**, treat soft flags as an **advisory**):
+>   FPR(hard) = **5%**, `benign_flag_rate` = **25%** (advisory). Core attributed the single hard
+>   block to a **pii_detect over-match** — intermittent (~10% of runs, model-nondeterministic),
+>   confirmed via the gateway's new **match_types** attribution as **`email`** (the model's sqlite3
+>   example occasionally emits a sample `@example.com`), **not** a bare number. That drove
+>   **P2-dlp.1** (response-side PII → structured-only + RFC-2606 reserved-domain exclusion + a Luhn
+>   CC pattern + names-only match_types), after which Platform reports **`eval_report` pass**
+>   (hard-block FPR back within the τ=0.05 gate). **This is measured>attested in its purest form:
+>   the eval SURFACED a governance regression attestation would never show, attributed it to a
+>   specific rule and match-type, and drove a scoped fix — without ever seeing the PII.**
 >
 > **Governance lesson, now in data (REVISED 2026-06-29):** the picture is now
 > **three-tier.** (1) **Access control works** — the gateway denied **100%** of
@@ -267,11 +294,18 @@ scope engine #5a landing.)
 > **Injection input-governance is now PARTIAL and climbing** — P2-a Tier-1 took
 > injection-catch from ≈0 to **57%** (61% incl. the incidental PII catch) with **0% false positives** (precise, not
 > over-broad); the named **16 misses** (obfuscation, no-keyword reframing, data-channel
-> poisoning) are the Tier-2 roadmap. (3) **Output-side content-governance is still
-> absent** — secret disclosure **100%** (LLM02) and system-prompt leak **79%** (LLM07)
-> with **0%** output-DLP, unchanged. The Tier-1 delta (**0 → 57% measured**, the lexical-Tier-1 ceiling) is the
-> measured-over-attested thesis paying off, and the **two-sided EV-AE6 gate** (recall up
-> AND FPR = 0) is what proves it a *real, precise* gain, not a block-everything illusion.
+> poisoning) are the Tier-2 roadmap. (3) **Output-side content-governance is now PARTIAL** —
+> the P2-dlp response-DLP seam blocks secret/system-prompt leaks deterministically
+> (LLM02 ~100%→**0%**, LLM07 ~79%→**0%**, via a response-stage rule; seam proven — and the
+> eval-sentinel caveat is now **CLOSED** by EV-AE9's production-format canaries + EV-AE8's
+> OR-reduced catch, §3), but output **sanitization** is only **PARTIAL** (LLM05
+> unsafe-output-passthrough **100% → 58%** after P2-dlp neutralization shipped: some
+> XSS/SQLi still pass un-escaped — a distinct capability from secret-DLP). The Tier-1 delta
+> (**0 → 57% measured**, the lexical-Tier-1 ceiling) is the measured-over-attested thesis
+> paying off, and the **two-sided EV-AE6 gate** — now **severity-aware** (EV-AE10: gate on
+> hard-block FPR, soft flags advisory) after it **caught and drove the fix of** the P2-out
+> response-side FP regression (30% blended → 5% hard → ~0 post-P2-dlp.1) — is what proves the
+> gain *real and precise*, not a block-everything illusion.
 > An earlier version of this row claimed
 > "the model resisted all 8" (success 0%) — that was a **harness measurement bug, not
 > reality**: `GatewayTarget` read the model reply from the wrong response field, so
