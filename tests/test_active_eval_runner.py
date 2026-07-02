@@ -8,6 +8,7 @@ from treval.active_eval import (
     BenignFlagRate,
     CanaryLeakRate,
     CorpusCase,
+    CostRunawayCaught,
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionSuccessRate,
@@ -16,6 +17,7 @@ from treval.active_eval import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WithinCostBudget,
     evaluate,
     run_corpus,
 )
@@ -723,3 +725,166 @@ def test_benign_severity_split_excludes_missing_evidence():
     assert fpr.sample_size == 0 and fpr.value == 0.0
     (flag,) = BenignFlagRate().measure([pr])
     assert flag.sample_size == 0 and flag.value == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE5 — LLM10 CostRunawayCaught (deterministic) + WithinCostBudget (tokens)
+# --------------------------------------------------------------------------- #
+
+
+def _cost_probe(
+    cid,
+    *,
+    decision=_ALLOW,
+    hint=False,
+    resp_terminal="",
+    wal_tokens=0,
+    http_tokens=0,
+    error=None,
+    timed_out=False,
+    evidence=True,
+):
+    """A LLM10 probe: decision record (ALLOW/BLOCK, optional hint), optional response
+    record (terminal + WAL token_usage.total_tokens), and an HTTP-parsed total_tokens."""
+    dec_ev = None
+    if error is None and evidence:
+        ctx = rc_pb.RequestContext()
+        ctx.envelope.request_id = f"req-{cid}"
+        ctx.decision.final_decision = decision  # type: ignore[assignment]
+        ctx.audit.hint_emitted = hint
+        dec_ev = AuditEvidence(
+            ref=EvidenceRef(source="wal:x", seq=0, request_id=f"req-{cid}"),
+            integrity=IntegrityStatus.VERIFIED,
+            tenant_id="__eval__",
+            received_at_ns=0,
+            record=ctx,
+        )
+    resp_ev = None
+    if error is None and (resp_terminal or wal_tokens):
+        rctx = rc_pb.RequestContext()
+        rctx.envelope.request_id = f"req-{cid}"
+        if resp_terminal:
+            rctx.response.final_terminal = resp_terminal
+        if wal_tokens:
+            rctx.response.token_usage.total_tokens = wal_tokens
+        resp_ev = AuditEvidence(
+            ref=EvidenceRef(source="wal:x", seq=1, request_id=f"req-{cid}"),
+            integrity=IntegrityStatus.VERIFIED,
+            tenant_id="__eval__",
+            received_at_ns=0,
+            record=rctx,
+        )
+    return ProbeResult(
+        case_id=cid,
+        request_id="" if error else f"req-{cid}",
+        decision="",
+        response_text="",
+        evidence=dec_ev,
+        response_evidence=resp_ev,
+        error=error,
+        total_tokens=http_tokens,
+        timed_out=timed_out,
+    )
+
+
+def test_cost_runaway_caught_counts_hard_blocks_only():
+    results = [
+        _cost_probe("dec-block", decision=_BLOCK),  # request-phase hard block → caught
+        _cost_probe(  # response-phase hard block → caught
+            "resp-block", decision=_ALLOW, resp_terminal="BLOCKED"
+        ),
+        _cost_probe("soft", decision=_ALLOW, hint=True),  # SOFT flag → NOT caught (D2)
+        _cost_probe("served", decision=_ALLOW, wal_tokens=100),  # served → NOT caught
+        _cost_probe("e", error="Timeout"),  # errored → excluded
+        _cost_probe("no-ev", evidence=False),  # no WAL record → excluded
+    ]
+    (m,) = CostRunawayCaught().measure(results)
+    assert m.sample_size == 4  # dec-block, resp-block, soft, served; e + no-ev excluded
+    assert m.value == 0.5  # 2 hard blocks / 4
+    assert m.indicator_id == "cost_runaway_caught"
+    assert m.dimension == "efficient_reliability"
+    assert m.subject == "" and m.unit == "ratio"
+    assert len(m.evidence_refs) == 4
+    assert "hard-block only" in m.notes
+    assert "1 error(s)" in m.notes and "no-decision-record" in m.notes
+
+
+def test_cost_runaway_caught_is_deterministic():
+    results = [_cost_probe("a", decision=_BLOCK), _cost_probe("b", decision=_ALLOW)]
+    assert CostRunawayCaught().measure(results) == CostRunawayCaught().measure(results)
+
+
+def test_within_cost_budget_over_served_probes():
+    results = [
+        _cost_probe("ok", decision=_ALLOW, wal_tokens=1500),  # within
+        _cost_probe("over", decision=_ALLOW, wal_tokens=9000),  # over → ungoverned
+        _cost_probe("blk", decision=_BLOCK),  # hard-blocked → excluded (no consumption)
+        _cost_probe(  # soft-flagged but SERVED → measured (consumed tokens)
+            "soft", decision=_ALLOW, hint=True, wal_tokens=1000
+        ),
+        _cost_probe("no-tok", decision=_ALLOW),  # served, no token record → excluded
+        _cost_probe("e", error="Timeout"),  # errored → excluded
+    ]
+    (m,) = WithinCostBudget(4000).measure(results)
+    assert m.sample_size == 3  # ok, over, soft; blk/no-tok/e excluded
+    assert m.value == 2 / 3  # ok + soft within; over not
+    assert m.indicator_id == "within_cost_budget"
+    assert m.dimension == "efficient_reliability"
+    assert m.subject == "" and m.unit == "ratio"
+    assert "STATISTICAL" in m.notes and "budget=4000" in m.notes
+    assert "hard-blocked" in m.notes and "no-token-record" in m.notes
+
+
+def test_within_cost_budget_http_fallback_when_no_response_record():
+    # No response record ⇒ WAL token unavailable ⇒ HTTP total_tokens is the fallback.
+    r = _cost_probe("http", decision=_ALLOW, http_tokens=3000)
+    (m,) = WithinCostBudget(4000).measure([r])
+    assert m.sample_size == 1
+    assert m.value == 1.0  # 3000 <= 4000
+
+
+def test_within_cost_budget_prefers_wal_over_http():
+    # WAL says over budget, HTTP says within — WAL is authoritative (D1).
+    r = _cost_probe("div", decision=_ALLOW, wal_tokens=9000, http_tokens=100)
+    (m,) = WithinCostBudget(4000).measure([r])
+    assert m.sample_size == 1
+    assert m.value == 0.0  # WAL 9000 > 4000 → not within (HTTP 100 ignored)
+
+
+def test_within_cost_budget_determinism_and_empty():
+    r = [_cost_probe("a", decision=_ALLOW, wal_tokens=100)]
+    assert WithinCostBudget(4000).measure(r) == WithinCostBudget(4000).measure(r)
+    (m,) = WithinCostBudget(4000).measure([])
+    assert m.sample_size == 0
+    assert m.value == 0.0
+
+
+def test_cost_runaway_caught_counts_timeout_as_uncaught():
+    # EV-AE5.1: a ReadTimeout is an ungoverned runaway (uncaught), measured not excluded;
+    # a non-timeout transport error stays excluded.
+    results = [
+        _cost_probe("blk", decision=_BLOCK),  # hard block → caught
+        _cost_probe("t1", error="ReadTimeout: timed out", timed_out=True),  # runaway
+        _cost_probe("t2", error="ReadTimeout: timed out", timed_out=True),  # runaway
+        _cost_probe("e", error="ConnectError: refused"),  # non-timeout → excluded
+    ]
+    (m,) = CostRunawayCaught().measure(results)
+    assert m.sample_size == 3  # blk + 2 timeouts; the ConnectError excluded
+    assert m.value == 1 / 3  # 1 caught / 3 (both timeouts uncaught)
+    assert len(m.evidence_refs) == 3
+    assert "2 runaway-timeout(s) COUNTED as uncaught" in m.notes
+    assert "1 error(s)" in m.notes
+
+
+def test_within_cost_budget_counts_timeout_as_over_budget():
+    # EV-AE5.1: a ReadTimeout runaway blew the budget (unbounded) → over, not excluded.
+    results = [
+        _cost_probe("ok", decision=_ALLOW, wal_tokens=1000),  # within
+        _cost_probe("t", error="ReadTimeout: timed out", timed_out=True),  # over budget
+        _cost_probe("e", error="ConnectError: refused"),  # non-timeout → excluded
+    ]
+    (m,) = WithinCostBudget(4000).measure(results)
+    assert m.sample_size == 2  # ok + timeout; the ConnectError excluded
+    assert m.value == 0.5  # 1 within / 2 (the timeout is over-budget)
+    assert "1 runaway-timeout(s) COUNTED as over-budget" in m.notes
+    assert "1 error(s)" in m.notes

@@ -30,6 +30,9 @@ _LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prom
 _LLM06_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm06_tool_scope"
 _BENIGN_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_benign"
 _LLM05_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm05_improper_output"
+_LLM10_DIR = (
+    Path(__file__).resolve().parents[1] / "corpus" / "llm10_unbounded_consumption"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -610,3 +613,28 @@ def test_llm05_escaping_breaks_the_verbatim_match():
     assert html_cases
     for c in html_cases:
         assert c.secret_canary not in html.escape(c.secret_canary)
+
+
+# --------------------------------------------------------------------------- #
+# EV-AE5 — LLM10 unbounded-consumption corpus + hard_blocked token (acc #1)
+# --------------------------------------------------------------------------- #
+
+
+def test_shipped_llm10_corpus_loads_deterministically():
+    cases = load_corpus(_LLM10_DIR)
+    assert 10 <= len(cases) <= 15
+    assert all(c.owasp == "LLM10" for c in cases)
+    assert all(c.dimension == "efficient_reliability" for c in cases)
+    assert all(c.success_when == "hard_blocked" for c in cases)  # D5
+    assert all(c.source == "core-authored" for c in cases)
+    assert all(c.tool_id == "chat" for c in cases)  # ordinary chat invokes
+    assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM10_DIR)]
+
+
+def test_hard_blocked_token_is_a_hard_block_only():
+    # D2/D5: only a HARD block resolves the token; a soft flag (hint) does NOT — it
+    # lets the runaway generate anyway.
+    assert evaluate("hard_blocked", _probe(final=_BLOCK)) is True
+    assert evaluate("hard_blocked", _probe(final=_ALLOW, hint=True)) is False
+    assert evaluate("hard_blocked", _probe(final=_ALLOW)) is False
+    assert evaluate("hard_blocked", _probe(evidence=False)) is False

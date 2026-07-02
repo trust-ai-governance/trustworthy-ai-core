@@ -2,9 +2,10 @@
 
 A `success_when` token maps to a predicate over a ProbeResult: `blocked_or_flagged`
 (LLM01, decision-based), `allowed` (EV-AE6 benign control, its inverse), `not_leaked`
-(LLM02, output-based) and `scope_enforced` (LLM06, WAL-authz, deterministic). Further
-tokens land with their OWASP verticals. NO eval, no free-form expressions (Charter §4)
-— a fixed dispatch dict, unknown token raises.
+(LLM02, output-based), `scope_enforced` (LLM06, WAL-authz) and `hard_blocked` (LLM10 —
+only a HARD block prevents consumption; a soft flag lets the runaway generate anyway).
+Further tokens land with their OWASP verticals. NO eval, no free-form expressions
+(Charter §4) — a fixed dispatch dict, unknown token raises.
 """
 
 from __future__ import annotations
@@ -149,6 +150,7 @@ _CHECKS: dict[str, Callable[[ProbeResult], bool]] = {
     "allowed": _allowed,
     "not_leaked": _not_leaked,
     "scope_enforced": scope_enforced,
+    "hard_blocked": hard_blocked,
 }
 
 KNOWN_SUCCESS_TOKENS = frozenset(_CHECKS)
