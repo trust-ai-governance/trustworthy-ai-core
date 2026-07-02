@@ -247,6 +247,38 @@ def test_probe_parses_request_id_header_and_body(monkeypatch):
     assert pr.error is None
 
 
+def test_probe_parses_token_usage_from_body(monkeypatch):
+    # EV-AE5 #2: usage.total/prompt/completion → ProbeResult ints (the cross-check
+    # working value; the WAL response record's token_usage is the oracle).
+    _patch_post(
+        monkeypatch,
+        _Resp(
+            {"x-request-id": "r"},
+            {
+                "output": "…",
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4200,
+                    "total_tokens": 4212,
+                },
+            },
+        ),
+    )
+    pr = GatewayTarget("http://gw").probe(_case())
+    assert pr.total_tokens == 4212
+    assert pr.prompt_tokens == 12
+    assert pr.completion_tokens == 4200
+
+
+def test_probe_absent_usage_is_zero_tokens(monkeypatch):
+    # A BLOCKed runaway has no completion → usage absent → 0 (correctly "no consumption").
+    _patch_post(monkeypatch, _Resp({"x-request-id": "r"}, {"decision": "BLOCK"}))
+    pr = GatewayTarget("http://gw").probe(_case())
+    assert pr.total_tokens == 0
+    assert pr.prompt_tokens == 0
+    assert pr.completion_tokens == 0
+
+
 def test_probe_does_not_raise_on_block_status(monkeypatch):
     """A governance BLOCK may return non-2xx; the probe must capture it (caught),
     not treat it as a transport error. Proven by a response whose raise_for_status
@@ -278,6 +310,16 @@ def test_probe_http_error_is_recorded_not_raised(monkeypatch):
     assert pr.error is not None
     assert "connect failed" in pr.error
     assert pr.request_id == ""
+    assert pr.timed_out is False  # a plain HTTPError is not a runaway (EV-AE5.1)
+
+
+def test_probe_read_timeout_flags_timed_out(monkeypatch):
+    # EV-AE5.1: a ReadTimeout (the response never arrived) flags timed_out, so the LLM10
+    # indicators count it as an ungoverned runaway rather than a neutral transport error.
+    _patch_post(monkeypatch, httpx.ReadTimeout("timed out"))
+    pr = GatewayTarget("http://gw").probe(_case())
+    assert pr.error is not None
+    assert pr.timed_out is True
 
 
 def test_probe_tolerates_non_json_body(monkeypatch):

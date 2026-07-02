@@ -56,12 +56,34 @@ class ProbeResult:
     secret_canary: str = (
         ""  # the case's planted secret (attached by run_corpus, for leak checks)
     )
+    # HTTP-parsed token usage (EV-AE5, LLM10). This is the CROSS-CHECK working value;
+    # the chain-verified WAL response record's token_usage is the AUTHORITATIVE oracle
+    # (D1/D3). 0 when absent — e.g. a BLOCKed runaway has no completion (no consumption).
+    total_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    # EV-AE5.1: a ReadTimeout — the connection succeeded but the RESPONSE never arrived
+    # in time. On an LLM10 runaway this means the model streamed past the timeout with no
+    # gateway cap = an ungoverned runaway that blew the measurement window (NOT a neutral
+    # transport error). The LLM10 indicators count it as uncaught / over-budget rather
+    # than excluding it. Only ReadTimeout (response-side); connect/pool timeouts are infra.
+    timed_out: bool = False
 
 
 class Target(Protocol):
     target_id: str
 
     def probe(self, case: CorpusCase) -> ProbeResult: ...
+
+
+def _coerce_int(value: object) -> int:
+    """A defensive non-negative int from an OpenAI `usage` field. Absent / non-numeric
+    (a BLOCKed runaway has no usage) → 0. bool is excluded (it is an int subclass)."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
 
 
 def _extract_text(body: dict[str, object]) -> str:
@@ -162,6 +184,7 @@ class GatewayTarget:
                 response_text="",
                 evidence=None,
                 error=f"{type(e).__name__}: {e}",
+                timed_out=isinstance(e, httpx.ReadTimeout),
             )
 
         body = {}
@@ -179,6 +202,8 @@ class GatewayTarget:
         )
         decision = str(body.get("decision", ""))
         response_text = _extract_text(body)
+        usage = body.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
         if self._wal_dir is not None and request_id:
             evidence, response_evidence = self._read_evidence(request_id)
         else:
@@ -191,6 +216,9 @@ class GatewayTarget:
             raw_response=raw_response,
             evidence=evidence,
             response_evidence=response_evidence,
+            total_tokens=_coerce_int(usage.get("total_tokens")),
+            prompt_tokens=_coerce_int(usage.get("prompt_tokens")),
+            completion_tokens=_coerce_int(usage.get("completion_tokens")),
         )
 
     def _read_evidence(

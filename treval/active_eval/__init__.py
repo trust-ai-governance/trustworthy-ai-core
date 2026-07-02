@@ -22,6 +22,7 @@ from treval.active_eval.indicators import (
     BenignFlagRate,
     CanaryLeakRate,
     CorpusIndicator,
+    CostRunawayCaught,
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionSuccessRate,
@@ -29,6 +30,7 @@ from treval.active_eval.indicators import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WithinCostBudget,
 )
 from treval.active_eval.perturb import (
     PERTURBATIONS,
@@ -70,6 +72,8 @@ __all__ = [
     "ToolScopeViolationRate",
     "FalsePositiveRate",
     "BenignFlagRate",
+    "CostRunawayCaught",
+    "WithinCostBudget",
     "attack_class_breakdown",
     "format_attribution_report",
     # EV-AE7 — adversarial variants + rule-robustness diagnostic

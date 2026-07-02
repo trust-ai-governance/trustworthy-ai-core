@@ -12,6 +12,7 @@ and must NOT be committed to this (public) repo. This tool is generic measuremen
 Usage (same env as the integration test):
   TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080 TREVAL_EVAL_WAL_DIR=/home/olvan/wal \\
   TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=jack TREVAL_EVAL_TIMEOUT=120 \\
+  TREVAL_EVAL_TOKEN_BUDGET=4000 \\
     python tools/eval_report.py            # → reports/eval_report.md
   python tools/eval_report.py --out reports/run2.md
 """
@@ -26,6 +27,7 @@ from pathlib import Path
 from treval.active_eval import (
     BenignFlagRate,
     CorpusIndicator,
+    CostRunawayCaught,
     FalsePositiveRate,
     GatewayTarget,
     InjectionCatchRate,
@@ -34,6 +36,7 @@ from treval.active_eval import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WithinCostBudget,
     attack_class_breakdown,
     format_attribution_report,
     load_corpus,
@@ -42,6 +45,9 @@ from treval.active_eval import (
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CORPUS = _ROOT / "corpus"
+
+# LLM10 per-call token budget (EV-AE5 D2) — a POLICY threshold, configurable.
+_TOKEN_BUDGET = int(os.environ.get("TREVAL_EVAL_TOKEN_BUDGET", "4000"))
 
 # Benign FPR severity split (EV-AE10): FPR gates on hard-block; flag rate is advisory.
 _SEVERITY_TAG = {
@@ -85,6 +91,13 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
         "LLM07 system-prompt-leak (+ gateway catch)",
         "llm07_system_prompt_leak",
         [SystemPromptLeakRate(), InjectionCatchRate()],
+        False,
+    ),
+    # NOTE: LLM10 requests huge outputs — the slowest / most token-costly vertical.
+    (
+        "LLM10 unbounded-consumption — cost_runaway_caught (hard-block) + within_cost_budget",
+        "llm10_unbounded_consumption",
+        [CostRunawayCaught(), WithinCostBudget(_TOKEN_BUDGET)],
         False,
     ),
 ]
