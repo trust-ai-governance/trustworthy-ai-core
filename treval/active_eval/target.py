@@ -19,7 +19,7 @@ from typing import Protocol
 
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
-from treval.active_eval.corpus import CorpusCase
+from treval.active_eval.corpus import CorpusCase, WireMessage
 from treval.models import AuditEvidence
 from treval.readers import WalEvidenceReader
 
@@ -62,6 +62,12 @@ class ProbeResult:
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # EV-AE5.3 (reasoning-aware LLM10): reasoning_tokens is the model-inherent COST FLOOR
+    # (usage.completion_tokens_details.reasoning_tokens); the attacker-driven visible-output
+    # runaway is content = completion - reasoning. finish_reason detects a length-truncated
+    # empty answer (RC4 integrity — a clamped token count is NOT a valid governed response).
+    reasoning_tokens: int = 0
+    finish_reason: str = ""
     # EV-AE5.1: a ReadTimeout — the connection succeeded but the RESPONSE never arrived
     # in time. On an LLM10 runaway this means the model streamed past the timeout with no
     # gateway cap = an ungoverned runaway that blew the measurement window (NOT a neutral
@@ -86,6 +92,20 @@ def _coerce_int(value: object) -> int:
     return 0
 
 
+def _to_wire(messages: tuple[WireMessage, ...]) -> list[dict[str, object]]:
+    """Convert authored WireMessages to the OpenAI wire form sent verbatim as
+    params.messages (EV-AE11). A string content passes through; a content-part tuple
+    becomes a `[{type,text}]` list (nested reach)."""
+    wire: list[dict[str, object]] = []
+    for m in messages:
+        if isinstance(m.content, str):
+            content: object = m.content
+        else:
+            content = [{"type": p.type, "text": p.text} for p in m.content]
+        wire.append({"role": m.role, "content": content})
+    return wire
+
+
 def _extract_text(body: dict[str, object]) -> str:
     """The assistant reply *content* from the gateway's OpenAI-compatible completion
     (choices[0].message.content), falling back to flat output/response wrappers some
@@ -103,6 +123,17 @@ def _extract_text(body: dict[str, object]) -> str:
         value = body.get(key)
         if isinstance(value, str):
             return value
+    return ""
+
+
+def _finish_reason(body: dict[str, object]) -> str:
+    """choices[0].finish_reason (EV-AE5.3) — "length" flags a truncated (possibly empty)
+    completion, the RC4 integrity signal. Empty when not present."""
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        fr = choices[0].get("finish_reason")
+        if isinstance(fr, str):
+            return fr
     return ""
 
 
@@ -153,11 +184,17 @@ class GatewayTarget:
         # suffice (EV-AE3 D2 — confirmed live: params:{} reaches authz).
         params: dict[str, object]
         if case.tool_id == "chat":
-            messages: list[dict[str, str]] = []
-            if case.system_prompt:
-                messages.append({"role": "system", "content": case.system_prompt})
-            messages.append({"role": "user", "content": case.input})
-            params = {"model": self._model, "messages": messages}
+            if case.messages is not None:
+                # EV-AE11: send the authored wire array verbatim (author controls role /
+                # index / nesting). `messages` is authoritative — system_prompt/input are
+                # NOT prepended (the author places any system turn explicitly).
+                params = {"model": self._model, "messages": _to_wire(case.messages)}
+            else:
+                messages: list[dict[str, str]] = []
+                if case.system_prompt:
+                    messages.append({"role": "system", "content": case.system_prompt})
+                messages.append({"role": "user", "content": case.input})
+                params = {"model": self._model, "messages": messages}
             if self._temperature is not None:
                 params["temperature"] = self._temperature
         else:
@@ -204,6 +241,9 @@ class GatewayTarget:
         response_text = _extract_text(body)
         usage = body.get("usage")
         usage = usage if isinstance(usage, dict) else {}
+        # reasoning_tokens lives in usage.completion_tokens_details.reasoning_tokens (EV-AE5.3)
+        ctd = usage.get("completion_tokens_details")
+        ctd = ctd if isinstance(ctd, dict) else {}
         if self._wal_dir is not None and request_id:
             evidence, response_evidence = self._read_evidence(request_id)
         else:
@@ -219,6 +259,8 @@ class GatewayTarget:
             total_tokens=_coerce_int(usage.get("total_tokens")),
             prompt_tokens=_coerce_int(usage.get("prompt_tokens")),
             completion_tokens=_coerce_int(usage.get("completion_tokens")),
+            reasoning_tokens=_coerce_int(ctd.get("reasoning_tokens")),
+            finish_reason=_finish_reason(body),
         )
 
     def _read_evidence(

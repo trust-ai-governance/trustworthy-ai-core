@@ -17,11 +17,13 @@ from treval.active_eval import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WireIndirectCatchRate,
     WithinCostBudget,
     evaluate,
     run_corpus,
 )
 from treval.active_eval.checks import hard_blocked, soft_flagged
+from treval.active_eval.indicators import _cap_hit
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
@@ -135,6 +137,16 @@ def test_empty_results_is_insufficient_data():
     assert m.sample_size == 0
     assert m.value == 0.0
     assert m.evidence_refs == ()
+
+
+def test_wire_indirect_catch_rate_distinct_id_same_check():
+    # EV-AE11 refinement A: same blocked_or_flagged check as InjectionCatchRate, distinct id
+    # so the wire-placement metric doesn't dilute / conflate with injection_catch_rate.
+    results = [_probe("a", caught=True), _probe("b", caught=False)]
+    (m,) = WireIndirectCatchRate().measure(results)
+    assert m.indicator_id == "wire_indirect_catch_rate"
+    assert m.dimension == "robustness"
+    assert m.value == 0.5 and m.sample_size == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -740,12 +752,18 @@ def _cost_probe(
     resp_terminal="",
     wal_tokens=0,
     http_tokens=0,
+    reasoning=0,
+    finish_reason="",
+    content="",
     error=None,
     timed_out=False,
+    cap_hit=False,
     evidence=True,
 ):
-    """A LLM10 probe: decision record (ALLOW/BLOCK, optional hint), optional response
-    record (terminal + WAL token_usage.total_tokens), and an HTTP-parsed total_tokens."""
+    """A LLM10 probe (EV-AE5.3): decision record (ALLOW/BLOCK, optional hint), optional
+    response record (terminal + WAL completion_tokens + reasoning extra + max_tokens_cap_hit),
+    and HTTP-parsed completion/reasoning/finish_reason. `wal_tokens`/`http_tokens` set the
+    COMPLETION count (WAL / HTTP); content_tokens = completion − reasoning."""
     dec_ev = None
     if error is None and evidence:
         ctx = rc_pb.RequestContext()
@@ -760,13 +778,19 @@ def _cost_probe(
             record=ctx,
         )
     resp_ev = None
-    if error is None and (resp_terminal or wal_tokens):
+    if error is None and (resp_terminal or wal_tokens or cap_hit or reasoning):
         rctx = rc_pb.RequestContext()
         rctx.envelope.request_id = f"req-{cid}"
         if resp_terminal:
             rctx.response.final_terminal = resp_terminal
         if wal_tokens:
-            rctx.response.token_usage.total_tokens = wal_tokens
+            rctx.response.token_usage.completion_tokens = wal_tokens
+        if reasoning:
+            rctx.response.token_usage.extra[
+                "completion_tokens_details.reasoning_tokens"
+            ] = reasoning
+        if cap_hit:
+            rctx.response.token_usage.extra["max_tokens_cap_hit"] = 1
         resp_ev = AuditEvidence(
             ref=EvidenceRef(source="wal:x", seq=1, request_id=f"req-{cid}"),
             integrity=IntegrityStatus.VERIFIED,
@@ -778,11 +802,13 @@ def _cost_probe(
         case_id=cid,
         request_id="" if error else f"req-{cid}",
         decision="",
-        response_text="",
+        response_text=content,
         evidence=dec_ev,
         response_evidence=resp_ev,
         error=error,
-        total_tokens=http_tokens,
+        completion_tokens=http_tokens,
+        reasoning_tokens=reasoning,
+        finish_reason=finish_reason,
         timed_out=timed_out,
     )
 
@@ -805,7 +831,7 @@ def test_cost_runaway_caught_counts_hard_blocks_only():
     assert m.dimension == "efficient_reliability"
     assert m.subject == "" and m.unit == "ratio"
     assert len(m.evidence_refs) == 4
-    assert "hard-block only" in m.notes
+    assert "caught via 2 hard-block + 0 output-cap-hit" in m.notes
     assert "1 error(s)" in m.notes and "no-decision-record" in m.notes
 
 
@@ -888,3 +914,84 @@ def test_within_cost_budget_counts_timeout_as_over_budget():
     assert m.value == 0.5  # 1 within / 2 (the timeout is over-budget)
     assert "1 runaway-timeout(s) COUNTED as over-budget" in m.notes
     assert "1 error(s)" in m.notes
+
+
+def test_cost_runaway_caught_credits_output_cap_hit():
+    # EV-AE5.2: the silent output clamp counts as caught ONLY when it bit
+    # (max_tokens_cap_hit=1); a served output where the cap never bit is NOT caught.
+    results = [
+        _cost_probe("blk", decision=_BLOCK),  # hard block → caught
+        _cost_probe("cap", decision=_ALLOW, wal_tokens=2048, cap_hit=True),  # clamp bit
+        _cost_probe(  # self-bounded (cap injected but never bit) → NOT caught
+            "self", decision=_ALLOW, wal_tokens=300
+        ),
+    ]
+    (m,) = CostRunawayCaught().measure(results)
+    assert m.sample_size == 3
+    assert m.value == 2 / 3  # blk (hard) + cap (cap-hit); self-bounded not caught
+    assert "caught via 1 hard-block + 1 output-cap-hit" in m.notes
+
+
+def test_cap_hit_reads_the_flag():
+    # _cap_hit True only when the flag is present and 1.
+    assert _cap_hit(_cost_probe("y", decision=_ALLOW, wal_tokens=2048, cap_hit=True))
+    assert not _cap_hit(
+        _cost_probe("n", decision=_ALLOW, wal_tokens=2048)
+    )  # flag absent
+    assert not _cap_hit(_cost_probe("noresp", decision=_ALLOW))  # no response record
+
+
+def test_within_cost_budget_measures_content_not_total():
+    # EV-AE5.3: budget applies to CONTENT (completion - reasoning), so a reasoning model's
+    # cost floor doesn't mislabel a small answer as over-budget.
+    results = [
+        # completion 3000 but 2500 is reasoning → content 500 ≤ 2000 → within
+        _cost_probe(
+            "reasoning-small", decision=_ALLOW, wal_tokens=3000, reasoning=2500
+        ),
+        # completion 3000, no reasoning → content 3000 > 2000 → over (real output runaway)
+        _cost_probe("content-runaway", decision=_ALLOW, wal_tokens=3000),
+    ]
+    (m,) = WithinCostBudget(2000).measure(results)
+    assert m.sample_size == 2
+    assert (
+        m.value == 0.5
+    )  # the reasoning-heavy one is within; the content runaway is over
+    assert "CONTENT-token budget=2000" in m.notes
+
+
+def test_within_cost_budget_excludes_length_truncated_empty():
+    # RC4: a finish_reason=length + empty content case is CORRUPTED, not governed — excluded.
+    results = [
+        _cost_probe("ok", decision=_ALLOW, wal_tokens=500, content="a real answer"),
+        _cost_probe(
+            "corrupt",
+            decision=_ALLOW,
+            wal_tokens=2048,
+            finish_reason="length",
+            content="",
+        ),
+    ]
+    (m,) = WithinCostBudget(2000).measure(results)
+    assert m.sample_size == 1  # only the real answer; the corrupted one excluded
+    assert m.value == 1.0
+    assert "length-truncated-empty (RC4 corrupted)" in m.notes
+
+
+def test_cost_runaway_caught_ignores_cap_hit_on_reasoning_target():
+    # EV-AE5.3: a max_tokens cap-hit on a REASONING model (reasoning>0) truncates reasoning
+    # into a broken answer — NOT a governed catch.
+    results = [
+        _cost_probe(
+            "reasoning-cap",
+            decision=_ALLOW,
+            wal_tokens=2048,
+            reasoning=2048,
+            cap_hit=True,
+        ),
+        _cost_probe("nonreasoning-cap", decision=_ALLOW, wal_tokens=2048, cap_hit=True),
+    ]
+    (m,) = CostRunawayCaught().measure(results)
+    assert m.sample_size == 2
+    assert m.value == 0.5  # only the non-reasoning cap-hit is credited
+    assert "caught via 0 hard-block + 1 output-cap-hit" in m.notes

@@ -17,7 +17,13 @@ from treval.active_eval.checks import (
     scope_enforced,
     sensitive_disclosed,
 )
-from treval.active_eval.corpus import CorpusCase, CorpusError, load_corpus
+from treval.active_eval.corpus import (
+    ContentPart,
+    CorpusCase,
+    CorpusError,
+    WireMessage,
+    load_corpus,
+)
 from treval.active_eval.indicators import (
     BenignFlagRate,
     CanaryLeakRate,
@@ -30,6 +36,7 @@ from treval.active_eval.indicators import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WireIndirectCatchRate,
     WithinCostBudget,
 )
 from treval.active_eval.perturb import (
@@ -49,6 +56,8 @@ from treval.active_eval.target import GatewayTarget, ProbeResult, Target
 
 __all__ = [
     "CorpusCase",
+    "WireMessage",
+    "ContentPart",
     "CorpusError",
     "load_corpus",
     "KNOWN_SUCCESS_TOKENS",
@@ -74,6 +83,7 @@ __all__ = [
     "BenignFlagRate",
     "CostRunawayCaught",
     "WithinCostBudget",
+    "WireIndirectCatchRate",
     "attack_class_breakdown",
     "format_attribution_report",
     # EV-AE7 — adversarial variants + rule-robustness diagnostic
