@@ -17,20 +17,42 @@ import yaml
 from treval.active_eval.checks import KNOWN_SUCCESS_TOKENS
 
 _DEFAULT_DIR = Path(__file__).resolve().parents[2] / "corpus" / "llm01_prompt_injection"
+# `input` is handled separately (EV-AE11): a case supplies EITHER `input` (a single
+# user turn) OR `messages` (an explicit wire array), so it is not in the always-required
+# set below.
 _REQUIRED = (
     "id",
     "owasp",
     "dimension",
     "attack_class",
-    "input",
     "success_when",
     "severity",
     "source",
 )
+# Wire message roles the gateway forwards (EV-AE11 §3). Anything else → CorpusError.
+_WIRE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
 
 class CorpusError(Exception):
     """A corpus case is malformed (missing field / bad success_when / unparseable)."""
+
+
+@dataclass(frozen=True)
+class ContentPart:
+    """One OpenAI multimodal content part (EV-AE11 D7). Only text is supported —
+    the loader rejects any other `type` (the nested-reach channel P2-ind must detect)."""
+
+    type: str  # always "text"
+    text: str
+
+
+@dataclass(frozen=True)
+class WireMessage:
+    """One wire message the harness sends verbatim as params.messages[i] (EV-AE11).
+    content is a plain string or a tuple of text content-parts (nested reach)."""
+
+    role: str  # system | user | assistant | tool
+    content: str | tuple[ContentPart, ...]
 
 
 @dataclass(frozen=True)
@@ -61,6 +83,12 @@ class CorpusCase:
     # probe for the eval agent (granted tool:chat:*) — the LLM06 tool-scope test; for
     # those cases `input` is a human-readable attack description, not a chat message.
     tool_id: str = "chat"
+    # Optional explicit wire messages array (EV-AE11). When set, GatewayTarget sends it
+    # VERBATIM as params.messages (author controls role / index / nesting) and `input`
+    # is unused — this is how a payload is placed at its true wire location (tool-role,
+    # out-of-window, nested content-part, retrieved-context). None ⇒ the single-user
+    # `input` path (every pre-EV-AE11 case is untouched).
+    messages: tuple[WireMessage, ...] | None = None
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -80,6 +108,57 @@ def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
     if not cases:
         raise CorpusError(f"no corpus cases (*.yaml) in {base}")
     return tuple(cases)
+
+
+def _parse_content(yaml_path: Path, content: object) -> str | tuple[ContentPart, ...]:
+    """A wire message's content: a non-empty string OR a non-empty list of text parts
+    `[{type: text, text: <str>}]` (EV-AE11 D7). Anything else → CorpusError."""
+    if isinstance(content, str):
+        if not content:
+            raise CorpusError(f"{yaml_path}: message content string must be non-empty")
+        return content
+    if isinstance(content, list) and content:
+        parts: list[ContentPart] = []
+        for part in content:
+            if (
+                not isinstance(part, dict)
+                or part.get("type") != "text"
+                or not isinstance(part.get("text"), str)
+                or not part["text"]
+            ):
+                raise CorpusError(
+                    f"{yaml_path}: content parts must be "
+                    f"{{type: text, text: <non-empty str>}}, got {part!r}"
+                )
+            parts.append(ContentPart(type="text", text=part["text"]))
+        return tuple(parts)
+    raise CorpusError(
+        f"{yaml_path}: message content must be a non-empty string or a non-empty "
+        f"list of text parts, got {content!r}"
+    )
+
+
+def _parse_messages(yaml_path: Path, raw: object) -> tuple[WireMessage, ...]:
+    """Parse + validate a `messages:` array into WireMessages. Fail-closed: roles must
+    be in the whitelist and content must be text (EV-AE11 §3)."""
+    if not isinstance(raw, list) or not raw:
+        raise CorpusError(f"{yaml_path}: `messages`, if set, must be a non-empty list")
+    messages: list[WireMessage] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise CorpusError(f"{yaml_path}: each message must be a mapping")
+        role = entry.get("role")
+        if role not in _WIRE_ROLES:
+            raise CorpusError(
+                f"{yaml_path}: message role must be one of {sorted(_WIRE_ROLES)}, "
+                f"got {role!r}"
+            )
+        messages.append(
+            WireMessage(
+                role=role, content=_parse_content(yaml_path, entry.get("content"))
+            )
+        )
+    return tuple(messages)
 
 
 def _load_case(yaml_path: Path) -> CorpusCase:
@@ -102,6 +181,23 @@ def _load_case(yaml_path: Path) -> CorpusCase:
             f"known={sorted(KNOWN_SUCCESS_TOKENS)}"
         )
     fields = {field: doc[field] for field in _REQUIRED}
+
+    # `input` XOR `messages` (EV-AE11). A case supplies a single-user `input` OR an
+    # explicit wire array. Both set is an author error (fail-closed) — pick one.
+    raw_messages = doc.get("messages")
+    raw_input = doc.get("input")
+    if raw_messages is not None:
+        if isinstance(raw_input, str) and raw_input:
+            raise CorpusError(
+                f"{yaml_path}: set either `input` or `messages`, not both"
+            )
+        fields["messages"] = _parse_messages(yaml_path, raw_messages)
+        fields["input"] = ""  # unused when messages is authoritative
+    elif isinstance(raw_input, str) and raw_input:
+        fields["input"] = raw_input
+    else:
+        raise CorpusError(f"{yaml_path}: missing/invalid required string field 'input'")
+
     marker = doc.get("output_marker")  # optional
     if marker is not None:
         if not isinstance(marker, str) or not marker:
