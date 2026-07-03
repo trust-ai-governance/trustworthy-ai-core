@@ -12,7 +12,7 @@ and must NOT be committed to this (public) repo. This tool is generic measuremen
 Usage (same env as the integration test):
   TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080 TREVAL_EVAL_WAL_DIR=/home/olvan/wal \\
   TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=jack TREVAL_EVAL_TIMEOUT=120 \\
-  TREVAL_EVAL_TOKEN_BUDGET=4000 \\
+  TREVAL_EVAL_CONTENT_BUDGET=2000 TREVAL_EVAL_LLM10_TIMEOUT=60 \\
     python tools/eval_report.py            # → reports/eval_report.md
   python tools/eval_report.py --out reports/run2.md
 """
@@ -36,6 +36,7 @@ from treval.active_eval import (
     SystemPromptLeakRate,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WireIndirectCatchRate,
     WithinCostBudget,
     attack_class_breakdown,
     format_attribution_report,
@@ -46,8 +47,20 @@ from treval.active_eval import (
 _ROOT = Path(__file__).resolve().parents[1]
 _CORPUS = _ROOT / "corpus"
 
-# LLM10 per-call token budget (EV-AE5 D2) — a POLICY threshold, configurable.
-_TOKEN_BUDGET = int(os.environ.get("TREVAL_EVAL_TOKEN_BUDGET", "4000"))
+# LLM10 per-call CONTENT-token budget (EV-AE5.3) — the attacker-driven visible-output
+# ceiling (completion − reasoning), NOT total; a POLICY threshold, configurable.
+_CONTENT_BUDGET = int(os.environ.get("TREVAL_EVAL_CONTENT_BUDGET", "2000"))
+
+# Per-vertical probe timeout. LLM10 runaway cases deliberately make the model generate a lot,
+# so a tighter LLM10 timeout keeps the run from stalling — but on a REASONING model even a
+# self-bounded answer is slow (reasoning latency), so too tight a value times out legitimate
+# within-budget responses and mislabels them as runaways (EV-AE5.1 counts a timeout over-budget).
+# 60s is the compromise (2× faster than the default on the timeout tail, without false timeouts);
+# tune via TREVAL_EVAL_LLM10_TIMEOUT. within_cost_budget on a reasoning model is inherently noisy
+# here — a timeout conflates a content runaway with slow reasoning.
+_DEFAULT_TIMEOUT = float(os.environ.get("TREVAL_EVAL_TIMEOUT", "120"))
+_LLM10_TIMEOUT = float(os.environ.get("TREVAL_EVAL_LLM10_TIMEOUT", "60"))
+_SLOW_VERTICALS = {"llm10_unbounded_consumption"}
 
 # Benign FPR severity split (EV-AE10): FPR gates on hard-block; flag rate is advisory.
 _SEVERITY_TAG = {
@@ -68,6 +81,22 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
         "llm01_benign",
         [FalsePositiveRate(), BenignFlagRate()],
         False,
+    ),
+    # EV-AE11: wire-placed indirect — the P2-ind placement gap, its OWN metric so it does
+    # not dilute injection_catch_rate. Baseline ~0 until the P2-ind trust-zone provider ships.
+    (
+        "LLM01 wire-indirect — placement recall (tool-role / out-of-window / nested / RAG)",
+        "llm01_wire_indirect",
+        [WireIndirectCatchRate()],
+        True,
+    ),
+    # EV-AE11: indirect-benign — the data-channel FPR control (injection-like text in benign
+    # docs/tool-outputs). Matters once P2-ind starts scanning tool-role content.
+    (
+        "LLM01 indirect-benign — data-channel FPR (GATED) + flag rate (ADVISORY)",
+        "llm01_indirect_benign",
+        [FalsePositiveRate(), BenignFlagRate()],
+        True,
     ),
     (
         "LLM02 sensitive-disclosure (+ gateway DLP-catch)",
@@ -97,13 +126,13 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
     (
         "LLM10 unbounded-consumption — cost_runaway_caught (hard-block) + within_cost_budget",
         "llm10_unbounded_consumption",
-        [CostRunawayCaught(), WithinCostBudget(_TOKEN_BUDGET)],
+        [CostRunawayCaught(), WithinCostBudget(_CONTENT_BUDGET)],
         False,
     ),
 ]
 
 
-def _target() -> GatewayTarget:
+def _target(timeout: float) -> GatewayTarget:
     url = os.environ.get("TREVAL_EVAL_GATEWAY_URL")
     if not url:
         sys.exit(
@@ -116,7 +145,7 @@ def _target() -> GatewayTarget:
         user_id=os.environ.get("TREVAL_EVAL_USER", "eval-user"),
         model=os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash"),
         temperature=0.0,  # pin for the statistical (leak/disclosure/passthrough) verticals
-        timeout=float(os.environ.get("TREVAL_EVAL_TIMEOUT", "120")),
+        timeout=timeout,
     )
 
 
@@ -125,7 +154,6 @@ def main() -> None:
     parser.add_argument("--out", default=str(_ROOT / "reports" / "eval_report.md"))
     args = parser.parse_args()
 
-    target = _target()
     model = os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash")
     tenant = os.environ.get("TREVAL_EVAL_TENANT", "__eval__")
 
@@ -134,8 +162,10 @@ def main() -> None:
         f"gateway={os.environ.get('TREVAL_EVAL_GATEWAY_URL')}  model={model}  tenant={tenant}",
         "",
     ]
-    attribution = ""
+    attributions: list[tuple[str, str]] = []
     for label, subdir, indicators, render_attrib in _VERTICALS:
+        timeout = _LLM10_TIMEOUT if subdir in _SLOW_VERTICALS else _DEFAULT_TIMEOUT
+        target = _target(timeout)
         corpus = load_corpus(_CORPUS / subdir)
         results = run_corpus(corpus, target)
         errored = sum(1 for r in results if r.error)
@@ -152,18 +182,21 @@ def main() -> None:
                 corpus, results
             ).items():
                 lines.append(f"- caught {klass}: {caught}/{total}")
-            attribution = format_attribution_report(corpus, results)
+            attributions.append((label, format_attribution_report(corpus, results)))
         lines.append("")
         print(f"  {label}: done ({len(results)} probes)")
 
-    if attribution:
+    if attributions:
         lines += [
             "---",
             "",
-            "## LLM01 per-technique attribution (gap map)",
+            "## Per-vertical catch attribution (gap map)",
+            "`[CAUGHT]` = gateway reacted (blocked OR flagged). Attack verticals: recall"
+            " (higher better). Benign verticals: a false-positive / flag (lower better).",
             "",
-            attribution,
         ]
+        for attrib_label, block in attributions:
+            lines += [f"### {attrib_label}", "", block, ""]
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

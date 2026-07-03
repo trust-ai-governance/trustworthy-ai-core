@@ -287,6 +287,24 @@ scope engine #5a landing.)
 >   (hard-block FPR back within the τ=0.05 gate). **This is measured>attested in its purest form:
 >   the eval SURFACED a governance regression attestation would never show, attributed it to a
 >   specific rule and match-type, and drove a scoped fix — without ever seeing the PII.**
+> - **Unbounded-consumption (LLM10, `efficient_reliability`) — input bounding works; output
+>   prevention on a reasoning model is a HARD, largely-unsolved gap (2026-07-02).** The FIRST
+>   `efficient_reliability` vertical (`cost_runaway_caught` + `within_cost_budget`). **Input side
+>   WORKS:** the request-size / context ceiling hard-BLOCKS oversized inputs (2/12 — the huge-input
+>   cases). **Output side does not *prevent* runaways on a reasoning model** (the deployed
+>   `deepseek-v4-flash`): a `max_tokens` clamp caps reasoning+content together → truncates the
+>   *reasoning* into an **empty answer** (`finish_reason:length`), so it is correctly opt-in-OFF; the
+>   content-token control is *detective* (response-stage) and the genuine runaways **stream past the
+>   timeout and never reach it**; there is no streaming-abort. So output runaways escape → time out →
+>   ungoverned. `cost_runaway_caught` reads honestly **~17%** (input-blocks + timeouts-as-uncaught),
+>   **not** a governance win — output-token prevention via `max_tokens` is infeasible on a reasoning
+>   model without breaking function, and that is the *finding*, not a metric bug. **The measured>attested
+>   proof point:** an interim clamp read **75% "caught"** — but those were reasoning-truncations
+>   (broken/empty answers) miscounted as governance; the eval CAUGHT the lie (Core EV-AE5.3's RC4
+>   integrity guard + reasoning-aware content-token metric; both Platform and Core had missed it and
+>   both corrected it) and refused the fake win. **Honest state: LLM10 input-bounded; output
+>   detect-only — runaway *prevention* on reasoning models is known hard future work (streaming
+>   content-abort), not something more measurement moves.**
 >
 > **Governance lesson, now in data (REVISED 2026-06-29):** the picture is now
 > **three-tier.** (1) **Access control works** — the gateway denied **100%** of
