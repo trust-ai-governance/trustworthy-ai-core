@@ -21,7 +21,7 @@ from typing import Any
 
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
-from treval.active_eval.checks import evaluate
+from treval.active_eval.checks import caught_by_tier2, evaluate, injection_score
 from treval.active_eval.corpus import CorpusCase
 from treval.active_eval.target import ProbeResult
 
@@ -74,7 +74,21 @@ def _catching_rules(pr: ProbeResult) -> str:
         _FD.get(d.final_decision, "?")
         + (f" by {fired}" if fired else "")
         + (" +hint" if hint else "")
+        + _tier2_suffix(pr)
     )
+
+
+def _tier2_suffix(pr: ProbeResult) -> str:
+    """EV-AE12: the async Tier-2 shadow judge (record_type=3) — its hint (the catch signal)
+    and its raw injection_score (a DIAGNOSTIC fact for the τ-sweep, never a catch signal).
+    Empty when no async record landed."""
+    if pr.governance_evidence is None:
+        return ""
+    score = injection_score(pr)
+    score_txt = f"injection_score={score:.2f}" if score is not None else "no-score"
+    if caught_by_tier2(pr):
+        return f" +T2-hint({score_txt})"
+    return f" [T2 {score_txt}, τ-below]"
 
 
 def format_attribution_report(
