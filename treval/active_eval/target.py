@@ -13,7 +13,8 @@ httpx is imported lazily inside probe(), so importing this module — and
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -32,6 +33,13 @@ if _RECORD_TYPE is None:  # record_type is an enum field — descriptor always s
 _DECISION_MADE = _RECORD_TYPE.values_by_name["AUDIT_RECORD_TYPE_DECISION_MADE"].number
 _RESPONSE_OBSERVED = _RECORD_TYPE.values_by_name[
     "AUDIT_RECORD_TYPE_RESPONSE_OBSERVED"
+].number
+# The async governance record (AUDIT_RECORD_TYPE_GOVERNANCE_OBSERVED = 3): the Tier-2
+# shadow-judge observation, written ~2s AFTER the probe by the background evaluator — NOT
+# visible in the synchronous decision read. Resolved from the descriptor by name (no
+# hard-coded int), same as the two above.
+_GOVERNANCE_OBSERVED = _RECORD_TYPE.values_by_name[
+    "AUDIT_RECORD_TYPE_GOVERNANCE_OBSERVED"
 ].number
 
 
@@ -74,6 +82,11 @@ class ProbeResult:
     # transport error). The LLM10 indicators count it as uncaught / over-budget rather
     # than excluding it. Only ReadTimeout (response-side); connect/pool timeouts are infra.
     timed_out: bool = False
+    # EV-AE12: the ASYNC governance record (record_type=3) — the Tier-2 shadow-judge hint,
+    # written ~2s post-probe by the background evaluator (invisible to the synchronous decision
+    # read). Populated by GatewayTarget.drain_governance() after the run; None if it never
+    # landed (drain timeout) or no WAL. Read by caught_by_tier2 / the Tier-2 lift + flag lines.
+    governance_evidence: AuditEvidence | None = None
 
 
 class Target(Protocol):
@@ -288,3 +301,48 @@ class GatewayTarget:
             if decision_ev is not None and response_ev is not None:
                 break
         return decision_ev, response_ev
+
+    def drain_governance(
+        self,
+        results: list[ProbeResult],
+        *,
+        timeout: float = 20.0,
+        poll_interval: float = 2.0,
+    ) -> list[ProbeResult]:
+        """Attach each probe's ASYNC governance record (record_type=3 — the Tier-2 shadow
+        judge, written ~2s post-probe) as ProbeResult.governance_evidence (EV-AE12).
+
+        The Tier-2 hint is NOT in the synchronous decision read (_read_evidence runs right
+        after the probe; the background evaluator writes ~2s later), so a naive run never
+        sees it. Call this ONCE after the whole run: poll the eval-tenant WAL until the
+        record_type=3 records for these request_ids land (or `timeout`), join by request_id,
+        attach. Probes whose record never arrives keep governance_evidence=None (the Tier-2
+        indicators count that as `no-async`, never a silent zero-lift). No WAL ⇒ unchanged.
+
+        Operator-run (network + sleep), like probe() — NOT part of the pure engine."""
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return results
+        wanted = {r.request_id for r in results if r.request_id}
+        found: dict[str, AuditEvidence] = {}
+        deadline = time.monotonic() + timeout
+        while wanted - found.keys():
+            for ev in WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id):
+                rid = ev.ref.request_id
+                if (
+                    rid in wanted
+                    and rid not in found
+                    and ev.record.record_type == _GOVERNANCE_OBSERVED
+                ):
+                    found[rid] = ev
+            if not (wanted - found.keys()) or time.monotonic() >= deadline:
+                break
+            time.sleep(poll_interval)
+        if not found:
+            return results
+        return [
+            replace(r, governance_evidence=found[r.request_id])
+            if r.request_id in found
+            else r
+            for r in results
+        ]

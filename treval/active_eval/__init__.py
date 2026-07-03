@@ -11,7 +11,9 @@ from __future__ import annotations
 from treval.active_eval.checks import (
     KNOWN_SUCCESS_TOKENS,
     SuccessWhenError,
+    caught_by_tier2,
     evaluate,
+    injection_score,
     injection_succeeded,
     is_sensitive_disclosed,
     scope_enforced,
@@ -26,6 +28,7 @@ from treval.active_eval.corpus import (
 )
 from treval.active_eval.indicators import (
     BenignFlagRate,
+    BenignShadowFlagRate,
     CanaryLeakRate,
     CorpusIndicator,
     CostRunawayCaught,
@@ -34,6 +37,7 @@ from treval.active_eval.indicators import (
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
+    Tier2ShadowRecallLift,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
     WireIndirectCatchRate,
@@ -63,6 +67,8 @@ __all__ = [
     "KNOWN_SUCCESS_TOKENS",
     "SuccessWhenError",
     "evaluate",
+    "caught_by_tier2",
+    "injection_score",
     "injection_succeeded",
     "is_sensitive_disclosed",
     "sensitive_disclosed",
@@ -84,6 +90,9 @@ __all__ = [
     "CostRunawayCaught",
     "WithinCostBudget",
     "WireIndirectCatchRate",
+    # EV-AE12 — async Tier-2 shadow-judge recall lift + benign shadow-flag
+    "Tier2ShadowRecallLift",
+    "BenignShadowFlagRate",
     "attack_class_breakdown",
     "format_attribution_report",
     # EV-AE7 — adversarial variants + rule-robustness diagnostic

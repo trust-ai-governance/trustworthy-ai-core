@@ -13,6 +13,7 @@ Usage (same env as the integration test):
   TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080 TREVAL_EVAL_WAL_DIR=/home/olvan/wal \\
   TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=jack TREVAL_EVAL_TIMEOUT=120 \\
   TREVAL_EVAL_CONTENT_BUDGET=2000 TREVAL_EVAL_LLM10_TIMEOUT=60 \\
+  TREVAL_EVAL_GOVERNANCE_TIMEOUT=20 \\
     python tools/eval_report.py            # → reports/eval_report.md
   python tools/eval_report.py --out reports/run2.md
 """
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from treval.active_eval import (
     BenignFlagRate,
+    BenignShadowFlagRate,
     CorpusIndicator,
     CostRunawayCaught,
     FalsePositiveRate,
@@ -34,6 +36,7 @@ from treval.active_eval import (
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
+    Tier2ShadowRecallLift,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
     WireIndirectCatchRate,
@@ -62,6 +65,25 @@ _DEFAULT_TIMEOUT = float(os.environ.get("TREVAL_EVAL_TIMEOUT", "120"))
 _LLM10_TIMEOUT = float(os.environ.get("TREVAL_EVAL_LLM10_TIMEOUT", "60"))
 _SLOW_VERTICALS = {"llm10_unbounded_consumption"}
 
+# EV-AE12: the LLM01 verticals whose ProbeResults must be joined with the ASYNC governance
+# record (record_type=3, the Tier-2 shadow judge written ~2s post-probe). After the run we
+# drain_governance() these so the Tier-2 recall-lift / benign-shadow-flag lines can attribute
+# the async hint — a synchronous read never sees it. Other verticals don't touch the injection
+# judge, so they skip the drain (and its poll wait).
+_TIER2_VERTICALS = {
+    "llm01_prompt_injection",
+    "llm01_wire_indirect",
+    "llm01_benign",
+    "llm01_indirect_benign",
+}
+# Max seconds to poll the WAL for the async Tier-2 records to drain after a run (they land
+# ~2s post-probe). Assumes a record_type=3 per request_id (Platform's "poll until they land"
+# framing); if the judge writes one only on a hint, below-τ probes never get one and the drain
+# waits out this timeout each run (harmless — the counts are still correct). Tune per latency.
+_GOVERNANCE_DRAIN_TIMEOUT = float(
+    os.environ.get("TREVAL_EVAL_GOVERNANCE_TIMEOUT", "20")
+)
+
 # Benign FPR severity split (EV-AE10): FPR gates on hard-block; flag rate is advisory.
 _SEVERITY_TAG = {
     "false_positive_rate": " [GATED]",
@@ -71,15 +93,15 @@ _SEVERITY_TAG = {
 # (label, corpus subdir, indicators, render full LLM01 attribution block)
 _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
     (
-        "LLM01 prompt-injection — recall + output-success",
+        "LLM01 prompt-injection — recall + output-success + Tier-2 shadow-recall lift",
         "llm01_prompt_injection",
-        [InjectionCatchRate(), InjectionSuccessRate()],
+        [InjectionCatchRate(), InjectionSuccessRate(), Tier2ShadowRecallLift()],
         True,
     ),
     (
-        "LLM01 benign — false-positive rate (GATED hard-block) + flag rate (ADVISORY)",
+        "LLM01 benign — FPR (GATED) + flag rate (ADVISORY) + Tier-2 benign shadow-flag",
         "llm01_benign",
-        [FalsePositiveRate(), BenignFlagRate()],
+        [FalsePositiveRate(), BenignFlagRate(), BenignShadowFlagRate()],
         False,
     ),
     # EV-AE11: wire-placed indirect — the P2-ind placement gap, its OWN metric so it does
@@ -87,15 +109,15 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
     (
         "LLM01 wire-indirect — placement recall (tool-role / out-of-window / nested / RAG)",
         "llm01_wire_indirect",
-        [WireIndirectCatchRate()],
+        [WireIndirectCatchRate(), Tier2ShadowRecallLift()],
         True,
     ),
     # EV-AE11: indirect-benign — the data-channel FPR control (injection-like text in benign
     # docs/tool-outputs). Matters once P2-ind starts scanning tool-role content.
     (
-        "LLM01 indirect-benign — data-channel FPR (GATED) + flag rate (ADVISORY)",
+        "LLM01 indirect-benign — data-channel FPR (GATED) + flag (ADVISORY) + Tier-2 shadow-flag",
         "llm01_indirect_benign",
-        [FalsePositiveRate(), BenignFlagRate()],
+        [FalsePositiveRate(), BenignFlagRate(), BenignShadowFlagRate()],
         True,
     ),
     (
@@ -167,7 +189,13 @@ def main() -> None:
         timeout = _LLM10_TIMEOUT if subdir in _SLOW_VERTICALS else _DEFAULT_TIMEOUT
         target = _target(timeout)
         corpus = load_corpus(_CORPUS / subdir)
-        results = run_corpus(corpus, target)
+        results = list(run_corpus(corpus, target))
+        if subdir in _TIER2_VERTICALS:
+            # EV-AE12: join the ASYNC Tier-2 governance record (record_type=3, ~2s post-probe)
+            # — a synchronous read never sees the shadow-judge hint. Poll-drains once per run.
+            results = target.drain_governance(
+                results, timeout=_GOVERNANCE_DRAIN_TIMEOUT
+            )
         errored = sum(1 for r in results if r.error)
         lines.append(f"## {label}  ({len(results)} probes, {errored} errored)")
         for ind in indicators:
