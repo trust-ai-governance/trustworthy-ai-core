@@ -39,6 +39,9 @@ KNOWN_INDICATOR_IDS = {
     "drift_alert_count",
     "redaction_hit_ratio",
     "pii_exposure_surface",
+    # EV-7 表 A: active indicators now bound in the shipped registry.
+    "injection_catch_rate",
+    "tool_scope_violation_rate",
 }
 
 _EXPECTED = {
@@ -272,6 +275,37 @@ def test_attested_must_not_have_satisfied_when(tmp_path):
         },
     }
     with pytest.raises(RegistryError, match="satisfied_when"):
+        load_registry(_write(tmp_path, _dim_doc(l2=[obj])))
+
+
+def test_requires_integrity_defaults_false_and_reads_bool():
+    """EV-7 D2: optional evidence.requires_integrity — absent → False; the three
+    transparency integrity objectives carry True (checked against the shipped registry)."""
+    reg = load_registry()
+    trn = reg.dimensions["transparency_accountability"]
+    gated = {
+        o.id: o.evidence.requires_integrity for lvl in trn.levels.values() for o in lvl
+    }
+    assert gated["trn.l3.audit_chain_intact"] is True
+    assert gated["trn.l3.full_chain_trace"] is True
+    assert gated["trn.l4.trace_baseline"] is True
+    # an ordinary aggregate objective defaults False (must NOT block the EV-2 scale path)
+    rob_l2 = reg.dimensions["robustness"].levels["L2"][0]
+    assert rob_l2.evidence.requires_integrity is False
+
+
+def test_requires_integrity_must_be_bool(tmp_path):
+    obj = {
+        "id": "a",
+        "statement_zh": "s",
+        "evidence": {
+            "kind": "measured",
+            "indicator_id": "block_rate",
+            "satisfied_when": "value >= 0",
+            "requires_integrity": "yes",
+        },
+    }
+    with pytest.raises(RegistryError, match="requires_integrity"):
         load_registry(_write(tmp_path, _dim_doc(l2=[obj])))
 
 

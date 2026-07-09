@@ -169,7 +169,7 @@ def test_index_renders_grid(client):
     body = resp.text
     # a measured objective + its drill-down fields are present in the SSR output
     assert "rob.l2.injection_rule_detection" in body
-    assert "injection_rule_hit_ratio" in body
+    assert "injection_catch_rate" in body
     assert "measured" in body and "attested" in body
     assert "N/A" in body  # L1 baseline cells
 

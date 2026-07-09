@@ -35,12 +35,14 @@ levels:
           kind: measured
           indicator_id: unclosed_loop_rate
           satisfied_when: "value <= 0"
+          requires_integrity: true   # EV-7 D2: the closed-loop claim IS the chain
       - id: trn.l3.audit_chain_intact
         statement_zh: "审计 seq 连续性 / 哈希链完整"
         evidence:
           kind: measured
           indicator_id: chain_integrity
           satisfied_when: "value >= 1"
+          requires_integrity: true   # EV-7 D2: seq/hash-chain integrity moat
       - id: trn.l3.ai_council
         statement_zh: "建立 AI Council 或 AI CoE"
         evidence:
@@ -59,6 +61,7 @@ levels:
           kind: measured
           indicator_id: chain_integrity
           satisfied_when: "sample_size >= 100"
+          requires_integrity: true   # EV-7 D2: chain-trace baseline needs a VERIFIED source
       - id: trn.l4.telemetry_intervention_decoupled
         statement_zh: "行为遥测与运行时干预解耦"
         evidence:

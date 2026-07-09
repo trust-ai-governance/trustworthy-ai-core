@@ -152,11 +152,20 @@ def _build_evidence(yaml_path: Path, level: str, oid: str, raw: object) -> Evide
                 f"{where}: an attested objective must not carry satisfied_when"
             )
 
+    # Optional integrity gate (EV-7 D2 / EV-6 §11) — default False, must be a bool.
+    requires_integrity = raw.get("requires_integrity", False)
+    if not isinstance(requires_integrity, bool):
+        raise RegistryError(
+            f"{where}: requires_integrity, if set, must be a bool "
+            f"(got {requires_integrity!r})"
+        )
+
     return Evidence(
         kind=kind,
         indicator_id=indicator_id,
         posture_key=posture_key,
         satisfied_when=satisfied_when,
+        requires_integrity=requires_integrity,
     )
 
 
