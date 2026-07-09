@@ -11,8 +11,10 @@ levels:
         statement_zh: "对 Prompt 注入具备规则级检测（关键词/正则）"
         evidence:
           kind: measured
-          indicator_id: injection_rule_hit_ratio
-          satisfied_when: "sample_size >= 1"
+          # EV-7 表 A: active recall (did the gateway CATCH it) replaces the weaker
+          # passive "some rule fired" tag. τ_recall=0.80 (EV-AE6); deterministic.
+          indicator_id: injection_catch_rate
+          satisfied_when: "value >= 0.80"
       - id: rob.l2.adversarial_test_ledger
         statement_zh: "对高风险模型执行基础对抗测试并形成问题台账"
         evidence:

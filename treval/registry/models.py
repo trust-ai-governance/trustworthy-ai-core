@@ -22,6 +22,12 @@ class Evidence:
     indicator_id: str | None  # set iff kind == "measured"
     posture_key: str | None  # set iff kind == "attested"
     satisfied_when: str | None  # set iff kind == "measured" (the §4 mini-grammar)
+    # Does this objective require a VERIFIED (chain-checked WAL) source, not just an
+    # UNVERIFIED (Postgres index) one? (EV-7 D2 / EV-6 §11.) True ONLY for the
+    # transparency chain/seq/closed-loop objectives whose very claim IS integrity —
+    # NOT for aggregate catch/leak/cost rates (those are fine from an index; marking
+    # them true would wrongly forbid the EV-2 scale path). Default False.
+    requires_integrity: bool = False
 
 
 @dataclass(frozen=True)

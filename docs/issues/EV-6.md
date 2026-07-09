@@ -186,3 +186,27 @@ reference ids from this set — typos are caught now; full wiring is EV-7's job.
 - Whether `satisfied_when` should support `sample_size`-and-`value` compound
   predicates (e.g. `value >= .9 AND sample_size >= 100`). **Default: NO** — single
   comparison only this round; compound is a future grammar extension if needed.
+
+## 11. SUPPLEMENT — `requires_integrity` (EV-7 coupling, ratified round 2)
+
+EV-7's integrity gate has nothing to read: `Evidence` has no `requires_integrity`
+field and no YAML carries it. This small amendment lands **with EV-7** (EV-7 D2).
+
+**Amendment:**
+1. `registry/models.py::Evidence` gains **`requires_integrity: bool = False`** (last
+   field, defaulted → back-compatible; existing YAMLs parse unchanged).
+2. Loader reads an optional `evidence.requires_integrity` (default `False`). No new
+   structural rule beyond "must be a bool if present".
+3. Tag **`true` on exactly the three transparency integrity objectives** —
+   `trn.l3.audit_chain_intact`, `trn.l3.full_chain_trace`, `trn.l4.trace_baseline`.
+   Nothing else this round.
+
+**Scope discipline (important — do NOT over-apply):** `requires_integrity` is about
+**VERIFIED-vs-UNVERIFIED reader source** (chain-verified WAL vs the `UNVERIFIED`
+Postgres index — EV-2), **not** measured-vs-attested (that's already the `kind` field).
+An aggregate catch/leak/cost rate (`injection_catch_rate`, `sensitive_disclosure_rate`,
+`cost_runaway_caught`) is fine to compute from an `UNVERIFIED` index — counting blocks
+doesn't need the hash chain — so those stay `requires_integrity=false`. Marking them
+`true` would wrongly forbid the EV-2 scale path from ever satisfying them, defeating
+EV-2's purpose. Only the **chain/seq/closed-loop integrity** objectives — whose very
+claim IS the chain — genuinely require a `VERIFIED` source.

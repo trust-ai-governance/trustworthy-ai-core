@@ -137,6 +137,19 @@ Behavior:
 7. Logic tests pass in CI without PG; PG tests skip cleanly without PG.
 8. Coverage ≥ 60%; `mypy treval` + ruff clean. License CI stays green (pg8000 BSD).
 
+> **HARD GATE — indicator min-integrity retrofit (EV-7 D1 coupling; MUST land with EV-2).**
+> The reader yielding `integrity == UNVERIFIED` is necessary but NOT sufficient. Indicators
+> currently build `Measurement` **without** setting `integrity`, so it defaults `VERIFIED`
+> (correct only while every source is chain-verified WAL). If EV-2 ships before the indicators
+> propagate the **min integrity over their backing evidence** into `Measurement.integrity`,
+> every Postgres-sourced measurement silently grades `VERIFIED` and **the entire EV-7
+> `requires_integrity` gate is bypassed** — the Transparency chain-moat objectives become
+> satisfiable from the UNVERIFIED index, the exact thing D2 forbids. So EV-2 acceptance also
+> requires: (a) the WAL/PG-consuming indicators set `Measurement.integrity = min(evidence
+> integrities)`; (b) a rubric test proving a Postgres-only run resolves a `requires_integrity`
+> objective to `unverified_evidence` (not `met`), while the same data via WAL resolves `met`.
+> Not optional, not deferrable past EV-2.
+
 ## 7. Non-goals
 
 - Any writes / DDL / schema ownership / SQLite→PG migration (that's platform A4).

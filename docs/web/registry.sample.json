@@ -40,9 +40,9 @@
             "id": "rob.l2.injection_rule_detection",
             "statement_zh": "对 Prompt 注入具备规则级检测（关键词/正则）",
             "kind": "measured",
-            "indicator_id": "injection_rule_hit_ratio",
+            "indicator_id": "injection_catch_rate",
             "posture_key": null,
-            "satisfied_when": "sample_size >= 1"
+            "satisfied_when": "value >= 0.80"
           },
           {
             "id": "rob.l2.adversarial_test_ledger",
@@ -330,9 +330,9 @@
             "id": "sec.l3.oauth_scope",
             "statement_zh": "MCP/Tool 调用使用 OAuth + 细粒度 scope（强制）",
             "kind": "measured",
-            "indicator_id": "scope_deny_rate",
+            "indicator_id": "tool_scope_violation_rate",
             "posture_key": null,
-            "satisfied_when": "sample_size >= 1"
+            "satisfied_when": "value <= 0"
           },
           {
             "id": "sec.l3.guardrail_blocking",
