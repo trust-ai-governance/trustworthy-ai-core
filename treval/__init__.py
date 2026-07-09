@@ -37,6 +37,13 @@ from treval.registry import (
     load_registry,
     validate_against,
 )
+from treval.rubric import (
+    DuplicateIndicatorError,
+    bundle_to_json,
+    evaluate,
+    serialize_bundle,
+    serialize_report,
+)
 
 __all__ = [
     # models
@@ -73,4 +80,10 @@ __all__ = [
     "run_indicators",
     "BlockRate",
     "build_default_registry",
+    # rubric engine (EV-7)
+    "evaluate",
+    "DuplicateIndicatorError",
+    "serialize_report",
+    "serialize_bundle",
+    "bundle_to_json",
 ]

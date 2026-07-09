@@ -73,6 +73,13 @@ class Measurement:
     evidence_refs: tuple[EvidenceRef, ...]  # MUST be populated — auditability
     subject: str = ""  # per-entity key (e.g. agent_id); "" = aggregate
     notes: str = ""
+    # Trust basis of THIS signal: the weakest integrity (min) over its backing
+    # evidence, set by the indicator (EV-7 D1). The rubric engine reads it to fill
+    # verification_basis and to gate `requires_integrity` objectives — a Measurement
+    # loses the per-record IntegrityStatus once aggregated, so it must be carried
+    # here. Defaults VERIFIED: every current indicator reads chain-verified WAL; the
+    # UNVERIFIED (Postgres index) path lands with EV-2.
+    integrity: IntegrityStatus = IntegrityStatus.VERIFIED
 
 
 @dataclass(frozen=True)

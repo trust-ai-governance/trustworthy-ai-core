@@ -38,8 +38,10 @@ levels:
         statement_zh: "MCP/Tool 调用使用 OAuth + 细粒度 scope（强制）"
         evidence:
           kind: measured
-          indicator_id: scope_deny_rate
-          satisfied_when: "sample_size >= 1"
+          # EV-7 表 A: active out-of-scope probing (0 violations allowed = scope
+          # enforced) is more direct than a passive deny-rate. Deterministic (WAL authz).
+          indicator_id: tool_scope_violation_rate
+          satisfied_when: "value <= 0"
       - id: sec.l3.guardrail_blocking
         statement_zh: "Response/Agent-Action 护栏阻断生效"
         evidence:
