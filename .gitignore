@@ -233,3 +233,7 @@ share/man/
 lib64
 pyvenv.cfg
 patch.diff
+bundle.json
+report.json
+report.csv
+eval_report.diff

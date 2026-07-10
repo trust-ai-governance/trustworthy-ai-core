@@ -1,0 +1,42 @@
+# Sample posture attestation for the treval CLI (EV-8 §9.2).
+#
+#   python -m treval.cli report --measurement-bundle bundle.json \
+#       --posture docs/posture.sample.yaml --format human
+#
+# Posture is the ATTESTED substrate — operator-declared facts telemetry can't see
+# (EV-3). Keys MUST match a registry objective's `posture_key`; `attested_by` is the
+# signer (unsigned MVP — a plain claim). `tenant_id` must match the bundle's tenant.
+# This spread declares robustness/security to L3 and the other three dimensions to L2/L3,
+# so the report visibly demonstrates the min gate + over-claim gaps against the (active-
+# only) measured signals: attestation reaches high, measurement does not — measured>attested.
+tenant_id: __eval__
+attestations:
+  # --- robustness (attested L3; measured injection_catch_rate backs L2 → gap at L3) ---
+  - {key: robustness.adversarial_test_ledger, value: "true", attested_by: "ciso@corp"}
+  - {key: robustness.model_version_freeze, value: "true", attested_by: "ciso@corp"}
+  - {key: robustness.adversarial_suite_standardized, value: "true", attested_by: "ciso@corp"}
+  - {key: robustness.change_triggers_regression, value: "true", attested_by: "ciso@corp"}
+  # --- security_alignment (attested L3) ---
+  - {key: security_alignment.sso_mfa, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.independent_nhi, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.initial_risk_assessment, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.ai_incident_response, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.acceptable_use_policy, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.dual_identity_chain, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.actions_to_siem, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.supply_chain_inventory, value: "true", attested_by: "ciso@corp"}
+  - {key: security_alignment.cicd_security_checks, value: "true", attested_by: "ciso@corp"}
+  # --- transparency_accountability (attested L3; zero measured data → NotMeasured) ---
+  - {key: transparency_accountability.ai_asset_inventory, value: "true", attested_by: "ciso@corp"}
+  - {key: transparency_accountability.min_logging_retention, value: "true", attested_by: "ciso@corp"}
+  - {key: transparency_accountability.approval_owner_documented, value: "true", attested_by: "ciso@corp"}
+  - {key: transparency_accountability.deployment_registry, value: "true", attested_by: "ciso@corp"}
+  - {key: transparency_accountability.ai_council, value: "true", attested_by: "ciso@corp"}
+  - {key: transparency_accountability.role_based_training, value: "true", attested_by: "ciso@corp"}
+  # --- efficient_reliability (attested L2) ---
+  - {key: efficient_reliability.capacity_monitoring, value: "true", attested_by: "sre@corp"}
+  - {key: efficient_reliability.recovery_runbook, value: "true", attested_by: "sre@corp"}
+  - {key: efficient_reliability.train_infer_logical_isolation, value: "true", attested_by: "sre@corp"}
+  # --- privacy_data_protection (attested L2) ---
+  - {key: privacy_data_protection.retention_deletion_process, value: "true", attested_by: "dpo@corp"}
+  - {key: privacy_data_protection.pia_trigger_conditions, value: "true", attested_by: "dpo@corp"}
