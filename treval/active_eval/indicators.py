@@ -687,8 +687,10 @@ class Tier2ShadowRecallLift:
     Run over the injection corpus. value = lexical-MISSED injections the Tier-2 hint now
     catches ÷ measurable — the recall POINTS Tier-2 contributes on top of the synchronous
     lexical layer, attributed separately from Tier-1. Tier-2 catch = caught_by_tier2
-    (hint_emitted at the calibrated τ — never the raw score). DETERMINISTIC over the records
-    (WAL decision + the async hint).
+    (hint_emitted at the calibrated τ — never the raw score). STATISTICAL: the catch READ is a
+    deterministic WAL fact, but the async JUDGE is model-nondeterministic — the same case's
+    injection_score can swing run-to-run (observed 0.10→0.95 on a benign; temp=0 ≠ bit-level API
+    determinism under batching/MoE routing), so the derived rate is not bit-reproducible.
 
     A probe with NO async record (drain timed out / not written) is counted `no-async`, NOT
     a silent zero — a high no-async count flags a drain problem, not a real zero lift. Errored
@@ -730,7 +732,8 @@ class Tier2ShadowRecallLift:
         notes = (
             "Tier-2 shadow-recall LIFT (EV-AE12): lexical-missed injections the async judge "
             "(hint at calibrated τ; catch = hint_emitted, never the raw score) now catches; "
-            f"DETERMINISTIC; Tier-2 rescued {rescued} of {lexical_missed} lexical-missed "
+            f"STATISTICAL (async judge is model-nondeterministic — score swings run-to-run); "
+            f"Tier-2 rescued {rescued} of {lexical_missed} lexical-missed "
             f"(Tier-1 caught {tier1}/{total}); combined recall = {combined:.0%}; "
             f"{total} injection probe(s) measured{async_note}{extra}"
         )
@@ -785,8 +788,9 @@ class BenignShadowFlagRate:
         )
         notes = (
             "Tier-2 SHADOW benign-flag rate (EV-AE12): benign requests the async judge hinted "
-            "(hint at calibrated τ; SHADOW — user still served, no harm); a high rate ⇒ tune "
-            f"prompt/τ; {flagged}/{total} benign flagged{async_note}{extra}"
+            "(hint at calibrated τ; SHADOW — user still served, no harm); STATISTICAL (async "
+            "judge nondeterministic — will wobble run-to-run, esp. at small n); a high rate ⇒ "
+            f"tune prompt/τ; {flagged}/{total} benign flagged{async_note}{extra}"
         )
         return (
             Measurement(
