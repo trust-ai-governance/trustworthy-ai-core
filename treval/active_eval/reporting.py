@@ -74,8 +74,30 @@ def _catching_rules(pr: ProbeResult) -> str:
         _FD.get(d.final_decision, "?")
         + (f" by {fired}" if fired else "")
         + (" +hint" if hint else "")
+        + _response_suffix(pr)
         + _tier2_suffix(pr)
     )
+
+
+def _response_suffix(pr: ProbeResult) -> str:
+    """The RESPONSE-stage (record_type=2) reaction — a terminal BLOCK or a non-`log`
+    on_tool_response rule. Shown because a case can ALLOW at the decision stage yet be
+    HARD-BLOCKED at the response stage (output-DLP / LLM05 / neutralize fail-close): the
+    decision line alone would misread it as a clean ALLOW and hide the block that the
+    FPR/hard-block signal actually counts. Empty when the response stage was clean."""
+    ev = pr.response_evidence
+    if ev is None:
+        return ""
+    r = ev.record.response
+    terminal = str(r.final_terminal)
+    fired = [
+        f"{rule.rule_id}{list(rule.actions_fired)}"
+        for rule in r.on_tool_response_rules
+        if rule.matched and list(rule.actions_fired) != ["log"]
+    ]
+    if "BLOCK" in terminal or fired:
+        return f"  RESP:{terminal}" + (f" by {fired}" if fired else "")
+    return ""
 
 
 def _tier2_suffix(pr: ProbeResult) -> str:
