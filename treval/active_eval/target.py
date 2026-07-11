@@ -212,13 +212,19 @@ class GatewayTarget:
                 params["temperature"] = self._temperature
         else:
             params = {}
+        headers = {
+            "x-tenant-id": self._tenant_id,
+            "x-user-id": self._user_id,
+        }
+        # EV-AE13: per-case route selection. Without it the gateway uses its default
+        # route; `builtin.chat` is the declared HTML sink (neutralize applies),
+        # `control.chat` is sink `none` (byte-for-byte). No header ⇒ unchanged behaviour.
+        if case.agent_id is not None:
+            headers["x-agent-id"] = case.agent_id
         try:
             resp = httpx.post(
                 self._base_url + self._invoke_path,
-                headers={
-                    "x-tenant-id": self._tenant_id,
-                    "x-user-id": self._user_id,
-                },
+                headers=headers,
                 json={"tool_id": case.tool_id, "params": params},
                 timeout=self._timeout,
             )
