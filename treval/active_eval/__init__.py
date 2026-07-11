@@ -35,6 +35,8 @@ from treval.active_eval.indicators import (
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionSuccessRate,
+    OutputNeutralizeFidelityRate,
+    OutputNeutralizeInertRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
     Tier2ShadowRecallLift,
@@ -90,6 +92,9 @@ __all__ = [
     "CostRunawayCaught",
     "WithinCostBudget",
     "WireIndirectCatchRate",
+    # EV-AE13 — output-neutralize efficacy (inert ∧ fidelity, declared HTML sink)
+    "OutputNeutralizeInertRate",
+    "OutputNeutralizeFidelityRate",
     # EV-AE12 — async Tier-2 shadow-judge recall lift + benign shadow-flag
     "Tier2ShadowRecallLift",
     "BenignShadowFlagRate",
