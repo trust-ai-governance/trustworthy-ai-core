@@ -34,6 +34,8 @@ from treval.active_eval import (
     GatewayTarget,
     InjectionCatchRate,
     InjectionSuccessRate,
+    OutputNeutralizeFidelityRate,
+    OutputNeutralizeInertRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
     Tier2ShadowRecallLift,
@@ -131,6 +133,20 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
         "llm05_improper_output",
         [UnsafeOutputPassthroughRate(), InjectionCatchRate()],
         False,
+    ),
+    # EV-AE13: output-neutralize efficacy on the DECLARED HTML sink (builtin.chat) — the
+    # two-sided inert ∧ fidelity gate (both τ=1.0) + the undeclared-control (control.chat)
+    # passthrough baseline. render_attrib=True so A2-neutralize vs P2-out scoped-block (403)
+    # vs control-verbatim is legible per case (Table-B per-source attribution, never global 0%).
+    (
+        "LLM05 output-neutralize — inert ∧ fidelity (declared sink) + control passthrough",
+        "llm05_neutralize",
+        [
+            OutputNeutralizeInertRate(),
+            OutputNeutralizeFidelityRate(),
+            UnsafeOutputPassthroughRate(),
+        ],
+        True,
     ),
     (
         "LLM06 tool-scope-violation",
