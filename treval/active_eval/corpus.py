@@ -89,6 +89,11 @@ class CorpusCase:
     # out-of-window, nested content-part, retrieved-context). None ⇒ the single-user
     # `input` path (every pre-EV-AE11 case is untouched).
     messages: tuple[WireMessage, ...] | None = None
+    # Optional per-case route selector (EV-AE13). When set, GatewayTarget sends header
+    # `x-agent-id`, choosing which deployment/route (and thus output-sink policy) handles
+    # the probe: `builtin.chat` = declared HTML sink (A2 neutralize applies), `control.chat`
+    # = sink `none` (byte-for-byte, no neutralize). None ⇒ no header (gateway default route).
+    agent_id: str | None = None
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -226,6 +231,13 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: tool_id, if set, must be a non-empty string"
             )
         fields["tool_id"] = tool_id
+    agent_id = doc.get("agent_id")  # optional route selector (EV-AE13)
+    if agent_id is not None:
+        if not isinstance(agent_id, str) or not agent_id:
+            raise CorpusError(
+                f"{yaml_path}: agent_id, if set, must be a non-empty string"
+            )
+        fields["agent_id"] = agent_id
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(
