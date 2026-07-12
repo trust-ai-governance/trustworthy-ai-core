@@ -50,3 +50,17 @@ def compile_satisfied_when(expr: str) -> Callable[[Measurement], bool]:
         return bool(op(getattr(measurement, field), number))
 
     return predicate
+
+
+def satisfied_when_field(expr: str) -> str:
+    """The Measurement field a `satisfied_when` tests — `"value"` or `"sample_size"`. Same
+    strict grammar as `compile_satisfied_when` (raises `SatisfiedWhenError` on anything else).
+
+    Lets the rubric distinguish a failed **`sample_size`** gate (a data-sufficiency check →
+    `insufficient_data`, "not enough data yet") from a failed **`value`** gate (a quality
+    verdict → `unmet`), so a volume-gated baseline at N<threshold reads honestly rather than
+    as an SLO failure."""
+    m = _GRAMMAR.match(expr.strip()) if isinstance(expr, str) else None
+    if m is None:
+        raise SatisfiedWhenError(f"invalid satisfied_when expression: {expr!r}")
+    return m.group(1)

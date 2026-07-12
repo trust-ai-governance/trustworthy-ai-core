@@ -253,6 +253,33 @@ def test_zero_sample_short_circuits_before_threshold():
     assert obj.status == "insufficient_data"  # not "met"
 
 
+def test_failed_sample_size_gate_is_insufficient_data_not_unmet():
+    """A `sample_size >= N` gate at sample_size<N = NOT ENOUGH DATA (insufficient_data), not a
+    quality failure (unmet). A failed `value` gate on the same dimension stays unmet."""
+    dim = _dim(
+        "efficient_reliability",
+        {
+            "L4": (
+                _measured("rel.l4.lat", "duration_p99", "sample_size >= 100"),
+                _measured("rel.l4.qual", "catch", "value >= 0.80"),
+            )
+        },
+    )
+    measurements = [
+        _m("duration_p99", "efficient_reliability", 120.0, sample_size=15),  # 15 < 100
+        _m("catch", "efficient_reliability", 0.5, sample_size=200),  # value gate fails
+    ]
+    report = evaluate(_reg(dim), measurements, [], window=_WINDOW, tenant_id="t")
+    by = {
+        o.objective_id: o.status
+        for o in _dimreport(report, "efficient_reliability").objectives
+    }
+    assert (
+        by["rel.l4.lat"] == "insufficient_data"
+    )  # sample-count gate → not enough data
+    assert by["rel.l4.qual"] == "unmet"  # value gate → a real quality verdict
+
+
 def test_broken_evidence_is_unverified_evidence():
     dim = _dim("robustness", {"L2": (_measured("rob.l2.m", "catch", "value >= 0.80"),)})
     measurements = [_m("catch", "robustness", 0.99, integrity=IntegrityStatus.BROKEN)]

@@ -4,7 +4,10 @@ Fraction of DECIDED requests that were BLOCKed (Security & Alignment). This is
 the template every later indicator copies: pure measure(), evidence_refs always
 populated (len == sample_size), subject="" aggregate, sample_size==0 distinct
 from value==0.0. The indicator stays dumb — it counts recorded decisions and does
-NOT filter on integrity (that is the rubric's concern, EV-7).
+NOT filter on integrity (that is the rubric's concern, EV-7). It DOES record the
+weakest integrity of the records it consumed on the Measurement (EV-5 ②), so an
+UNVERIFIED (Postgres/index) source auto-marks the Measurement UNVERIFIED — the EV-2
+hard gate — without changing what is counted.
 """
 
 from __future__ import annotations
@@ -13,6 +16,7 @@ from collections.abc import Iterable
 
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
+from treval.indicators._integrity import min_integrity
 from treval.models import AuditEvidence, Measurement
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
@@ -26,6 +30,7 @@ class BlockRate:
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         refs = []
+        integrities = []
         blocks = 0
         for ev in evidence:
             record = ev.record
@@ -36,6 +41,7 @@ class BlockRate:
             if final not in (_ALLOW, _BLOCK):
                 continue  # UNSPECIFIED / UNDECIDED is not a terminal decision
             refs.append(ev.ref)
+            integrities.append(ev.integrity)
             if final == _BLOCK:
                 blocks += 1
 
@@ -50,5 +56,6 @@ class BlockRate:
                 sample_size=decided,
                 evidence_refs=tuple(refs),
                 subject="",
+                integrity=min_integrity(integrities),
             ),
         )
