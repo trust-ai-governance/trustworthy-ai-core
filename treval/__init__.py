@@ -19,8 +19,14 @@ from treval.models import (
 )
 from treval.indicators import (
     BlockRate,
+    ChainIntegrity,
+    DurationP99,
     IndicatorRegistry,
+    JoinResult,
+    TerminalErrorRatio,
+    UnclosedLoopRate,
     build_default_registry,
+    join_ab,
     run_indicators,
 )
 from treval.posture import PostureFileError, PostureFileReader
@@ -80,6 +86,13 @@ __all__ = [
     "run_indicators",
     "BlockRate",
     "build_default_registry",
+    # EV-5 — passive WAL indicators + A↔B join
+    "ChainIntegrity",
+    "DurationP99",
+    "TerminalErrorRatio",
+    "UnclosedLoopRate",
+    "join_ab",
+    "JoinResult",
     # rubric engine (EV-7)
     "evaluate",
     "DuplicateIndicatorError",
