@@ -26,7 +26,7 @@ from treval.models import (
     PostureEvidence,
 )
 from treval.registry import ControlObjective, Dimension, DimensionRegistry
-from treval.registry.satisfied_when import compile_satisfied_when
+from treval.registry.satisfied_when import compile_satisfied_when, satisfied_when_field
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _LEVEL_INDEX = {level: i for i, level in enumerate(_LEVELS, start=1)}  # L1→1 … L5→5
@@ -182,8 +182,15 @@ def _evaluate_objective(
             return ObjectiveResult(
                 obj.id, "measured", "unverified_evidence", m.evidence_refs
             )
-        predicate = compile_satisfied_when(ev.satisfied_when)
-        status = "met" if predicate(m) else "unmet"
+        if compile_satisfied_when(ev.satisfied_when)(m):
+            status = "met"
+        elif satisfied_when_field(ev.satisfied_when) == "sample_size":
+            # A failed `sample_size >= N` gate = NOT ENOUGH DATA yet, not a quality failure.
+            # Reporting it `unmet` would read as an SLO/baseline failure; a sample-count gate
+            # is a data-sufficiency check → `insufficient_data` (honest labeling).
+            status = "insufficient_data"
+        else:
+            status = "unmet"  # a `value` predicate that failed = a real quality verdict
         return ObjectiveResult(obj.id, "measured", status, m.evidence_refs)
 
     # attested — a declaration, never insufficient_data / unverified_evidence (§1).
