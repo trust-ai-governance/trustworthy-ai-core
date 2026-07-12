@@ -10,7 +10,7 @@ from pathlib import Path
 
 from treval.active_eval.target import ProbeResult
 from treval.cli.bundle import build_bundle, load_bundle
-from treval.cli.collect import CURATION, collect_measurements
+from treval.cli.collect import CURATION, collect_measurements, collect_passive
 from treval.rubric import evaluate
 from treval.registry import load_registry
 
@@ -80,3 +80,14 @@ def test_failing_producer_aggregates_to_warning(tmp_path):
     assert measurements == ()
     assert len(warnings) == len(CURATION)
     assert all("failed" in w for w in warnings)
+
+
+def test_passive_collect_unreadable_wal_aggregates_to_warning(tmp_path):
+    """Passive collect (EV-5) over a WAL with no eval records → a warning, empty result, no
+    crash (§5 — a missing/unreadable passive source never breaks the run)."""
+    warnings: list[str] = []
+    measurements = collect_passive(
+        str(tmp_path / "no_such_wal"), "__eval__", warnings=warnings
+    )
+    assert measurements == ()
+    assert warnings and all("passive" in w.lower() for w in warnings)

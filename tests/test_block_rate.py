@@ -130,6 +130,36 @@ def test_broken_integrity_still_counted():
 
 
 # --------------------------------------------------------------------------- #
+# EV-5 ② retrofit — Measurement.integrity = min over consumed records
+# --------------------------------------------------------------------------- #
+
+
+def test_measurement_integrity_is_verified_when_all_verified():
+    evidence = [_evidence(0, final=_ALLOW), _evidence(1, final=_BLOCK)]
+    (m,) = BlockRate().measure(evidence)
+    assert m.integrity is IntegrityStatus.VERIFIED
+
+
+def test_measurement_integrity_unverified_when_any_unverified():
+    # an UNVERIFIED (Postgres/index) record auto-marks the Measurement UNVERIFIED (EV-2 gate).
+    evidence = [
+        _evidence(0, final=_ALLOW, integrity=IntegrityStatus.VERIFIED),
+        _evidence(1, final=_BLOCK, integrity=IntegrityStatus.UNVERIFIED),
+    ]
+    (m,) = BlockRate().measure(evidence)
+    assert m.integrity is IntegrityStatus.UNVERIFIED
+
+
+def test_measurement_integrity_broken_is_worst():
+    evidence = [
+        _evidence(0, final=_ALLOW, integrity=IntegrityStatus.UNVERIFIED),
+        _evidence(1, final=_BLOCK, integrity=IntegrityStatus.BROKEN),
+    ]
+    (m,) = BlockRate().measure(evidence)
+    assert m.integrity is IntegrityStatus.BROKEN  # worst wins
+
+
+# --------------------------------------------------------------------------- #
 # 5. Purity
 # --------------------------------------------------------------------------- #
 
