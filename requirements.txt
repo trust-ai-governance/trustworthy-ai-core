@@ -1,6 +1,6 @@
 trustworthy-ai-ir-spec @ git+ssh://git@github.com/olvandeng/trustworthy-ai-ir-spec.git@main
 pytest-cov>=7.1.0
-protobuf>=7.34.1
+protobuf>=7.35.1
 types-protobuf>=3.20.4.20250408
 pyyaml>=6.0
 types-PyYAML>=6.0.12.20240720

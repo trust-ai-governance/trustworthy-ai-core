@@ -56,7 +56,7 @@ levels:
         evidence:
           kind: measured
           indicator_id: drift_alert_count
-          satisfied_when: "sample_size >= 1"
+          satisfied_when: "sample_size >= 1"   # EV-9 §3 DEFERRED — insufficient_data until P3-drift alert semantics land (drift is not built in Core); no indicator yet
       - id: rob.l4.redteam_cadence
         statement_zh: "红队定期演习，评分化且可比较"
         evidence:
