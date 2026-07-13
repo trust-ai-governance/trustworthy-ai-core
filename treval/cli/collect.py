@@ -33,8 +33,11 @@ from treval.active_eval import (
 )
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
+    BoundaryBreachRate,
     ChainIntegrity,
     DurationP99,
+    PiiExposureSurface,
+    RedactionHitRatio,
     TerminalErrorRatio,
     UnclosedLoopRate,
 )
@@ -64,14 +67,21 @@ CURATION: tuple[Producer, ...] = (
     Producer("tool_scope_violation_rate", ToolScopeViolationRate, "llm06_tool_scope"),
 )
 
-# PASSIVE producers (EV-5): measured over the eval WAL's AuditEvidence stream. Distinct ids,
-# so they never collide with the active ones. `block_rate` is intentionally NOT here — it's a
-# production-traffic rate that would be meaningless over eval-attack probes (§6).
+# PASSIVE producers (EV-5, EV-9): measured over the eval WAL's AuditEvidence stream, feeding the
+# MaturityReport's dimension grid (NOT the OWASP eval_report). Distinct ids, so they never collide
+# with the active ones. `block_rate` is intentionally NOT here — over eval-attack probes it's
+# DEGENERATE (~all-block), a misleading value (§6). The EV-9 dimension-attribution indicators ARE
+# here: their registry bindings are `sample_size`-gated (a capability claim — "measured on N real
+# VERIFIED requests" — not a value-quality claim), and over the eval WAL they produce non-degenerate,
+# correctly-attributed values (production-representative only on the production passive path, §6).
 PASSIVE: tuple[Indicator, ...] = (
     ChainIntegrity(),
     UnclosedLoopRate(),
     DurationP99(),
     TerminalErrorRatio(),
+    BoundaryBreachRate(),  # EV-9 → robustness
+    RedactionHitRatio(),  # EV-9 → privacy
+    PiiExposureSurface(),  # EV-9 → privacy
 )
 
 

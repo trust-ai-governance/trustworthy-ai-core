@@ -19,10 +19,13 @@ from treval.models import (
 )
 from treval.indicators import (
     BlockRate,
+    BoundaryBreachRate,
     ChainIntegrity,
     DurationP99,
     IndicatorRegistry,
     JoinResult,
+    PiiExposureSurface,
+    RedactionHitRatio,
     TerminalErrorRatio,
     UnclosedLoopRate,
     build_default_registry,
@@ -93,6 +96,10 @@ __all__ = [
     "UnclosedLoopRate",
     "join_ab",
     "JoinResult",
+    # EV-9 — dimension attribution
+    "BoundaryBreachRate",
+    "RedactionHitRatio",
+    "PiiExposureSurface",
     # rubric engine (EV-7)
     "evaluate",
     "DuplicateIndicatorError",
