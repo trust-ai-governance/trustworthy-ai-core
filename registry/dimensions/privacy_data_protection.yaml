@@ -12,7 +12,7 @@ levels:
         evidence:
           kind: measured
           indicator_id: redaction_hit_ratio
-          satisfied_when: "sample_size >= 1"   # pending PII tagger — reads sample_size=0 until source lands
+          satisfied_when: "sample_size >= 1"   # EV-9: measured (B1 audit.hint_variables["pii_types"], merged 2026-07-12)
       - id: prv.l2.retention_deletion
         statement_zh: "明确数据保留期限与删除流程"
         evidence:
@@ -47,7 +47,7 @@ levels:
         evidence:
           kind: measured
           indicator_id: pii_exposure_surface
-          satisfied_when: "sample_size >= 100"   # pending PII tagger
+          satisfied_when: "sample_size >= 100"   # EV-9: measured (B1 audit.hint_variables["pii_types"], merged 2026-07-12)
       - id: prv.l4.periodic_pia
         statement_zh: "定期输出隐私影响评估报告"
         evidence:
