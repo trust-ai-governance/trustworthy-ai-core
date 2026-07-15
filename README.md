@@ -40,6 +40,12 @@ That is the intended failure mode, not an oversight.
 
 ## Quick start
 
+> **Installation status (v0.1.0).** The zero-dependency verifier and the `corpus/` run
+> **today from a plain `git clone`** — see [Verify an audit chain yourself](#verify-an-audit-chain-yourself)
+> below. The full engine + CLI `pip install` currently resolves a schema package that is
+> being split out for public release in **v0.2.0**; until then a clean external
+> `pip install` does not yet complete. The commands below assume a configured environment.
+
 ```bash
 pip install -e .          # engine + CLI; no gateway, no database required
 export PYTHONPATH=$PWD

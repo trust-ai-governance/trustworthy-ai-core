@@ -19,7 +19,8 @@ authors:
     website: "https://github.com/trust-ai-governance"
 repository-code: "https://github.com/trust-ai-governance/trustworthy-ai-core"
 license: Apache-2.0
-version: "0.1.0"   # TODO(maintainer): must match the first tagged release
+version: "0.1.0"
+date-released: "2026-07-15"
 keywords:
   - AI governance
   - LLM security
