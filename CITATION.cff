@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+title: "treval: an open evaluation engine for AI governance"
+message: "If you use this software or its corpora in academic work, please cite it."
+type: software
+abstract: >-
+  treval is an open evaluation engine for AI-governance systems, built on the
+  premise that governance claims should be measured rather than attested. It
+  ships a public OWASP LLM Top-10 attack corpus with matched benign controls, a
+  deterministic evaluation engine that grades a governed target against a 5x5
+  maturity registry using the target's own audit log as evidence, and an
+  independent, dependency-free audit-chain verifier. Its measurement protocol is
+  two-sided (a control must both catch attacks and not over-block benign traffic),
+  counts only governance decisions rather than model self-reports, and reports
+  unmeasured objectives as NotMeasured rather than as passes.
+authors:
+  - given-names: "Weichun"
+    family-names: "Deng"
+  - name: "Trustworthy AI Governance"
+    website: "https://github.com/trust-ai-governance"
+repository-code: "https://github.com/trust-ai-governance/trustworthy-ai-core"
+license: Apache-2.0
+version: "0.1.0"   # TODO(maintainer): must match the first tagged release
+keywords:
+  - AI governance
+  - LLM security
+  - prompt injection
+  - OWASP LLM Top 10
+  - evaluation benchmark
+  - audit integrity
+  - agent security
