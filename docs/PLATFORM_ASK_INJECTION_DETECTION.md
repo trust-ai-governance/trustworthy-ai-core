@@ -1,5 +1,28 @@
 # Platform Ask — Prompt-Injection Detection + Output DLP in the Gateway
 
+> ## ✅ RESOLVED — both gaps closed and re-measured (2026)
+>
+> **This document is a historical record. The findings below are no longer current.**
+>
+> | Gap found (this doc) | After the gateway shipped detection — re-measured with the *same* public corpus |
+> |---|---|
+> | prompt-injection `injection_catch_rate` **≈ 4%** (1/28) | **89%** — Tier-1 in-band lexical rules; `DETERMINISTIC` (WAL decision, no model self-report) |
+> | benign false-positive rate | **0%** on the direct-benign control set — the two-sided gate held; catch did **not** come from over-blocking |
+> | sensitive-information `sensitive_disclosure_rate` **= 100%** (14/14), output-DLP catch **0%** | disclosure caught by response-side DLP — `injection_catch_rate` **100%** on the LLM02 corpus |
+>
+> **We are not deleting this document.** It is the record of an open evaluation harness
+> finding a real, measured hole in our own product — and of that hole being closed and
+> independently re-measured with the same public corpus that found it. Deleting it would
+> make the record look better and the process look worse. The loop
+> (*open eval finds it → the gateway fixes it → open eval re-confirms it*) **is** the
+> argument for measuring rather than attesting.
+>
+> Reproduce either number yourself: the corpus is in `corpus/`, the harness is
+> `python -m treval.cli run`. See the methodology rules in the [README](../README.md) —
+> in particular, a "catch" is a governance decision, never the model declining.
+
+---
+
 > **From:** core (active-eval / EV-AE0 + EV-AE1). **To:** platform (gateway / Rule IR).
 > **Type:** feature ask + planning input (not a contract change). **Priority:** high —
 > it is the gating capability for *measuring* the Robustness/Security/Privacy guardrail

@@ -4,8 +4,10 @@ Cross-repo contract, authored by **core** (consumer), implemented by **platform*
 (the closed gateway writes the index, design `A4_audit_index_port.md`). Core builds
 EV-2 against this; real-data acceptance waits on platform exposing it.
 
-**Status: reconciled with Platform A4 — A4 satisfies this contract.** §0 records the
-verdict; the rest is the consumer view (mostly clarifications A4 already answers).
+**Status: RECONCILED + ACKNOWLEDGED — A4 satisfies this contract; Platform formally
+acknowledged 2026-07-14.** The one open flag (driver license) is **resolved**: A4 acted
+on it and switched to `pg8000` (BSD) — see §0 / §7. §0 records the verdict; the rest is
+the consumer view (mostly clarifications A4 already answers).
 
 Pairs with: `docs/EVAL_ARCHITECTURE(WIP).md` §4a, `docs/EVAL_ISSUES(WIP).md` EV-2,
 and Platform's `A4_audit_index_port.md`.
@@ -26,10 +28,10 @@ clarifications that matter:
 | Record identity | `(gateway_instance, seq)` PK | ⚠️ **core must NOT treat `seq` as global** — key on `request_id` (§3) |
 | `record_type`/`final_decision` filters | columns present, not separately indexed | ✅ acceptable (ride tenant/time index) |
 | Read access | — | ➕ **ask:** read-only `SELECT` grant + schema-qualified name (§6) |
-| Driver license | A4 §6 picks **psycopg v3 = LGPL-3.0** | ⛔ **flag:** banned by Charter §1.2 — affects platform too (§7) |
+| Driver license | A4 now uses **`pg8000` (BSD)** — verified live at `pg8000 1.31.5` | ✅ **resolved** — the original `psycopg` v3 (LGPL-3.0) flag was **acted on**; A4 swapped drivers (§7) |
 
-No schema change is required for core. The two action items for platform are a
-**read-only grant** (§6) and the **driver-license** review (§7).
+No schema change is required for core. The one remaining action item for platform is the
+**read-only `SELECT` grant** (§6) — an ops/deploy step, not code, so it does not block EV-2.
 
 ---
 
@@ -116,14 +118,23 @@ EV-5b builds for the WAL path, keyed on `request_id`, reused unchanged for Postg
   Core honors A4's `schema_name` config.
 - Cross-instance read (no `gateway_instance` filter) — the Search pattern.
 
-## 7. Driver / license — flag for platform (affects A4 itself)
+## 7. Driver / license — ✅ RESOLVED (the flag worked)
 
-Charter §1.2 bans LGPL/GPL/AGPL/SSPL across **all three repos**. **A4 §6 selects
-`psycopg` v3, which is LGPL-3.0** — so it is non-compliant for platform too, and the
-license CI gate would fail on it. Recommend a permissively-licensed driver for both:
-**`pg8000` (BSD)** or **`asyncpg` (Apache-2.0)**. Core will use one of these
-regardless (behind the `treval[postgres]` extra); raising it here because A4's own
-choice needs the same review.
+Charter §1.2 bans LGPL/GPL/AGPL/SSPL across **all three repos**. Core originally
+flagged that A4 §6 selected **`psycopg` v3 (LGPL-3.0)** — non-compliant for platform
+too, and the license CI gate would have failed on it.
+
+**Platform acted on the flag and swapped the driver.** A4 now uses **`pg8000` (BSD)**
+— verified live at `pg8000 1.31.5`; `postgres_sink.py` and `A4_audit_index_port.md`
+both record the rejection in-line ("psycopg v3 is rejected: LGPL-3.0, banned by §1.2
+— caught in core's POSTGRES_READ_CONTRACT.md").
+
+Core uses `pg8000` too (behind the `treval[postgres]` extra), so both repos are on the
+same permissive driver. **No open license item.**
+
+> **Process note (worth keeping):** this is the cross-repo contract doing exactly what
+> it exists for — a consumer-side license review caught a producer-side dependency
+> before it shipped. The mechanism is cheap; keep using it.
 
 ## 8. What core will NOT do
 
@@ -135,8 +146,11 @@ choice needs the same review.
 
 ## 9. Remaining asks for platform (everything else is settled by A4)
 
+Both remaining items are **ops/deploy, not code** — neither blocks EV-2's design or
+implementation (Platform confirmed 2026-07-14):
+
 1. **Read-only `SELECT` grant** on `<schema_name>.audit_events` for core's consumer.
-2. **Driver license:** swap `psycopg` (LGPL) → `pg8000`/`asyncpg` (§7) — for A4's
-   own charter compliance; core uses permissive regardless.
-3. Confirm the read consumer connection/TLS expectations (likely the same
+2. Confirm the read consumer connection/TLS expectations (likely the same
    `sslmode`/cert config A4 already exposes).
+
+~~3. **Driver license:** swap `psycopg` (LGPL) → `pg8000`~~ — ✅ **done**, see §7.
