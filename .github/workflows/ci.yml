@@ -125,3 +125,12 @@ jobs:
           else
             echo "License compliance check passed."
           fi
+          
+  ci-success:
+    needs: [build]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Gate on the whole build matrix
+        run: |
+          [ "${{ needs.build.result }}" = "success" ] || { echo "build matrix failed"; exit 1; }
