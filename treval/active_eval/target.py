@@ -13,6 +13,7 @@ httpx is imported lazily inside probe(), so importing this module — and
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -172,6 +173,7 @@ class GatewayTarget:
         invoke_path: str = "/v1/tools:invoke",
         temperature: float | None = 0.0,  # pin for reproducible statistical runs (D5)
         timeout: float = 30.0,
+        admin_url: str | None = None,  # gateway admin API (drain cursor)
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
@@ -181,6 +183,7 @@ class GatewayTarget:
         self._invoke_path = invoke_path
         self._temperature = temperature
         self._timeout = timeout
+        self._admin_url = admin_url.rstrip("/") if admin_url is not None else None
 
     def probe(self, case: CorpusCase) -> ProbeResult:
         import httpx  # lazy: only needed to drive a live gateway
@@ -308,6 +311,61 @@ class GatewayTarget:
                 break
         return decision_ev, response_ev
 
+    def _read_cursor(self) -> dict | None:
+        """GET {admin_url}/admin/v1/audit:cursor — the gateway's LIVE drain cursor
+        (wal_head_seq / guardrail_cursor_seq / guardrail_degraded / tailer_cursor_seq).
+
+        Returns the parsed dict, or None on ANY failure (no admin_url, non-200, transport
+        or JSON-parse error) so drain_governance() degrades to the timeout backstop rather
+        than raising. httpx imported lazily, like probe()."""
+        if self._admin_url is None:
+            return None
+        import httpx  # lazy: only needed to drive a live gateway
+
+        try:
+            resp = httpx.get(self._admin_url + "/admin/v1/audit:cursor", timeout=5.0)
+            if resp.status_code != 200:
+                return None
+            parsed = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    def _scan_governance(
+        self, wanted: set[str], found: dict[str, AuditEvidence]
+    ) -> None:
+        """ONE scan over the eval-tenant WAL, adding to `found` any not-yet-seen
+        record_type=3 (async governance) record whose request_id is still wanted. This is
+        the ORIGINAL drain read/join, factored out unchanged — only the STOP condition in
+        drain_governance() moved from a timeout guess to the drain cursor."""
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return
+        for ev in WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id):
+            rid = ev.ref.request_id
+            if (
+                rid in wanted
+                and rid not in found
+                and ev.record.record_type == _GOVERNANCE_OBSERVED
+            ):
+                found[rid] = ev
+
+    def _drain_to_deadline(
+        self,
+        wanted: set[str],
+        found: dict[str, AuditEvidence],
+        deadline: float,
+        poll_interval: float,
+    ) -> None:
+        """The timeout BACKSTOP (the pre-cursor behaviour, kept as the absolute ceiling):
+        poll-scan the WAL until every wanted request_id has a type-3 record OR the deadline
+        fires. Used when no cursor is available, or the cursor degrades/errors mid-drain."""
+        while wanted - found.keys():
+            self._scan_governance(wanted, found)
+            if not (wanted - found.keys()) or time.monotonic() >= deadline:
+                break
+            time.sleep(poll_interval)
+
     def drain_governance(
         self,
         results: list[ProbeResult],
@@ -320,30 +378,73 @@ class GatewayTarget:
 
         The Tier-2 hint is NOT in the synchronous decision read (_read_evidence runs right
         after the probe; the background evaluator writes ~2s later), so a naive run never
-        sees it. Call this ONCE after the whole run: poll the eval-tenant WAL until the
-        record_type=3 records for these request_ids land (or `timeout`), join by request_id,
-        attach. Probes whose record never arrives keep governance_evidence=None (the Tier-2
-        indicators count that as `no-async`, never a silent zero-lift). No WAL ⇒ unchanged.
+        sees it. Call this ONCE after the whole run, joining by request_id.
+
+        The STOP condition is DETERMINISTIC, not a timeout guess (C0-d): snapshot the WAL
+        head ONCE at drain start, then poll the gateway's admin drain cursor until the
+        shadow evaluator's `guardrail_cursor_seq` catches up to that head — at which point
+        every type-3 record that will EVER exist for this batch has been produced. Probes
+        still missing a record after a clean deterministic stop are therefore GENUINE
+        no-async (the judge scored below τ, no hint written), NOT a drain artifact — the
+        Tier-2 indicators count that as `no-async`, never a silent zero-lift.
+
+        Degradations (all keep the run moving, never hang): no admin cursor, a degraded
+        evaluator, or a mid-drain cursor error each fall back to the `timeout` backstop and
+        emit a loud stderr warning that the lift may be under-measured. `timeout` is also
+        kept as the absolute ceiling even on the deterministic path. No WAL ⇒ unchanged.
 
         Operator-run (network + sleep), like probe() — NOT part of the pure engine."""
         wal_dir = self._wal_dir
         if wal_dir is None:
             return results
         wanted = {r.request_id for r in results if r.request_id}
+        if not wanted:
+            return results
         found: dict[str, AuditEvidence] = {}
         deadline = time.monotonic() + timeout
-        while wanted - found.keys():
-            for ev in WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id):
-                rid = ev.ref.request_id
-                if (
-                    rid in wanted
-                    and rid not in found
-                    and ev.record.record_type == _GOVERNANCE_OBSERVED
-                ):
-                    found[rid] = ev
-            if not (wanted - found.keys()) or time.monotonic() >= deadline:
-                break
-            time.sleep(poll_interval)
+
+        cursor = self._read_cursor()
+        if cursor is None:
+            # No cursor endpoint on the FIRST read → timeout guess (lift under-measured).
+            print(
+                "drain: no cursor endpoint — lift may be under-measured "
+                "(fell back to timeout)",
+                file=sys.stderr,
+            )
+            self._drain_to_deadline(wanted, found, deadline, poll_interval)
+        else:
+            # Snapshot the head ONCE — the evaluator appends type-3 which pushes the head
+            # up; re-reading it each loop would chase a moving target (never terminating).
+            probe_head = int(cursor.get("wal_head_seq", 0))
+            while True:
+                self._scan_governance(wanted, found)
+                cur = self._read_cursor()
+                if cur is None:
+                    print(
+                        "drain: cursor read failed mid-poll — used timeout backstop",
+                        file=sys.stderr,
+                    )
+                    self._drain_to_deadline(wanted, found, deadline, poll_interval)
+                    break
+                if int(cur.get("guardrail_cursor_seq", 0)) >= probe_head:
+                    self._scan_governance(wanted, found)  # one final read+join
+                    break
+                if cur.get("guardrail_degraded"):
+                    print(
+                        "drain: guardrail degraded — used timeout backstop",
+                        file=sys.stderr,
+                    )
+                    self._drain_to_deadline(wanted, found, deadline, poll_interval)
+                    break
+                if time.monotonic() >= deadline:
+                    print(
+                        "drain: cursor did not catch up within backstop — "
+                        "lift may be under-measured",
+                        file=sys.stderr,
+                    )
+                    break
+                time.sleep(poll_interval)
+
         if not found:
             return results
         return [
