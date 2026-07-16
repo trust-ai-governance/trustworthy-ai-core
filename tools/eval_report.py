@@ -184,6 +184,10 @@ def _target(timeout: float) -> GatewayTarget:
         model=os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash"),
         temperature=0.0,  # pin for the statistical (leak/disclosure/passthrough) verticals
         timeout=timeout,
+        # C0-d: the gateway ADMIN API (port 8081, not the 8080 data plane) — its live
+        # drain cursor lets drain_governance() stop deterministically instead of guessing.
+        # Unset ⇒ None ⇒ the safe timeout-drain fallback.
+        admin_url=os.environ.get("TREVAL_EVAL_ADMIN_URL"),
     )
 
 
