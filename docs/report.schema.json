@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://trust-ai-governance/treval/report.schema.json",
+  "title": "treval self-contained maturity report bundle (EV-R1)",
+  "description": "The UI's stable consumption seam: one file inlining the report, the registry needed to render + join, and the measurements. Derived from the frozen MaturityReport/Measurement dataclasses + REPORT_JSON_SCHEMA.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "registry_fingerprint", "report", "registry", "measurements"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "registry_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "report": {"$ref": "#/definitions/report"},
+    "registry": {"$ref": "#/definitions/registry"},
+    "measurements": {"type": "array", "items": {"$ref": "#/definitions/measurement"}}
+  },
+  "definitions": {
+    "level_or_null": {
+      "type": ["string", "null"],
+      "pattern": "^L[1-5]$"
+    },
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "seq", "request_id"],
+      "properties": {
+        "source": {"type": "string"},
+        "seq": {"type": ["integer", "null"]},
+        "request_id": {"type": ["string", "null"]}
+      }
+    },
+    "objective_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective_id", "kind", "status", "evidence_refs"],
+      "properties": {
+        "objective_id": {"type": "string"},
+        "kind": {"enum": ["measured", "attested"]},
+        "status": {"enum": ["met", "unmet", "insufficient_data", "unverified_evidence"]},
+        "evidence_refs": {"type": "array", "items": {"$ref": "#/definitions/evidence_ref"}}
+      }
+    },
+    "dimension_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dimension", "measured_ceiling", "attested_ceiling", "awarded_level", "objectives", "gaps"],
+      "properties": {
+        "dimension": {"type": "string"},
+        "measured_ceiling": {"$ref": "#/definitions/level_or_null"},
+        "attested_ceiling": {"$ref": "#/definitions/level_or_null"},
+        "awarded_level": {"$ref": "#/definitions/level_or_null"},
+        "objectives": {"type": "array", "items": {"$ref": "#/definitions/objective_result"}},
+        "gaps": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "window", "dimensions", "integrity_summary", "verification_basis"],
+      "properties": {
+        "tenant_id": {"type": "string"},
+        "window": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+        "dimensions": {"type": "array", "items": {"$ref": "#/definitions/dimension_report"}},
+        "integrity_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["verified", "unverified", "broken"],
+          "properties": {
+            "verified": {"type": "integer", "minimum": 0},
+            "unverified": {"type": "integer", "minimum": 0},
+            "broken": {"type": "integer", "minimum": 0}
+          }
+        },
+        "verification_basis": {"enum": ["wal", "index", "hybrid"]}
+      }
+    },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["indicator_id", "dimension", "value", "unit", "sample_size", "subject", "notes", "integrity", "evidence_refs"],
+      "properties": {
+        "indicator_id": {"type": "string"},
+        "dimension": {"type": "string"},
+        "value": {"type": "number"},
+        "unit": {"type": "string"},
+        "sample_size": {"type": "integer", "minimum": 0},
+        "subject": {"type": "string"},
+        "notes": {"type": "string"},
+        "integrity": {"enum": ["verified", "unverified", "broken"]},
+        "evidence_refs": {"type": "array", "items": {"$ref": "#/definitions/evidence_ref"}}
+      }
+    },
+    "registry_objective": {
+      "type": "object",
+      "required": ["id", "statement_zh", "kind", "indicator_id"],
+      "properties": {
+        "id": {"type": "string"},
+        "statement_zh": {"type": "string"},
+        "kind": {"enum": ["measured", "attested"]},
+        "indicator_id": {"type": ["string", "null"]},
+        "posture_key": {"type": ["string", "null"]},
+        "satisfied_when": {"type": ["string", "null"]}
+      }
+    },
+    "registry_dimension": {
+      "type": "object",
+      "required": ["id", "title_en", "title_zh", "levels"],
+      "properties": {
+        "id": {"type": "string"},
+        "title_en": {"type": "string"},
+        "title_zh": {"type": "string"},
+        "levels": {
+          "type": "object",
+          "additionalProperties": {"type": "array", "items": {"$ref": "#/definitions/registry_objective"}}
+        }
+      }
+    },
+    "registry": {
+      "description": "The inlined DimensionRegistry (EV-W0 serialize_registry shape) the UI needs for the grid structure + the objective->indicator_id value join.",
+      "type": "object",
+      "required": ["schema_version", "kind", "levels_meta", "dimensions"],
+      "properties": {
+        "schema_version": {"type": "integer"},
+        "kind": {"type": "string"},
+        "levels_meta": {"type": "array"},
+        "dimensions": {"type": "array", "items": {"$ref": "#/definitions/registry_dimension"}}
+      }
+    }
+  }
+}

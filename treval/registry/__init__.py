@@ -17,6 +17,12 @@ from treval.registry.satisfied_when import (
     SatisfiedWhenError,
     compile_satisfied_when,
 )
+from treval.registry.serialize import (
+    DIMENSION_ORDER,
+    LEVELS,
+    LEVELS_META,
+    serialize_registry,
+)
 
 __all__ = [
     "Evidence",
@@ -28,4 +34,9 @@ __all__ = [
     "RegistryError",
     "compile_satisfied_when",
     "SatisfiedWhenError",
+    # canonical registry → dict (consumed by treval.web AND treval.rubric)
+    "serialize_registry",
+    "LEVELS",
+    "LEVELS_META",
+    "DIMENSION_ORDER",
 ]

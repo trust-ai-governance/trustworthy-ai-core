@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(PYTHONPATH=lib/python3.12/site-packages cat lib/python3.12/site-packages/trustworthy_ai/v1/request_context_pb2.pyi)"
-    ]
-  }
-}
