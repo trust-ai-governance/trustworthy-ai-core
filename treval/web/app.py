@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from treval.registry import load_registry
-from treval.web.serialize import serialize_registry
+from treval.registry import serialize_registry
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = _HERE / "templates"

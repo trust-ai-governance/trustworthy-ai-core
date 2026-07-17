@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from treval import load_registry
-from treval.web.serialize import (
+from treval.registry.serialize import (
     DIMENSION_ORDER,
     LEVELS,
     LEVELS_META,
@@ -122,13 +122,36 @@ def test_serialized_structure_matches_sample():
 # Lazy web extra — importing the serializer must NOT pull in FastAPI
 # --------------------------------------------------------------------------- #
 def test_serializer_import_does_not_require_fastapi():
-    """`import treval` + the pure serializer must work with no web deps loaded —
-    proves FastAPI/uvicorn/Jinja2 stay in the optional extra (run in a clean
-    subprocess so an already-imported fastapi can't mask a leak)."""
+    """`import treval` + `import treval.web` (whose create_app is lazy) must work with no
+    web deps loaded — proves FastAPI/uvicorn/Jinja2 stay in the optional extra (run in a
+    clean subprocess so an already-imported fastapi can't mask a leak)."""
     code = (
-        "import sys; import treval; import treval.web.serialize; "
+        "import sys; import treval; import treval.web; "
         "assert 'fastapi' not in sys.modules, 'fastapi leaked into core import'; "
         "assert 'uvicorn' not in sys.modules, 'uvicorn leaked into core import'"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Layering — the engine must never import the web layer (EV-R1 regression guard)
+# --------------------------------------------------------------------------- #
+def test_engine_import_does_not_pull_the_web_layer():
+    """`import treval` (engine + CLI) must NOT pull `treval.web` at all — the dependency
+    runs web → engine, never the reverse.
+
+    This invariant has been broken once already: EV-R1's first pass had
+    `treval/rubric/serialize.py` import `serialize_registry` from `treval.web`, which was
+    harmless only because that function happened to be dependency-free. The fix moved it to
+    `treval.registry` (both web and rubric import it from there). Guarding it here so a
+    future web-layer import can't creep back in and silently couple the engine to the
+    optional `treval[web]` extra. Clean subprocess: this test session has already imported
+    treval.web, which would mask the leak."""
+    code = (
+        "import sys; import treval; "
+        "leaked = sorted(m for m in sys.modules if m.startswith('treval.web')); "
+        "assert not leaked, f'engine imported the web layer: {leaked}'"
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr

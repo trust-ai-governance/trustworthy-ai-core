@@ -2,8 +2,8 @@
 
 Emits the report-bundle envelope defined in `docs/REPORT_JSON_SCHEMA.md`: the rubric
 verdict PLUS the measurements that fed it (the report stores only pass/fail, the UI wants
-both). Pure — only `json` + the frozen dataclasses; no web deps, so it imports in the
-core/CLI environment (like `treval.web.serialize`, but for the report side).
+both). Pure — `json`/`hashlib` + the frozen dataclasses + the canonical registry serializer
+(`treval.registry.serialize`). The engine NEVER imports the web layer (tests/test_layering.py).
 
 Determinism (the EV-7 byte-identical requirement): object keys sorted, and every array
 has a DEFINED order independent of insertion — `dimensions`/`objectives` in the engine's
@@ -13,6 +13,7 @@ has a DEFINED order independent of insertion — `dimensions`/`objectives` in th
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from typing import Any
@@ -24,6 +25,7 @@ from treval.models import (
     Measurement,
     ObjectiveResult,
 )
+from treval.registry import DimensionRegistry, serialize_registry
 
 SCHEMA_VERSION = 1
 
@@ -107,6 +109,65 @@ def bundle_to_json(report: MaturityReport, measurements: Iterable[Measurement]) 
     for on-disk bytes."""
     return json.dumps(
         serialize_bundle(report, measurements),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# EV-R1 — the self-contained DELIVERY bundle: report + inline registry +
+# measurements + a registry fingerprint, so the UI renders the 5×5 grid AND the
+# value column (the objective→value join runs through the registry) from ONE file.
+# Assembly at serialize time only — the engine dataclasses are unchanged.
+# --------------------------------------------------------------------------- #
+
+
+def _fingerprint_of(registry_dict: dict[str, Any]) -> str:
+    """sha256 over a registry's canonical (sorted-key, compact) serialization — the
+    mismatch-detection handle the decoupled path uses (EV-R1 §1)."""
+    canonical = json.dumps(
+        registry_dict, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def registry_fingerprint(registry: DimensionRegistry) -> str:
+    """The `registry_fingerprint` for a loaded registry (EV-R1 §1). EV-W1 compares this to
+    the registry it loaded and warns on mismatch; within a self-contained bundle it is
+    redundant (the registry is inlined) but kept for the future decoupled path."""
+    return _fingerprint_of(serialize_registry(registry))
+
+
+def serialize_self_contained_bundle(
+    report: MaturityReport,
+    measurements: Iterable[Measurement],
+    registry: DimensionRegistry,
+) -> dict[str, Any]:
+    """The EV-R1 delivery envelope `{schema_version, registry_fingerprint, report, registry,
+    measurements}` (docs/REPORT_JSON_SCHEMA.md §1a). The registry is inlined via the EV-W0
+    serializer — the same shape EV-W0 renders — so the UI loads one file and never mis-pairs
+    parts. `report`/`measurements` are the EV-7 shapes, unchanged."""
+    registry_dict = serialize_registry(registry)
+    base = serialize_bundle(report, measurements)
+    return {
+        "schema_version": base["schema_version"],
+        "registry_fingerprint": _fingerprint_of(registry_dict),
+        "report": base["report"],
+        "registry": registry_dict,
+        "measurements": base["measurements"],
+    }
+
+
+def self_contained_bundle_to_json(
+    report: MaturityReport,
+    measurements: Iterable[Measurement],
+    registry: DimensionRegistry,
+) -> str:
+    """Byte-deterministic JSON for the self-contained bundle (sorted keys + compact
+    separators + ensure_ascii=False). This is the golden-fixture / delivery form."""
+    return json.dumps(
+        serialize_self_contained_bundle(report, measurements, registry),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
