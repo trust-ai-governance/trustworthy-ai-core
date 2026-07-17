@@ -1,0 +1,5 @@
+# Dev/test-only extras — NOT required by the core library, CLI, or `import treval`.
+# The engine core has no runtime dependency on these. Install with:
+#   pip install -r requirements-dev.txt
+# Permissive-licensed (MIT), per Charter §1.2.
+jsonschema>=4.0   # MIT — validates report bundles against docs/report.schema.json (EV-R1 contract test)

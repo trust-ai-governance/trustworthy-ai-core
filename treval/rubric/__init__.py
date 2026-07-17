@@ -10,9 +10,12 @@ from __future__ import annotations
 from treval.rubric.engine import DuplicateIndicatorError, evaluate
 from treval.rubric.serialize import (
     bundle_to_json,
+    registry_fingerprint,
     serialize_bundle,
     serialize_measurement,
     serialize_report,
+    serialize_self_contained_bundle,
+    self_contained_bundle_to_json,
 )
 
 __all__ = [
@@ -22,4 +25,8 @@ __all__ = [
     "serialize_measurement",
     "serialize_bundle",
     "bundle_to_json",
+    # EV-R1 — self-contained delivery bundle
+    "serialize_self_contained_bundle",
+    "self_contained_bundle_to_json",
+    "registry_fingerprint",
 ]

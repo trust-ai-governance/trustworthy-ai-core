@@ -1,20 +1,28 @@
-"""Serialize a loaded DimensionRegistry to the EV-W0 `registry.json` shape.
+"""Serialize a loaded DimensionRegistry to the canonical `registry.json` shape.
 
-Pure — **no web dependencies** (FastAPI/uvicorn/Jinja2 are not imported here), so
-`import treval.web.serialize` works in the core library/CLI environment. The web
-app (treval.web.app) imports this; the reverse never happens.
+Pure registry → dict: no web, no engine deps. It lives WITH the registry (not the web
+layer) because more than one consumer needs it and the engine must never import web:
+  - `treval.web` renders it as the EV-W0 `GET /api/registry` payload;
+  - `treval.rubric.serialize` inlines it into the EV-R1 self-contained report bundle
+    (+ hashes it for `registry_fingerprint`).
+Both edges are then `→ treval.registry`, keeping the "engine never imports web" invariant
+(guarded by tests/test_layering.py).
 
 The output mirrors EV-6's model field-for-field (no parallel schema): each
 `ControlObjective`'s `Evidence` is flattened onto the objective, and the universal
-`levels_meta` constant is added (levels are not in the per-dimension YAML). The
-shape is the contract in `docs/issues/EV-W0.md` §1 / `docs/web/registry.sample.json`.
+`levels_meta` constant is added (levels are not in the per-dimension YAML). The shape is
+the contract in `docs/issues/EV-W0.md` §1 / `docs/web/registry.sample.json`, and the
+`registry` half of `docs/report.schema.json` (EV-R1).
+
+Imports `treval.registry.models` directly (not the `treval.registry` package) so the
+package `__init__` can re-export this module without an import cycle.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from treval.registry import ControlObjective, Dimension, DimensionRegistry
+from treval.registry.models import ControlObjective, Dimension, DimensionRegistry
 
 SCHEMA_VERSION = 1
 
@@ -34,7 +42,7 @@ LEVELS_META: tuple[dict[str, str], ...] = (
 
 # Canonical presentation order, matching docs/MATURITY_MODEL.md and the committed
 # registry.sample.json (robustness first). The registry's own dict order is sorted
-# by filename, so the web layer imposes this stable order for deterministic output.
+# by filename, so the serializer imposes this stable order for deterministic output.
 DIMENSION_ORDER: tuple[str, ...] = (
     "robustness",
     "efficient_reliability",
