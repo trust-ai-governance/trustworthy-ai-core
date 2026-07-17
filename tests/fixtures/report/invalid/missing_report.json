@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "registry_fingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "registry": {
+    "schema_version": 1,
+    "kind": "dimension_registry",
+    "levels_meta": [],
+    "dimensions": [
+      {
+        "id": "robustness",
+        "title_en": "R",
+        "title_zh": "鲁棒",
+        "levels": {
+          "L2": [
+            {
+              "id": "rob.l2.x",
+              "statement_zh": "s",
+              "kind": "measured",
+              "indicator_id": "catch",
+              "posture_key": null,
+              "satisfied_when": "value >= 0.8"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "measurements": [
+    {
+      "indicator_id": "catch",
+      "dimension": "robustness",
+      "value": 0.9,
+      "unit": "ratio",
+      "sample_size": 10,
+      "subject": "",
+      "notes": "",
+      "integrity": "verified",
+      "evidence_refs": []
+    }
+  ]
+}

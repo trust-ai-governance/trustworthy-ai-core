@@ -512,22 +512,37 @@ stub 至标签器落地）。
 
 ## EV-R1 — Report JSON 契约（提前落，解锁 UI 工程师）
 
-- **从**：core `docs/REPORT_JSON_SCHEMA.md` + `tests/fixtures/report/*.json`
-- **维度**：框架（UI 的稳定消费契约）
-- **前置**：EV-0（`MaturityReport` 已冻结，含 `verification_basis`）
+> **设计定稿见 [`docs/issues/EV-R1.md`](issues/EV-R1.md)（2026-07-15）** —— 以下为要点摘录。
 
-**范围**
-- 据**已冻结**的 `MaturityReport` 写 JSON 契约：字段名、嵌套、枚举/`subject` 渲染、
-  键序（确定性）。EV-0 后即可写，**不等** EV-7 的序列化实现。
-- 提交若干**示例 report JSON fixtures**（覆盖：授级、过度声明 gap、`index`
-  vs `wal` 的 `verification_basis`、per-agent `subject` 行）。
-- 提供 JSON Schema（draft 2020-12）供 UI/测试校验。
+- **从**：core `docs/REPORT_JSON_SCHEMA.md` + `docs/report.schema.json` + `tests/fixtures/report/{valid,invalid}/*.json`
+- **维度**：框架（UI 的稳定消费契约）
+- **前置**：EV-0（`MaturityReport` 已冻结）+ EV-7（`bundle_to_json` 序列化器，已在）
+
+**范围（设计定稿）**
+- **自包含交付包（核心决策）**：交付/fixture 形态是**一份自包含 bundle**，内联
+  `report` + `registry` + `measurements`：`{schema_version, registry_fingerprint, report,
+  registry, measurements}`。UI 加载**一个文件**即可渲染（含 value 列 + 5×5 结构），不会漏配/错配。
+  引擎内部仍**解耦**（三个数据类不变），内联只是序列化时的组装步骤。**核心层（解耦，机器/API）
+  vs 交付层（自包含，人/UI）** —— 见设计文档 §1a。
+- **关联规则**：objective 只有 `objective_id`+`status`，值/等级/文案须经 registry 关联
+  （`objective → registry.spec.evidence.indicator_id → measurement`）—— 故 registry 必须内联。
+- **fixtures = 真序列化器生成的 golden 快照 + CI 防漂移测试**（`UPDATE_FIXTURES=1` 一键更新）；
+  覆盖六态（rich / all-not-measured / over-claim gaps / insufficient_data / verification_basis / per-subject）。
+- **正式 JSON Schema（draft-07，非 2020-12 —— 生态工具链更广，UI 无额外依赖负担）**；`invalid/` 集
+  测 UI 拒绝路径（不进 golden，防污染防漂移测试）。
 
 **验收**
-- fixtures 与 schema 互校通过；EV-7 的序列化输出（落地后）符合本 schema。
-- UI 工程师可仅凭本契约 + fixtures 起 EV-W2，无需后端就绪。
+- 每个 `valid/` fixture 过 schema 校验；drift-guard 重生成比对通过；`invalid/` 全部被 schema 拒。
+- UI 工程师仅凭一份自包含 bundle 起 EV-W2，无需后端就绪。
 
-**非目标**：序列化**实现**（EV-7）；渲染（EV-W1/W2）。
+**将来改进（证据触发，非既定任务 —— 触发条件见设计文档 §8）**：二者都**无法现在拍板**，触发条件
+须待 EV-R1 落地、生成真实 bundle / UI 实际消费（即 live test）后才可观测 —— 触发前无事可做、无 issue
+可建，EV-R1 **不因此不 ready**。① 规模化时改**解耦下发**（registry 只发一次，reports 按
+`registry_fingerprint` 配对）；② measurement 详情外移（可选 `detail_url`）。均为 `schema_version`
+加值式演进，不破契约。（**已既定且已跟踪**的 `registry_fingerprint` 失配处置在 **EV-W1**，非此处 prose。）
+
+**非目标**：序列化**实现**内部改动（EV-7 数据类不动）；渲染与服务（EV-W1/W2）；serve 时对
+`registry_fingerprint` 失配的处置（EV-W1）。
 
 ---
 

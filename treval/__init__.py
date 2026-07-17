@@ -50,8 +50,11 @@ from treval.rubric import (
     DuplicateIndicatorError,
     bundle_to_json,
     evaluate,
+    registry_fingerprint,
     serialize_bundle,
     serialize_report,
+    serialize_self_contained_bundle,
+    self_contained_bundle_to_json,
 )
 
 __all__ = [
@@ -106,4 +109,8 @@ __all__ = [
     "serialize_report",
     "serialize_bundle",
     "bundle_to_json",
+    # EV-R1 — self-contained delivery bundle
+    "serialize_self_contained_bundle",
+    "self_contained_bundle_to_json",
+    "registry_fingerprint",
 ]
