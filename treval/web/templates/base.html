@@ -1,0 +1,85 @@
+{# EV-W2 shell: EV-W0 banner (logo + scope) + left navigation + content.
+
+   Layout, and why:
+   - **Banner** carries the brand and the GLOBAL scope (租户/窗口). Scope is a property of
+     "which report am I looking at", not of a view — so it must not live inside either view
+     and must not move when the view changes.
+   - **Left nav** lists the views. A vertical rail, not top tabs, because the list grows
+     (配置运行 …) and a sidebar takes new entries without re-flowing the banner.
+   - Under SSR these are plain links/selects that navigate; nothing re-renders client-side.
+#}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}可信 AI 治理报告{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    {% include "_logo.html" %}
+    <div class="titles">
+      <h1>可信 AI 治理 <span class="en">Trustworthy-AI Governance</span></h1>
+      <p class="subtitle">Core UI · 在线只读视图</p>
+    </div>
+  </div>
+  {# TWO forms, deliberately. A single form submitted the *current* window alongside the new
+     tenant — and a window belongs to one tenant, so switching tenant carried the old tenant's
+     window and 404'd (`?tenant=__eval__&window=1784252968666568040-…`). Changing tenant is a
+     new scope: it must submit tenant ALONE and let the server pick that tenant's newest.
+     Two forms get this right with no JS, so the <noscript> path behaves identically. #}
+  <div class="scope">
+    <form class="ctl" method="get" action="{{ '/detail' if view == 'detail' else '/' }}">
+      <label for="sel-tenant">被测租户</label>
+      <select id="sel-tenant" name="tenant" onchange="this.form.submit()">
+        {% for t in scope.tenants %}
+        <option value="{{ t }}" {% if t == entry.tenant_id %}selected{% endif %}>{{ t }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit">切换</button></noscript>
+    </form>
+    <form class="ctl" method="get" action="{{ '/detail' if view == 'detail' else '/' }}">
+      <input type="hidden" name="tenant" value="{{ entry.tenant_id }}">
+      <label for="sel-window">评测窗口</label>
+      {# KNOWN BUG (EV-W1 review finding ④, awaiting a ruling — deliberately NOT patched
+         here): the producer emits window=(0,0) for an active+passive run (collect.py:171
+         "active-eval is not time-windowed"), so every report of a tenant shares one window
+         key. Two options then carry the same value AND both match `current_window`, which
+         is invalid for a single-select. The fix is to change the selection key (likely
+         generated_at_ns) — a D2 contract change, not a template tweak. #}
+      <select id="sel-window" name="window" onchange="this.form.submit()">
+        {% for w in scope.windows %}
+        <option value="{{ w.key }}" {% if w.key == scope.current_window %}selected{% endif %}>
+          {{ w.window[0] }}–{{ w.window[1] }}{% if w.newest %} (最新){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit">切换</button></noscript>
+    </form>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="sidenav">
+    <nav id="nav" aria-label="视图导航">
+      <a class="navitem {% if view == 'dash' %}on{% endif %}"
+         href="/?{{ qs }}" {% if view == 'dash' %}aria-current="page"{% endif %}>Dashboard</a>
+      <a class="navitem {% if view == 'detail' %}on{% endif %}"
+         href="/detail?{{ qs }}" {% if view == 'detail' %}aria-current="page"{% endif %}>报告详情</a>
+    </nav>
+  </aside>
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+
+    <footer class="foot">
+      <span class="ro">只读 READ-ONLY</span>
+      本视图只读：它只展示已生成并存档的报告，不评分、不重算、不修改任何数据。
+    </footer>
+  </main>
+</div>
+{% block script %}{% endblock %}
+</body>
+</html>

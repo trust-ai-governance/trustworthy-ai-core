@@ -238,3 +238,4 @@ report.json
 report.csv
 eval_report.diff
 .vscode/settings.json
+node_modules/

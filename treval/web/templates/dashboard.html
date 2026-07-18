@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% set view = 'dash' %}
+{% block title %}成熟度报告 — {{ entry.tenant_id }}{% endblock %}
+{% block content %}
+
+{# 报告标识条 — the fingerprint is the REGISTRY/rubric version (which rules graded this),
+   NOT a report fingerprint. It is identical across reports that share a registry; calling
+   it 报告指纹 would be a lie. #}
+<div id="idbar" class="idbar">
+  <span><b>评级标准指纹</b>
+    <code class="mono">{{ registry_fingerprint.replace('sha256:', '')[:10] }}</code>
+    <span class="helpwrap">
+      <button type="button" class="help" aria-label="评级标准指纹说明" aria-expanded="false">?</button>
+      <span class="pop" role="tooltip">
+        这串是<b>评分规则集（registry）的 SHA-256 指纹</b> —— 一段由全部判定规则算出的唯一编号。
+        它不是版本号，而是<b>「用哪一份规则评的」的身份证</b>：任何一条规则改动，指纹就变，这份报告随之失效。
+        第三方拿到同一份规则，能算出同样的指纹，从而确认你没有偷改评分标准。
+      </span>
+    </span>
+  </span>
+  <span><b>证据来源</b> <code class="mono basis-{{ report.verification_basis }}">{{ report.verification_basis }}</code></span>
+  <span><b>评测窗口</b> <code class="mono">{{ report.window[0] }}–{{ report.window[1] }}</code></span>
+  <span><b>实测指标</b> {{ measurement_count }} 条</span>
+</div>
+
+{# 论点条 — the page's two claims, promoted out of the footer (PM: these ARE the argument).
+   Not a colored alarm; a quiet statement of method. #}
+<div class="thesis">
+  <span><b>本报告不给总分。</b>引擎不产出总级别，这里也不会替它发明一个 —— 每一维各自可查、各自负责。</span>
+  <span><b>评分规则被 registry 指纹锁定。</b>被评方无法修改判定标准：能改规则的评级不是评级。</span>
+</div>
+
+{# 结论横幅 — derived by strict precedence, never authored (D5) #}
+<div id="verdict" class="verdict {{ verdict.kind }}">
+  <div class="vt">{{ verdict.text }}</div>
+  <div class="vs">{{ verdict.sub }}</div>
+  {% if gap_count %}
+  {# 过度声明 reads as "system failure" to an outsider — say plainly it is the intended output. #}
+  <div class="vnote">「过度声明」是本方法学要<b>暴露</b>的东西，不是系统故障：声明达标、但本次无实测证据支撑，差额即治理风险敞口。</div>
+  {% endif %}
+</div>
+
+{# 风险卡 #}
+<section id="risks" class="risks">
+  {% for c in risk_cards %}
+  <div class="rk {{ c.kind }}">
+    <span class="n">{{ c.n }}</span>
+    <span class="l">{{ c.label }}</span>
+    <span class="s">{{ c.sub }}</span>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="split">
+  {# 雷达图 — points computed server-side; no chart library #}
+  <div class="panel">
+    <div class="phead">五维成熟度雷达</div>
+    <svg id="radar" viewBox="{{ radar.viewbox }}" preserveAspectRatio="xMidYMid meet" role="img"
+         aria-label="五维成熟度雷达图；等价的文字版见右侧成熟度总表">
+      {% for points, label_y in radar.rings %}
+      <polygon class="web" points="{{ points }}"/>
+      <text class="lvl" x="{{ radar.cx + 3 }}" y="{{ label_y }}">L{{ loop.index }}</text>
+      {% endfor %}
+      {% for a in radar.axes %}
+      <line class="spoke {% if a.no_signal %}nosig{% endif %}"
+            x1="{{ radar.cx }}" y1="{{ radar.cy }}" x2="{{ a.x }}" y2="{{ a.y }}"/>
+      {% endfor %}
+      {# 过度声明:从实测到声明的那一段 — the gap made visible #}
+      {% for a in radar.axes %}
+        {% if a.over_claim and a.attested_xy %}
+        <line class="over" stroke-width="3"
+              x1="{{ a.measured_xy[0] if a.measured_xy else radar.cx }}"
+              y1="{{ a.measured_xy[1] if a.measured_xy else radar.cy }}"
+              x2="{{ a.attested_xy[0] }}" y2="{{ a.attested_xy[1] }}"/>
+        <circle class="over" cx="{{ a.attested_xy[0] }}" cy="{{ a.attested_xy[1] }}" r="4"/>
+        {% endif %}
+      {% endfor %}
+      {# Draw order = z-order: the two inputs (dashed) first, then 授级 on top as the hero.
+         实测 teal / 声明 amber / 授级 green — the same three colours as the table columns. #}
+      {% if radar.measured_polygon %}<polygon class="p-meas" points="{{ radar.measured_polygon }}"/>{% endif %}
+      {% if radar.attested_polygon %}<polygon class="p-att" points="{{ radar.attested_polygon }}"/>{% endif %}
+      {% if radar.awarded_polygon %}<polygon class="p-awarded" points="{{ radar.awarded_polygon }}"/>{% endif %}
+      {% for a in radar.axes %}
+        {% if a.awarded_xy %}<circle class="dot-a" cx="{{ a.awarded_xy[0] }}" cy="{{ a.awarded_xy[1] }}" r="3.6"/>{% endif %}
+      {% endfor %}
+      {% for a in radar.axes %}
+      <text class="axl {% if a.no_signal %}nosig{% endif %}"
+            x="{{ a.label_x }}" y="{{ a.label_y }}" text-anchor="{{ a.label_anchor }}">{{ a.title }}</text>
+      {% if a.no_signal %}
+      <text class="axsub" x="{{ a.label_x }}" y="{{ a.label_y + 11 }}"
+            text-anchor="{{ a.label_anchor }}">无实测信号</text>
+      {% endif %}
+      {% endfor %}
+    </svg>
+    {# 怎么读 — one line of read-instructions (PM UI-5). #}
+    <p class="howto">怎么读：<b>绿实线</b>是授级（成熟度的地基）；橙虚线露在绿线外 = 声明高于实测；
+      蓝虚线露在外 = 实测有余量、未声明。</p>
+    <div class="legend">
+      <span><i class="sw awarded"></i><b>授级</b>（成熟度 = min 实测,声明）</span>
+      <span><i class="sw meas"></i>实测 measured_ceiling</span>
+      <span><i class="sw att"></i>声明 attested_ceiling</span>
+      <span><i class="sw risk"></i>过度声明（声明 &gt; 实测）</span>
+      <span><i class="sw nosig"></i>无实测信号 —— <b>无信号 ≠ 0 分</b></span>
+    </div>
+  </div>
+
+  {# 成熟度总表 — also the radar's text alternative (accessibility) #}
+  <div class="panel">
+    <div class="phead">成熟度总表</div>
+    <table id="mat" class="tbl">
+      <thead><tr>
+        <th>维度</th><th>实测</th><th>声明</th><th>授级</th>
+        <th>结论
+          <span class="helpwrap">
+            <button type="button" class="help" aria-label="结论说明" aria-expanded="false">?</button>
+            <span class="pop" role="tooltip">
+              「结论」比较的是<b>实测 vs 声明</b>，不是完整性、也不是授级本身：
+              <ul>
+                <li><b>一致</b> = 实测支撑声明（声明未超过实测）</li>
+                <li><b>声明高于实测 / 过度声明 N</b> = 已声明达标，但实测证据不支持</li>
+                <li><b>无实测信号</b> = 该维度本次未采到实测数据（≠ 0 分）</li>
+              </ul>
+            </span>
+          </span>
+        </th>
+      </tr></thead>
+      <tbody>
+        {% for r in maturity_rows %}
+        <tr>
+          <td>{{ r.title }}</td>
+          <td class="mono meas">{{ r.measured }}</td>
+          <td class="mono att">{{ r.attested }}</td>
+          <td class="mono awarded">{{ r.awarded }}</td>
+          <td><span class="pill {{ r.pill.kind }}">{{ r.pill.text }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="note">授级 = min(实测, 声明) —— 短板决定；声明抬不高实测。</p>
+  </div>
+</section>
+{% endblock %}
+
+{% block script %}
+<script src="/static/help.js?v={{ static_v }}" defer></script>
+{% endblock %}

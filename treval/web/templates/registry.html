@@ -4,35 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>可信 AI 成熟度模型 · Trustworthy-AI Maturity Model</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ static_v | default('0') }}">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo" aria-hidden="true">
-        <svg viewBox="0 0 92 60" width="48" height="31" fill="currentColor"
-             role="img" aria-label="treval logo">
-          <!-- "<" chevron — 5 modules stacked top → bottom -->
-          <rect x="24.75" y="0.75"  width="10.5" height="10.5" rx="2.2"/>
-          <rect x="12.75" y="12.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="0.75"  y="24.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="12.75" y="36.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="24.75" y="48.75" width="10.5" height="10.5" rx="2.2"/>
-          <!-- "口" hollow square — 12-module 4×4 ring, height-matched to "<" -->
-          <rect x="45" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
-          <rect x="57" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
-          <rect x="69" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
-          <rect x="81" y="6.75"  width="10.5" height="10.5" rx="2.2"/>
-          <rect x="45" y="18.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="81" y="18.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="45" y="30.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="81" y="30.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="45" y="42.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="57" y="42.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="69" y="42.75" width="10.5" height="10.5" rx="2.2"/>
-          <rect x="81" y="42.75" width="10.5" height="10.5" rx="2.2"/>
-        </svg>
-      </span>
+      {% include "_logo.html" %}
       <div class="titles">
         <h1>可信 AI 成熟度模型 <span class="en">Trustworthy-AI Maturity Model</span></h1>
         <p class="subtitle">
