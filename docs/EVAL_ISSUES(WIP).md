@@ -546,54 +546,84 @@ stub 至标签器落地）。
 
 ---
 
-## EV-W1 — `treval[web]` 只读服务（API + SSR 骨架）
+## EV-W1 — 只读报告服务（报告存储 + 索引 + SSR 端点）
 
-- **从**：core `treval/web/`（`treval[web]` extra）
+> **设计定稿见 [`docs/issues/EV-W1.md`](issues/EV-W1.md)（2026-07-17）** —— 以下为要点摘录。
+> 原第 2 轮 stub 的三处已被原型 + 代码核对推翻，见下「与原 stub 的差异」。
+
+- **从**：core `treval/web/`（`treval[web]` extra，宿主是已并入的 EV-W0）
 - **维度**：框架 / Transparency（结果可视）
-- **前置**：EV-7（report）、EV-R1（契约）、EV-1 和/或 EV-2（drill-down reader）
+- **前置**：EV-7（report）、EV-R1（契约，已并）、EV-W0（服务骨架，已并）
 
 **范围**
-- **FastAPI + Jinja2（+ HTMX）**，只读。端点：`GET /`、`GET /report`（缓存报告的
-  SSR HTML）、`GET /report.json`（EV-R1 JSON）、`GET /evidence/{request_id}`
-  （实时 drill-down，走 reader 点查）。
-- **服务缓存报告，不每请求重算**（引擎跑得慢）；带 `generated_at_ns`；regenerate
-  仅管理员/异步。
-- **鉴权 + 租户作用域为硬验收**（暴露审计证据，含潜在 PII）：默认 loopback 绑定 +
-  可选 token（仿平台 admin）；每查询带 `tenant_id`（宪法 §7）；**绝不渲染完整响应体**
-  （宪法 §12）。
-- 依赖隔离：`treval.web` import 引擎；**引擎绝不 import web**。web 依赖
-  （FastAPI MIT / Starlette·Jinja2·uvicorn BSD / HTMX BSD-2）走 license CI。
+- **报告存储（新增）**：`treval report --self-contained --out-dir DIR` 落 EV-R1 交付 bundle；
+  内容寻址 `bundles/<sha256>.json` + `index.json`（原子替换）。**服务只读该目录，绝不在请求里跑引擎**
+  —— 这是「切租户秒级」的前提。
+- 端点：`GET /reports`（索引，喂顶栏两个下拉，默认最新）、`GET /`（Dashboard SSR）、
+  `GET /detail`（报告详情 SSR）、`GET /report.json`（**原样返回存储字节**）、`GET /api/registry`（EV-W0 不变）。
+- **无任何写路由**；**无 `/evidence`** ⇒ 服务不读、不渲染任何请求体，宪法 §12 由构造保证而非靠约束。
+- 鉴权：loopback + token，**operator/审计视图**，非多租户门户（逐人租户 ACL 属 Platform）。
+- 依赖隔离：`treval.web` import 引擎；**引擎绝不 import web**（`tests/test_web.py` 两条守卫已在）。
 
-**验收**
-- 指向一个 fixture 报告：`GET /report.json` 符合 EV-R1 schema；`GET /` 返回渲染好
-  的 SSR HTML（含 5×5 网格 + `verification_basis` 提示条）；`GET /evidence/{id}`
-  能 drill-down。
-- 未鉴权 / 跨租户请求被拒；任何端点都不外泄完整响应体。
-- 覆盖/mypy/ruff；`pip install treval`（不带 extra）时引擎/CLI 不拉 web 依赖。
-- （E2E，测试负责）真实启服务 + 真实/样例报告。
+**与原 stub 的差异（均经代码/真数据核对）**
+1. **`/evidence` 撤销** —— 定稿 UI 不下钻到请求级，无消费方；撤掉后服务不暴露任何 PII。
+2. **regenerate 管理员 + 异步 撤销** —— 重新评测改为**外链跳转**到评测执行页 ⇒ 只读性由构造保证。
+3. **新增报告存储** —— 今天**没有任何组件存储生成好的报告**；且 CLI 的 `--format json` 走的是
+   core 层 `bundle_to_json`，**产不出 EV-R1 交付 bundle**（须 `self_contained_bundle_to_json`）。
 
-**非目标**：dashboard 模板/UX（EV-W2）；写操作；多报告/历史（后续）。
+**待裁定**：**O1** —— 重新评测跳去哪？评测执行页**不存在**（今天只有 CLI）。
+建议先落「显示可复制的 CLI 命令」（诚实、零新面），见设计文档 §8。
+
+**非目标**：dashboard 模板/UX（EV-W2）；写操作；`/evidence`；逐人租户 ACL；留存/GC。
 
 ---
 
 ## EV-W2 — Dashboard 模板 / UX（UI 工程师）
 
+> **设计定稿见 [`docs/issues/EV-W2.md`](issues/EV-W2.md)（2026-07-17）** —— 以下为要点摘录。
+> 呈现已用**六份真实 fixture 的原型**评审定稿：本 issue 是**誊写，不是探索**。
+
 - **从**：core `treval/web/templates/`（+ 静态资源）
 - **维度**：框架（可视化）
-- **前置**：EV-R1（fixtures 起步）→ EV-W1（端点集成）
+- **前置**：EV-R1（fixtures 起步，已并）→ EV-W1（端点集成）
 
 **范围**
-- Jinja2 模板 + HTMX 交互：5×5 成熟度网格、逐维 measured-vs-attested + gap 视图、
-  evidence drill-down、完整性/`verification_basis` 提示条。SSR——client 下载渲染好
-  的 HTML（不引入前端构建链）。
-- 先用 EV-R1 fixtures 离线开发，EV-W1 就绪后接真数据。
+- 两个视图：**Dashboard = 结论**（结论横幅 · 风险卡 · **雷达图** ǀ **成熟度总表**）；
+  **报告详情 = 依据**（**判定规则与本次结果合并为一张表**，71 行，可按类型/维度/只看过度声明筛选 + 搜索）。
+- 租户/窗口下拉**常驻顶栏**，跨视图不变（全局作用域 vs 视图）。
+- **`null` 不是 0** —— 无实测信号的维度画灰虚轴 + 标注，**绝不画成 0 分**（否则等于给没测过的维度捏造一个不及格）。
+- 雷达图纯 SVG，点由 EV-W1 服务端算（`radar_points()`），**不引图表库**。
+- 判定规则 **WAF Signature 式**：全可查、**零编辑入口**；讲明为何不可改（`registry_fingerprint` 绑定）
+  以及与 WAF 的差别（**语料原文不公开，只公开清单 ID+类别+sha256**）。
+- 设计 token **沿用 EV-W0**（`--measured` teal / `--attested` amber / logo / banner），仅新增 `--risk`。
 
-**验收**
-- 用 fixtures 渲染出三类页面（总览/维度/证据）；无后端亦可静态预览。
-- 接 EV-W1 后端到端走通；可访问性/空数据/`insufficient_data` 态有合理呈现。
-- 与 EV-W1 共同的 E2E（测试负责）。
+**验收**（详见设计文档 §8）
+- 六份 fixture 全部正确渲染，尤其 `all_not_measured`（5 根无信号轴，不捏造 0）与 `verification_basis`（破损 → 结论①）。
+- **无头渲染守卫为硬验收**：断言**零 JS 错误** + 关键元素存在。
+  *理由（本 issue 自己的历史）*：原型三轮上线即坏 —— 一次引号错配吞掉表格单元格导致整列错位，
+  一次 `title="…"` 嵌在双引号 JS 字符串里抛 `SyntaxError` 整页白屏。**两次源码审阅都看着是对的。**
+- 决不臆造总分（`MaturityReport` 没有总体等级）；界面不出现内部措辞（待裁定/issue 号）。
 
-**非目标**：SPA/JS 构建链；图表库重依赖（先 SSR + 轻量）；PDF 导出（后续）。
+**非目标**：SPA/JS 构建链；图表库；导出/打印报告（**当前目标是在线视图**）；请求级下钻；语料清单浏览（依赖语料库）。
+
+---
+
+## EV-R2 — active-eval 用例级结果契约（**新增，第 3 轮**）
+
+- **从**：core `tools/eval_report.py`(active) + 新契约
+- **前置**：无（与 EV-W1/W2 正交）
+- **触发**：原型评审时提出「详情页要能看失败/成功的用例名字」。
+
+**为什么它不在 EV-R1/EV-W1 里（经代码核对）**
+`case_id` 只活在 active eval 进程的 `ProbeResult`（`treval/active_eval/target.py:49`）；探针只发
+`x-agent-id` + `{tool_id, params}` ⇒ **case 名字从没进过 WAL**。EV-R1 是 **passive** 流水线，读 WAL 生产流量 ——
+样本是**真实请求（request_id），不是测试用例**。**扩 EV-R1 契约也变不出引擎从没观测过的字段。**
+用例级结果属于 **active** 那条流水线（OWASP LLM Top-10），今天只出 markdown/csv，**无机器可读契约**。
+
+**范围（待设计）**：给 active eval 一份 JSON 契约（case_id ↔ request_id ↔ 判定 ↔ 证据指针），
+使 UI 能呈现用例级结果。**注意**：它承载请求内容 ⇒ PII 面与 EV-W1 完全不同，须独立威胁模型。
+
+**非目标**：把用例名单塞进 EV-R1 bundle（数据不存在，且会把 PII 塞进交付物）。
 
 ---
 

@@ -19,30 +19,35 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 from treval.cli.bundle import BundleError, load_bundle
 from treval.cli.render import render_csv, render_human
+from treval.models import MaturityReport, Measurement
 from treval.posture import PostureFileError, PostureFileReader
 from treval.registry import DimensionRegistry, RegistryError, load_registry
-from treval.rubric import DuplicateIndicatorError, bundle_to_json, evaluate
+from treval.report_store import ReportEntry, ReportStoreError, write_bundle
+from treval.rubric import (
+    DuplicateIndicatorError,
+    bundle_to_json,
+    evaluate,
+    self_contained_bundle_to_json,
+)
 
 EXIT_OK = 0
 EXIT_GRADING = 2
 EXIT_IO = 3
 
 
-def run_report(
+def _grade(
     bundle_path: str | Path,
     posture_path: str | Path | None,
-    fmt: str,
-    *,
-    registry: DimensionRegistry | None = None,
-    color: bool = False,
-) -> tuple[str, list[str]]:
-    """The pure grade+render path. Returns (rendered_text, warnings). Raises BundleError /
-    RegistryError / PostureFileError (→ io exit) or DuplicateIndicatorError (→ grading exit);
-    a partial/empty bundle renders an honest report, it does not raise (§5)."""
+    registry: DimensionRegistry | None,
+) -> tuple[DimensionRegistry, MaturityReport, tuple[Measurement, ...], list[str]]:
+    """The shared grade step: measurement bundle + posture + registry → graded report.
+    Pure (no clock, no gateway). Used by both `report` renderings and the
+    `--self-contained` store producer, so they can never grade differently."""
     reg = registry if registry is not None else load_registry()
     bundle = load_bundle(bundle_path)
     warnings = list(bundle.warnings)
@@ -68,15 +73,55 @@ def run_report(
         window=bundle.window,
         tenant_id=bundle.tenant_id,
     )
+    return reg, report, bundle.measurements, warnings
+
+
+def run_self_contained(
+    bundle_path: str | Path,
+    posture_path: str | Path | None,
+    out_dir: str | Path,
+    *,
+    registry: DimensionRegistry | None = None,
+    generated_at_ns: int | None = None,
+) -> tuple[ReportEntry, list[str]]:
+    """Grade, then store the EV-R1 SELF-CONTAINED delivery bundle (EV-W1 §7.1).
+
+    This is the artifact the read-only web service serves: `{schema_version,
+    registry_fingerprint, report, registry, measurements}` — distinct from
+    `--format json`, which emits the core-layer (decoupled) form. `generated_at_ns` is
+    store metadata (a wall-clock fact about the run, NOT part of the deterministic
+    report); it defaults to now and is injectable for tests."""
+    reg, report, measurements, warnings = _grade(bundle_path, posture_path, registry)
+    bundle_json = self_contained_bundle_to_json(report, measurements, reg)
+    entry = write_bundle(
+        out_dir,
+        bundle_json,
+        generated_at_ns=generated_at_ns
+        if generated_at_ns is not None
+        else time.time_ns(),
+    )
+    return entry, warnings
+
+
+def run_report(
+    bundle_path: str | Path,
+    posture_path: str | Path | None,
+    fmt: str,
+    *,
+    registry: DimensionRegistry | None = None,
+    color: bool = False,
+) -> tuple[str, list[str]]:
+    """The pure grade+render path. Returns (rendered_text, warnings). Raises BundleError /
+    RegistryError / PostureFileError (→ io exit) or DuplicateIndicatorError (→ grading exit);
+    a partial/empty bundle renders an honest report, it does not raise (§5)."""
+    reg, report, measurements, warnings = _grade(bundle_path, posture_path, registry)
 
     if fmt == "json":
-        text = bundle_to_json(report, bundle.measurements)
+        text = bundle_to_json(report, measurements)
     elif fmt == "csv":
-        text = render_csv(reg, report, bundle.measurements)
+        text = render_csv(reg, report, measurements)
     else:  # human
-        text = render_human(
-            reg, report, bundle.measurements, tuple(warnings), color=color
-        )
+        text = render_human(reg, report, measurements, tuple(warnings), color=color)
     return text, warnings
 
 
@@ -97,7 +142,44 @@ def _use_color(fmt: str, out: str | None) -> bool:
     )
 
 
+def _warn(warnings: list[str]) -> None:
+    if warnings:
+        print(f"⚠ {len(warnings)} warning(s):", file=sys.stderr)
+        for w in warnings:
+            print(f"  - {w}", file=sys.stderr)
+
+
 def _cmd_report(args: argparse.Namespace) -> int:
+    # --self-contained is the STORE PRODUCER path (EV-W1 §7.1): it writes the EV-R1
+    # delivery bundle the read-only service serves, rather than rendering to stdout.
+    if getattr(args, "self_contained", False):
+        if not args.out_dir:
+            print("error: --self-contained requires --out-dir DIR", file=sys.stderr)
+            return EXIT_IO
+        try:
+            entry, warnings = run_self_contained(
+                args.measurement_bundle, args.posture, args.out_dir
+            )
+        except DuplicateIndicatorError as e:
+            print(f"error: ambiguous bundle — {e}", file=sys.stderr)
+            return EXIT_GRADING
+        except (
+            BundleError,
+            RegistryError,
+            PostureFileError,
+            ReportStoreError,
+            OSError,
+        ) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return EXIT_IO
+        _warn(warnings)
+        print(
+            f"stored {entry.file} (tenant={entry.tenant_id} "
+            f"window={entry.window[0]}-{entry.window[1]})",
+            file=sys.stderr,
+        )
+        return EXIT_OK
+
     try:
         text, warnings = run_report(
             args.measurement_bundle,
@@ -113,10 +195,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
         return EXIT_IO
 
     # Warnings always go to stderr (json/csv stdout stays clean; human embeds them too).
-    if warnings:
-        print(f"⚠ {len(warnings)} warning(s):", file=sys.stderr)
-        for w in warnings:
-            print(f"  - {w}", file=sys.stderr)
+    _warn(warnings)
     _emit(text, args.out)
     return EXIT_OK
 
@@ -154,6 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--posture", default=None)
     rep.add_argument("--format", choices=("json", "human", "csv"), default="human")
     rep.add_argument("--out", default=None)
+    rep.add_argument(
+        "--self-contained",
+        action="store_true",
+        help="write the EV-R1 self-contained delivery bundle into the report store "
+        "(--out-dir) instead of rendering; this is what treval-web serves",
+    )
+    rep.add_argument(
+        "--out-dir", default=None, help="report store directory (--self-contained)"
+    )
     rep.set_defaults(func=_cmd_report)
 
     for name, help_text in (

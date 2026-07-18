@@ -6,6 +6,7 @@
   --line: #e3e6eb;
   --measured: #0e7490;       /* teal — runtime indicator (measured) */
   --attested: #b45309;       /* amber — declared posture (attested) */
+  --awarded:  #15803d;       /* green — maturity GRANTED = min(measured, attested) */
   --headbg: #1f2937;
   --logo: #ffc62b;            /* brand yellow */
   --banner-1: #0f1a30;       /* deep navy — mature base that lifts the yellow */
@@ -16,6 +17,7 @@
 * { box-sizing: border-box; }
 
 body {
+  overflow-x: hidden;  /* wide content scrolls in its own container, never the body */
   margin: 0;
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
@@ -53,7 +55,7 @@ code { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
 }
 /* legend: one small parallel row — the only place the measured/attested
    distinction is spelled out (per-card pills removed to cut repetition). */
-.legend { display: flex; flex-flow: row wrap; gap: 4px 18px; font-size: 11px; color: rgba(255, 255, 255, .78); align-items: center; }
+.topbar .legend { display: flex; flex-flow: row wrap; gap: 4px 18px; font-size: 11px; color: rgba(255, 255, 255, .78); align-items: center; }
 .legend-item { display: flex; align-items: center; gap: 6px; }
 .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
 .swatch--measured { background: var(--measured); }
@@ -153,8 +155,255 @@ code { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
 
 /* ---- footer ----------------------------------------------------------- */
 .foot {
-  padding: 16px 24px 28px;
+  margin-top: 14px;  /* follows the content; pinning it to the viewport bottom left a void */
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 4px 8px;
   color: var(--muted);
   font-size: 12px;
 }
 .foot code { background: #eef0f3; padding: 1px 5px; border-radius: 4px; }
+
+/* ========================================================================== *
+ * EV-W2 — report views (Dashboard + 报告详情).
+ * D6: REUSE the EV-W0 language above; exactly one token is new (--risk), since
+ * EV-W0 has no report state and therefore no alarm colour. Dark variants below.
+ * ========================================================================== */
+:root {
+  --panel-2: #fafbfc;
+  --faint: #9aa1ad;
+  --risk: #b3261e;   /* NEW — the only token EV-W2 adds */
+  --ok:   #15803d;
+  --mono: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10141b; --panel: #171d27; --panel-2: #1c2330;
+    --ink: #e7ebf2; --muted: #98a2b3; --faint: #6b7583; --line: #2b3543;
+    --measured: #3aa8c4; --attested: #e08c3a; --awarded: #34d399; --risk: #f0685f; --ok: #4ade80;
+    --headbg: #0f1620;
+  }
+}
+
+.mono { font-family: var(--mono); }
+.meas { color: var(--measured); font-weight: 600; }
+.att  { color: var(--attested); }
+.awarded { color: var(--awarded); font-weight: 650; }
+
+/* --- global scope (tenant/window) — lives IN the banner, not in the report body ---
+   NOTE: `.topbar` is defined ONCE, above (the EV-W0 navy banner). Re-declaring it here is
+   what silently destroyed the banner: the later rule won the cascade and flattened the
+   gradient/logo styling on EV-W0's own page too. Style the scope controls, never the bar. */
+.scope { display: flex; gap: 8px 16px; align-items: center; flex-wrap: wrap; }
+.scope .ctl { display: flex; flex-direction: column; gap: 3px; }
+.scope label { font-size: 10px; letter-spacing: .5px; color: rgba(255, 255, 255, .55); }
+.scope select { padding: 5px 9px; border-radius: 6px; font-size: 12.5px; min-width: 132px;
+  border: 1px solid rgba(255, 255, 255, .22); background: rgba(255, 255, 255, .08); color: #fff; }
+.scope select option { color: var(--ink); background: var(--panel); }
+.scope select:focus-visible { outline: 2px solid var(--logo); outline-offset: 1px; }
+
+/* --- left navigation rail — vertical because the view list grows (配置运行 …) --- */
+.shell { display: flex; align-items: stretch; min-height: calc(100vh - 96px); }
+/* The rail continues the banner's navy down the left edge, closing an L around the content.
+   It was previously white-on-near-white (`--panel` #ffffff → `--panel-2` #fafbfc is a
+   gradient between two whites — invisible), which left it flat and hid the arc against the
+   #f6f7f9 page. Navy gives it a real surface and makes the arc read. */
+.sidenav { flex: none; width: 208px; padding: 16px 12px;
+  background: linear-gradient(180deg, var(--banner-2) 0%, var(--banner-1) 100%);
+  border-radius: 0 18px 18px 0;
+  box-shadow: 3px 0 20px rgba(15, 26, 48, .16); }
+.sidenav nav { display: flex; flex-direction: column; gap: 4px; position: sticky; top: 16px; }
+.navitem { padding: 9px 12px; border-radius: var(--radius); text-decoration: none;
+  color: rgba(255, 255, 255, .72); font-size: 14px; border-left: 3px solid transparent; }
+.navitem:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.navitem.on { color: #fff; background: rgba(255, 198, 43, .14); font-weight: 600;
+  border-left-color: var(--logo); }
+.navitem:focus-visible, .chips button:focus-visible, select:focus-visible,
+input:focus-visible { outline: 2px solid var(--measured); outline-offset: 2px; }
+@media (max-width: 860px) {
+  .shell { flex-direction: column; }
+  .sidenav { width: auto; border-radius: 0; box-shadow: none; }
+  .sidenav nav { flex-direction: row; position: static; }
+}
+/* Fills the space beside the nav rail. It must NOT re-centre with `margin: 0 auto` +
+   `max-width`: inside `.shell` (flex) that pinned the content to 1240px and left a wide
+   gutter on both sides. This is a dense data view — the tables want the width. */
+.wrap { flex: 1 1 auto; min-width: 0; padding: 16px 20px 20px;
+  display: flex; flex-direction: column; }
+
+/* --- 报告标识条 --- */
+.idbar { display: flex; flex-wrap: wrap; gap: 18px; padding: 10px 14px; font-size: 12.5px;
+  color: var(--muted); background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: var(--radius); margin-bottom: 14px; }
+.idbar b { color: var(--ink); font-weight: 600; }
+.basis-wal { color: var(--measured); } .basis-index, .basis-hybrid { color: var(--attested); }
+
+/* --- 结论横幅 (derived, never authored) --- */
+.verdict { padding: 14px 16px; border-radius: var(--radius); margin-bottom: 14px;
+  border: 1px solid var(--line); border-left-width: 5px; background: var(--panel); }
+.verdict .vt { font-size: 17px; font-weight: 650; }
+.verdict .vs { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.verdict.risk { border-left-color: var(--risk); } .verdict.risk .vt { color: var(--risk); }
+.verdict.warn { border-left-color: var(--attested); } .verdict.warn .vt { color: var(--attested); }
+.verdict.ok   { border-left-color: var(--ok); }   .verdict.ok .vt { color: var(--ok); }
+
+/* --- 风险卡 --- */
+.risks { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px; margin-bottom: 14px; }
+.rk { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.rk .n { font-size: 24px; font-weight: 680; font-family: var(--mono); }
+.rk .l { font-size: 12.5px; color: var(--ink); }
+.rk .s { font-size: 11px; color: var(--faint); }
+.rk.risk .n { color: var(--risk); } .rk.warn .n { color: var(--attested); } .rk.ok .n { color: var(--ok); }
+
+/* --- panels / split --- */
+/* Panes stretch to a common height (grid default) so the two cards' bottom edges line up.
+   Do NOT use `align-items: start` here — it lets each pane shrink to its own content and the
+   table's bottom edge floats above the radar's. */
+/* 2/5 : 3/5 — the radar pane lines up with the right edge of the 2nd risk card, as in the
+   reviewed prototype. `minmax(…, 420px)` capped it into a narrow sliver on wide screens;
+   fractional columns keep the ratio at any width. min-width:0 lets the panes actually shrink
+   (a grid item defaults to min-content, which would blow past the ratio). */
+.split { display: grid; grid-template-columns: 2fr 3fr; gap: 14px;
+  flex: 1 1 auto; min-height: 0; }
+.split > .panel { min-width: 0; }
+@media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; display: flex; flex-direction: column; min-height: 0; }
+.panel .note { margin-top: auto; padding-top: 14px; }
+/* The summary pane is as tall as the radar beside it; its 5 rows can afford the room the
+   71-row rule table cannot. Scoped to #mat so .tbl stays dense where density matters. */
+#mat td { padding-top: 16px; padding-bottom: 16px; }
+.phead { font-weight: 640; font-size: 14px; margin-bottom: 8px; }
+.note { font-size: 11.5px; color: var(--faint); margin-top: 10px; line-height: 1.6; }
+
+/* --- radar (no chart library; points computed server-side) --- */
+#radar { flex: 1 1 auto; width: 100%; min-height: 240px; display: block; }
+.web    { fill: none; stroke: var(--line); stroke-width: 1; }
+.lvl    { fill: var(--faint); font: 9px var(--mono); }
+.spoke  { stroke: var(--line); stroke-width: 1; }
+.spoke.nosig { stroke: var(--faint); stroke-dasharray: 2 3; opacity: .75; }
+.axl    { fill: var(--ink); font: 600 11px sans-serif; }
+.axl.nosig { fill: var(--faint); font-weight: 400; }
+.axsub  { fill: var(--faint); font: 9.5px sans-serif; }
+/* 授级 is the hero: green solid + fill + dots, drawn last. 实测/声明 are the inputs — thin
+   dashed outlines. All three match the table columns' colours exactly. */
+.p-awarded { fill: var(--awarded); fill-opacity: .14; stroke: var(--awarded); stroke-width: 2.8;
+             stroke-linejoin: round; }
+.p-meas { fill: none; stroke: var(--measured); stroke-width: 1.6; stroke-dasharray: 5 3; }
+.p-att  { fill: none; stroke: var(--attested); stroke-width: 1.6; stroke-dasharray: 5 3; }
+.over   { stroke: var(--risk); fill: var(--risk); }
+.dot-a  { fill: var(--awarded); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--muted); margin-top: 8px; }
+.legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.sw.awarded { background: var(--awarded); }
+.sw.meas { background: transparent; border: 1.5px dashed var(--measured); }
+.sw.att  { background: transparent; border: 1.5px dashed var(--attested); }
+.sw.risk { background: var(--risk); } .sw.nosig { background: transparent; border: 1.5px dashed var(--faint); }
+
+/* --- tables --- */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th { text-align: left; font-size: 11.5px; color: var(--muted); font-weight: 600;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line); padding: 7px 8px; white-space: nowrap; }
+.tbl td { padding: 11px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
+.pill.risk { color: var(--risk); border-color: var(--risk); }
+.pill.warn { color: var(--attested); border-color: var(--attested); }
+.pill.ok   { color: var(--ok); border-color: var(--ok); }
+
+/* --- 判定规则表 (WAF-signature posture: inspectable, categorically not editable) --- */
+.acts { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 14px; font-size: 13px; }
+.cmd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12px; margin: 8px 0 0; }
+.sig { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.sighead { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sighead .t { font-weight: 640; font-size: 14px; }
+.hint { color: var(--faint); font-weight: 400; font-size: 12px; }
+.ro { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: var(--measured);
+  border: 1px solid var(--measured); border-radius: 999px; padding: 2px 9px; }
+.sigbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chips button { font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--muted); }
+.chips button.on { color: var(--ink); border-color: var(--muted); font-weight: 600; }
+.sigbar select, .sigbar input { padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--panel-2); color: var(--ink); font-size: 12.5px; }
+.sigbar input { flex: 1; min-width: 160px; }
+.cnt { font-size: 12px; color: var(--faint); font-family: var(--mono); }
+/* --- PM feedback: promoted thesis, methodology note, ? help, radar how-to, insufficient dash --- */
+.thesis { display: flex; flex-wrap: wrap; gap: 6px 28px; padding: 10px 14px; margin-bottom: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-left: 3px solid var(--logo);
+  border-radius: var(--radius); font-size: 12px; color: var(--muted); }
+.thesis b { color: var(--ink); font-weight: 600; }
+.thesis > span { flex: 1 1 320px; }
+
+.verdict .vnote { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); }
+.verdict .vnote b { color: var(--ink); }
+
+.helpwrap { position: relative; display: inline-block; }
+.help { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+  padding: 0; border-radius: 50%; appearance: none; -webkit-appearance: none; box-sizing: border-box; border: 1px solid var(--faint); background: transparent;
+  color: var(--muted); font: 700 10px var(--sans, sans-serif); cursor: pointer;
+  margin-left: 3px; vertical-align: 1px; line-height: 1; }
+.help:hover { border-color: var(--measured); color: var(--measured); }
+.helpwrap.open .help, .help:focus-visible { border-color: var(--measured); color: var(--measured);
+  outline: 2px solid var(--measured); outline-offset: 1px; }
+.pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; display: none;
+  width: max-content; max-width: 320px; padding: 10px 12px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(15, 26, 48, .18); font-size: 12px; font-weight: 400;
+  line-height: 1.55; color: var(--muted); white-space: normal; }
+.helpwrap.open .pop { display: block; }
+.pop b { color: var(--ink); font-weight: 600; }
+.pop ul { margin: 6px 0 0; padding-left: 18px; }
+.pop li { margin: 3px 0; }
+/* a header cell popover would clip at the table's right edge — anchor those to the right */
+th .pop { left: auto; right: 0; }
+
+.howto { margin: 10px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--muted); }
+.howto b { color: var(--ink); font-weight: 600; }
+
+.out .n.dash { color: var(--faint); font-weight: 400; }
+
+.sigpager { display: flex; gap: 10px; align-items: center; justify-content: center;
+  padding-top: 12px; margin-top: auto; border-top: 1px solid var(--line); }
+.sigpager button { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 6px;
+  cursor: pointer; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); }
+.sigpager button:hover:not(:disabled) { border-color: var(--muted); }
+.sigpager button:disabled { opacity: .45; cursor: default; }
+.sigpager .pinfo { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Fill the height left in the content column instead of a fixed box: a 520px cap made the
+   71 rows scroll inside a short card while a screenful of dead space sat underneath it. */
+.sigwrap { flex: 1 1 auto; min-height: 260px; overflow: auto; }
+.sigt .sid { display: block; font-size: 11.5px; color: var(--muted); }
+.sigt .ost { display: block; font-size: 12.5px; }
+.sigt .rule code { font-size: 11.5px; }
+.sigt .src { font-size: 11.5px; color: var(--muted); }
+.sigt .out .n { font-family: var(--mono); font-weight: 650; color: var(--measured); margin-right: 6px; }
+/* baseline readings (sample-size-gated) are NOT judged values — neutral ink, plus a 基线 tag,
+   so a 60,164 ms latency reading never reads as an endorsed/green "good" number. */
+.sigt .out .n.baseline { color: var(--ink); }
+.sigt .out .n.baseline::before { content: "基线 "; font-family: var(--sans); font-size: 9.5px;
+  font-weight: 600; color: var(--faint); }
+.sigt .out .meta { font-size: 10.5px; color: var(--faint); margin-right: 5px; }
+.sigt .rst { font-size: 10.5px; color: var(--muted); }
+.sigt .rst.risk { color: var(--risk); font-weight: 600; }
+/* 基线达成 = the sample-size gate cleared; deliberately muted, NOT the pass-green of a judged value. */
+.sigt .rst.baseline { color: var(--muted); border: 1px dashed var(--line); border-radius: 4px;
+  padding: 0 5px; cursor: help; }
+.sigt tr.gaprow { background: color-mix(in srgb, var(--risk) 7%, transparent); }
+.kind { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+.kind.measured { color: var(--measured); border-color: var(--measured); }
+.kind.attested { color: var(--attested); border-color: var(--attested); }
+.flag { font-size: 10.5px; padding: 1px 6px; border-radius: 4px; }
+.flag.risk { color: var(--risk); border: 1px solid var(--risk); }
+.signote { font-size: 11.5px; color: var(--muted); line-height: 1.75; margin-top: 12px;
+  border-top: 1px solid var(--line); padding-top: 10px; }

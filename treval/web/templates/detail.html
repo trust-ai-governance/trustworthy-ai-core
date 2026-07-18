@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% set view = 'detail' %}
+{% block title %}报告详情 — {{ entry.tenant_id }}{% endblock %}
+{% block content %}
+
+{# 行动区 — 重新评测 is a LINK/命令, never an action: this service is read-only (D5/O1). #}
+<section class="acts">
+  <p id="actlead">本视图<b>只读</b>：不评分、不重算。重新评测在<b>评测执行页</b>进行；
+    当前评测由命令行执行，命令如下（可复制）：</p>
+  <pre id="rerun" class="cmd"><code>{{ rerun_command }}</code></pre>
+</section>
+
+{# 判定规则与本次结果 — ONE table, one row per objective (D3): the rule (from the registry,
+   report-independent) and this run's outcome (from the report) side by side. #}
+<section class="sig">
+  <div class="sighead">
+    <div class="t">判定规则与本次结果 <span class="hint">共 {{ objective_count }} 条目标</span></div>
+    <span class="ro">只读 READ-ONLY</span>
+  </div>
+
+  <div class="sigbar">
+    <div id="sigchips" class="chips">
+      <button type="button" data-k="all" class="on">全部</button>
+      <button type="button" data-k="measured">实测 measured</button>
+      <button type="button" data-k="attested">声明 attested</button>
+      <button type="button" data-k="gap">只看过度声明</button>
+    </div>
+    <select id="sigdim" aria-label="按维度筛选">
+      <option value="all">全部维度</option>
+      {% for id, title in dimension_titles.items() %}
+      <option value="{{ id }}">{{ title }}</option>
+      {% endfor %}
+    </select>
+    <input id="sigq" type="search" placeholder="搜索目标 / 规则 / 指标…" aria-label="搜索">
+    <span id="sigcnt" class="cnt">{{ objective_count }} / {{ objective_count }}</span>
+  </div>
+
+  <div class="sigwrap">
+    <table id="sigt" class="tbl sigt">
+      <thead><tr>
+        <th>规则 ID / 目标</th><th>维度</th><th>等级</th><th>类型</th>
+        <th>判定规则</th><th>数据源</th><th>本次结果</th>
+      </tr></thead>
+      <tbody>
+        {% for r in objective_rows %}
+        <tr class="{% if r.gap %}gaprow{% endif %}"
+            data-kind="{{ r.kind }}" data-dim="{{ r.dimension }}" data-gap="{{ 1 if r.gap else 0 }}">
+          <td><span class="sid mono">{{ r.id }}</span><span class="ost">{{ r.statement }}</span></td>
+          <td>{{ r.dimension_title }}</td>
+          <td class="mono">{{ r.level }}</td>
+          <td><span class="kind {{ r.kind }}">{{ r.kind }}</span></td>
+          <td class="rule"><code class="mono">{{ r.rule }}</code></td>
+          <td class="mono src">{{ r.source }}</td>
+          <td class="out">
+            {# sample-gate values are BASELINE READINGS, not judged numbers — render them
+               neutral (not the "good" teal) so 60,164 ms never reads as an endorsed latency. #}
+            {% if r.value %}<span class="n {% if r.gate == 'sample' %}baseline{% endif %}">{{ r.value }}</span>{% elif r.status == 'insufficient_data' %}<span class="n dash">—</span>{% endif %}
+            {% if r.sample_size is not none %}
+            <span class="meta">n={{ r.sample_size }}{% if r.short_sample %} / 需 {{ r.need_sample }}{% endif %}{% if r.integrity %} · {{ r.integrity }}{% endif %}</span>
+            {% endif %}
+            {% if r.subjects %}<span class="meta">+{{ r.subjects }} subject</span>{% endif %}
+            {% if r.status %}
+              {% if r.gate == 'sample' and r.status == 'met' %}
+              {# "met" here = the sample-size gate cleared (baseline established), NOT a verdict
+                 on the value. Label + colour say so, so it can't read as "value passed". #}
+              <span class="rst baseline"
+                    title="该目标只要求样本量达标（建立基线）——「基线达成」= 样本已够，不是对数值本身判合格/不合格。旁边的数值是本窗口的基线读数。">基线达成</span>
+              {% else %}
+              <span class="rst {{ r.status }} {% if r.gap %}risk{% endif %}"
+                    title="{{ STATUS_HELP[r.status] }}">{{ STATUS_LABEL[r.status] }}</span>
+              {% endif %}
+            {% endif %}
+            {% if r.gap %}<span class="flag risk">过度声明</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr class="empty" hidden><td colspan="7">没有匹配的目标。</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="sigpager" id="sigpager" hidden>
+    <button type="button" id="sigprev">← 上一页</button>
+    <span id="sigpage" class="pinfo"></span>
+    <button type="button" id="signext">下一页 →</button>
+  </div>
+
+  <p class="signote">
+    规则可查、可筛，<b>不可改</b>：它们由 <code class="mono">registry_fingerprint</code> 固定并随报告一同下发
+    —— 改了规则，指纹就变，这份报告即失效。<b>被评方能改评分规则的系统，不是评分系统。</b>
+    与 WAF 签名的差别请直说：WAF 会给你看签名命中的载荷原文，而<b>攻击语料原文我们不能给</b>（不公开，
+    也不在报告里）。可公开的是<b>语料清单</b>：用例 ID + 类别 + <code class="mono">sha256</code> ——
+    足够第三方核对我们跑的确是所声称的那套语料，而不泄露语料本身。
+  </p>
+</section>
+{% endblock %}
+
+{% block script %}
+{# The ONLY client JS: it filters rows that are ALREADY in the DOM (SSR rendered all of
+   them). It never builds HTML from strings — which is exactly how three prototype rounds
+   broke (a stray title="…" inside a JS string threw a SyntaxError and blanked the page).
+   Toggling `hidden` cannot reintroduce that class of bug. #}
+<script src="/static/report.js?v={{ static_v }}" defer></script>
+{% endblock %}
