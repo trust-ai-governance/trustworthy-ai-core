@@ -53,11 +53,29 @@
 |---|---|
 | ① chain_integrity 规范 run 冻结 | ✅ `100% n=173`（`~/prov/canonical_wal`，段 sha `be827a1c…`） |
 | ② 注入 89% 补 pinned 窗口 | ✅ `89.29% (25/28)`（`~/prov/injection_wal`，段 sha `a9c020da…`），且**可从冻结段重算**（replay 逐位一致） |
-| ③ 9.2-A 各数带 sha + 口径 + 日期 + pinned 窗口 | ✅ 两份 artifact 均带 `evidence_refs` |
+| ③ 9.2-A 各数带 sha + 口径 + 日期 + pinned 窗口 | ⚠️ **2/3** —— `redaction_hit_ratio`(2.52% n=119)与 `duration_p99`(59839 ms n=27)已测已 pin;**`block_rate` 从未跑过**（指标在 `treval/indicators/block_rate.py`，只是没进 collect） |
 | ④ demo n=520 标"合成·非实测" | ✅ 报告级第三态 `示例数据`，UI 上肉眼可见（不只源码注释） |
 | ⑤ 仲裁：每指标唯一规范来源 | ✅ §5，两份 artifact 带 `canonical_for` + 逐条 `canonical_source`，与 §5.0 表机器核对一致 |
 
-**⇒ 不再是 Platform 的前置。** 余下：注入两版 Tier-1 规则集号 + 白皮书 `463 → 173` 换字，**均在 Platform**。
+**⇒ 不再是 Platform 的前置。** Platform 侧的两项（规则集号 / 换字）**已于 2026-07-19 完成**
+（57% = `12ab5da` · 89% = `f665572`；§5.4 已换字并附完整印记）。
+
+### 2.2 余下（本轮核查新掉出来的两条，Core 侧）
+
+1. **`block_rate` 补测** —— 9.2-A 三项里唯一没测的。指标存在，只是从未进 collect。
+2. 🔴 **`duration_p99` 需要一次代表性流量上的测量** —— 白皮书曾据 demo 的合成值
+   `780 ms · n=240` 把「60s p99 blocker」标成**已解决**，而生成器源码逐字写着
+   `# a HEALTHY latency baseline — 780 ms, not 60 s (good demo optics)`。
+   唯一真实 pinned 值是 **59839 ms**（§5.1），但它取自 `__eval__` 探针批、**故意含 LLM10
+   unbounded-consumption 用例**，被自家压力用例拉高是设计使然。
+   **780 ms（合成）/ 23836 ms（acme 评测）/ 59839 ms（`__eval__` 评测）—— 76 倍跨度**，
+   正是 §5 那条「9.2-A 是语料相关量，不是环境属性」的最好例证。
+   ⇒ **诚实状态 = 未测定**，两个方向都没有代表性流量上的数。这两个数一起补测后，
+   Platform 再填该次 run 的网关配置版本。
+
+> **教训（与 ④ 同源，值得并排记）**：④ 是合成的**样本数**混进外部文档；这一条是合成的**数值**
+> 被用来**关闭一个真实工程 blocker**，且 `verified`（本义 = 对着真实 WAL 验过哈希链）
+> 一并被搬到了合成数上。**合成数据不能替真实测量作证** —— 这正是 demo 三态要在页面上自证的原因。
 
 **④ 的做法值得记一条通用教训：** 生成器源码首行的 `SYNTHETIC` 声明是**给我们自己看的**，
 拦不住有人把 demo 页面截图发出去 —— 而 n=520 混进外部文档走的正是这条路。

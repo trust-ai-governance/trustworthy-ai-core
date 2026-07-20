@@ -672,6 +672,30 @@ stub 至标签器落地）。
   **余下两项全在 Platform**:注入两版 Tier-1 规则集号 + 白皮书 `463 → 173` 换字。
 - 🔴 **换字目标值是 173,不是 404** —— 404 与 463 同病且**覆盖段已被裁掉,无法补 pin**。
 
+### RULEPIN — 审计记录里钉住"跑的是哪版规则"〔🆕 单开,两侧各一半〕
+
+- **发现**:Platform 架构师查出 `policy_snapshot_version` 不是内容派生的 —— `pipeline.py:314`
+  取的是配置里的静态串 `ruleset_version: "v1"`,**从未 bump**。⇒ 审计记录分不出跑的是哪版规则集。
+- 🔴 **Core 侧核实后补一半**:这个字段 **Core 一行都没读**(`grep policy_snapshot|ruleset_version
+  treval/ tools/` → 0 命中;proto 里字段是有的)。**两端都空转** —— 所以只改 Platform 一侧,
+  Core 的 pinned run 里照样不会出现规则集版本。
+- **两侧动作**:Platform 改成**编译后规则集的内容哈希**;**Core 在 pinned run 的 `provenance` 里
+  记录本次观测到的 `policy_snapshot_version` 集合**(与窗口 / 段 sha 同级)。
+- **为什么值得单开**:我们卖"可验证审计",却无法从审计记录回答"这条决策用的是哪版规则"。
+  这比白皮书数字对不上**更结构性** —— 数字错了能改文档,证据链缺一环改不了。
+- 🔴 **motivating case(比设计缺陷本身更硬 —— 这是一次真实发生过的归因失败)**:
+  57% 那次测量的规则集变更是 **P2-a.2**(两个 anchor:unconditional-output-override /
+  fake-authority+disable-safety)。它落在 Platform 提交 `12ab5da` 里 —— 而那个提交的 subject 是
+  **"P2-b v1 — Tier-2 model-based injection detection (shadow) + P2-a′ hint seam"**,
+  **一个字没提 P2-a.2**。
+  ⇒ **规则集的真实变更搭便车藏在别的 issue 的提交里,commit subject 不是可靠的版本记录。**
+  最终定位靠的是 `git log -S` 标签 + anchor 特征词,**不是靠数字** —— 数字那条路上还埋着
+  `16/28` 在两个版本里含义相反的陷阱(PROV §3.1-1),两位架构师都差点栽进去。
+  **这正是 `policy_snapshot_version` 该顶上的班:** 它若是内容哈希,上面整段考古一次都不必做。
+- **与 EV-PIN 同一模式**:EV-PIN 钉住「跑的是哪批 WAL」,本条钉住「跑的是哪版规则」。两者齐了,
+  一次 run 才真正可复现。它的直接代价已经现场发生:PROV §3.1 那一整节 git 考古就是为了补这个缺口。
+- **规模**:小(两侧各一小改)· **不阻塞 PROV**。
+
 ### F4 — `collect` 支持离线复算(无 `--gateway`)〔backlog,不阻塞 PROV〕
 
 - **现象**:`collect` 无条件要求 `--gateway`(实测 `error: --gateway ... is required for collect`),
