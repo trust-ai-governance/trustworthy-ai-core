@@ -43,16 +43,16 @@
     <form class="ctl" method="get" action="{{ '/detail' if view == 'detail' else '/' }}">
       <input type="hidden" name="tenant" value="{{ entry.tenant_id }}">
       <label for="sel-window">评测窗口</label>
-      {# KNOWN BUG (EV-W1 review finding ④, awaiting a ruling — deliberately NOT patched
-         here): the producer emits window=(0,0) for an active+passive run (collect.py:171
-         "active-eval is not time-windowed"), so every report of a tenant shares one window
-         key. Two options then carry the same value AND both match `current_window`, which
-         is invalid for a single-select. The fix is to change the selection key (likely
-         generated_at_ns) — a D2 contract change, not a template tweak. #}
+      {# RESOLVED by EV-PIN (was EV-W1 review finding ④). The root cause was the producer
+         emitting window=(0,0) for every run, so all window keys collided (two options with
+         the same value, both `selected` — invalid HTML). Windows are real now, so keys are
+         naturally unique; no selection-key change was needed. The label is rendered readable
+         (§1.5-3) while `value` remains the raw ns pair — the key must not move. #}
       <select id="sel-window" name="window" onchange="this.form.submit()">
         {% for w in scope.windows %}
-        <option value="{{ w.key }}" {% if w.key == scope.current_window %}selected{% endif %}>
-          {{ w.window[0] }}–{{ w.window[1] }}{% if w.newest %} (最新){% endif %}
+        <option value="{{ w.key }}" title="{{ w.window[0] }}–{{ w.window[1] }}"
+                {% if w.key == scope.current_window %}selected{% endif %}>
+          {{ w.label }}{% if w.newest %} (最新){% endif %}
         </option>
         {% endfor %}
       </select>

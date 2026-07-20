@@ -33,6 +33,10 @@ class LoadedBundle:
     window: tuple[int, int]
     measurements: tuple[Measurement, ...]
     warnings: tuple[str, ...]
+    # EV-PIN: the run's pin stamp, carried through to the delivery bundle. None for a
+    # pre-EV-PIN bundle — that absence is meaningful (unpinned), never faked.
+    provenance: dict[str, Any] | None = None
+    pinned: bool = False
 
 
 def _require(raw: dict[str, Any], key: str, where: str) -> Any:
@@ -154,12 +158,24 @@ def load_bundle(path: str | Path) -> LoadedBundle:
 
     window = _parse_window(doc.get("window"), warnings)
 
+    provenance = doc.get("provenance")
+    if provenance is not None and not isinstance(provenance, dict):
+        raise BundleError(f"bundle {p}: 'provenance' must be an object or absent")
+    pinned = bool(doc.get("pinned", False))
+    if not pinned:
+        warnings.append(
+            "this run is NOT pinned (no frozen window) — its numbers must not be cited "
+            "in external documents (EV-PIN §1.4)"
+        )
+
     return LoadedBundle(
         schema_version=schema_version,
         tenant_id=tenant_id,
         window=window,
         measurements=measurements,
         warnings=tuple(warnings),
+        provenance=provenance,
+        pinned=pinned,
     )
 
 
@@ -180,16 +196,28 @@ def build_bundle(
     tenant_id: str,
     window: tuple[int, int],
     mode: str,
+    pinned: bool = False,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The bundle `collect` writes: measurements[] + run metadata (no graded `report`;
-    `report` produces that). Reuses the EV-7 serializer for the measurement shape."""
+    `report` produces that). Reuses the EV-7 serializer for the measurement shape.
+
+    `pinned` / `provenance` are EV-PIN's run stamp: whether this run's window was frozen by
+    explicit bounds, and the WAL segment bytes + record count behind it. They are additive
+    metadata on the COLLECT bundle (which has no frozen schema) — the EV-R1 delivery envelope
+    is untouched. The observed/pinned `window` flows into the graded report through
+    `_grade(window=bundle.window)`, so fixing it here fixes the delivered report too."""
     from treval.rubric.serialize import serialize_measurement
 
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
-    return {
+    doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": mode,
+        "pinned": pinned,
         "measurements": [serialize_measurement(m) for m in ordered],
     }
+    if provenance is not None:
+        doc["provenance"] = provenance
+    return doc

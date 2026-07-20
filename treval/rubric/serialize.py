@@ -143,6 +143,7 @@ def serialize_self_contained_bundle(
     report: MaturityReport,
     measurements: Iterable[Measurement],
     registry: DimensionRegistry,
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The EV-R1 delivery envelope `{schema_version, registry_fingerprint, report, registry,
     measurements}` (docs/REPORT_JSON_SCHEMA.md §1a). The registry is inlined via the EV-W0
@@ -153,6 +154,12 @@ def serialize_self_contained_bundle(
     return {
         "schema_version": base["schema_version"],
         "registry_fingerprint": _fingerprint_of(registry_dict),
+        # EV-PIN §1.5-1: the pin stamp must reach the DELIVERY artifact, not stop at the
+        # collect bundle. Without it a `window=0-0` snapshot is indistinguishable from a
+        # pinned run on the wire, and §1.4's "don't cite unpinned" has nothing to check.
+        # `None` is honest — a pre-EV-PIN bundle genuinely has no provenance; never invent
+        # a window or sha to fill the hole.
+        "provenance": provenance,
         "report": base["report"],
         "registry": registry_dict,
         "measurements": base["measurements"],
@@ -163,11 +170,12 @@ def self_contained_bundle_to_json(
     report: MaturityReport,
     measurements: Iterable[Measurement],
     registry: DimensionRegistry,
+    provenance: dict[str, Any] | None = None,
 ) -> str:
     """Byte-deterministic JSON for the self-contained bundle (sorted keys + compact
     separators + ensure_ascii=False). This is the golden-fixture / delivery form."""
     return json.dumps(
-        serialize_self_contained_bundle(report, measurements, registry),
+        serialize_self_contained_bundle(report, measurements, registry, provenance),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),

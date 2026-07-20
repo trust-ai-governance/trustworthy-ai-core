@@ -43,7 +43,7 @@ from fastapi.templating import Jinja2Templates
 
 from treval.registry import load_registry, serialize_registry
 from treval.report_store import ReportStore, window_key
-from treval.web.view import build_context
+from treval.web.view import build_context, window_label
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = _HERE / "templates"
@@ -127,6 +127,9 @@ def create_app(
                 {
                     "key": window_key(e.window),
                     "window": e.window,
+                    # EV-PIN §1.5-3: LABEL only. `key` stays the raw ns pair because it is
+                    # the selection key — deep links and the switcher depend on it.
+                    "label": window_label(e.window),
                     "generated_at_ns": e.generated_at_ns,
                     "newest": i == 0,
                 }

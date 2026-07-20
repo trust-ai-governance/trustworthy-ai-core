@@ -407,3 +407,18 @@ th .pop { left: auto; right: 0; }
 .flag.risk { color: var(--risk); border: 1px solid var(--risk); }
 .signote { font-size: 11.5px; color: var(--muted); line-height: 1.75; margin-top: 12px;
   border-top: 1px solid var(--line); padding-top: 10px; }
+
+
+/* EV-PIN §1.5-2 — is this report reproducible (and therefore citable)? Unpinned is a
+   warning, not an alarm: the report is still true, it just cannot be re-derived later. */
+.pin b { font-weight: 650; }
+.pin.pinned b { color: var(--ok); }
+.pin.unpinned b { color: var(--attested); }
+.pin.unpinned::before { content: "⚠ "; color: var(--attested); }
+.pin.pinned::before { content: "🔒 "; }
+/* Synthetic outweighs unpinned — unpinned data is real but may drift, synthetic was never
+   measured. So it gets a filled badge rather than coloured text: it must survive a screenshot
+   taken out of context, which is exactly how the demo's fabricated n=520 escaped (PROV §5). */
+.pin.synthetic { background: var(--risk); border-radius: 4px; padding: 2px 8px; }
+.pin.synthetic b, .pin.synthetic .help { color: #fff; }
+.pin.synthetic::before { content: "◆ "; color: #fff; }

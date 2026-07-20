@@ -444,3 +444,33 @@ def test_headless_render_guard(client, tmp_path):
         cwd=_ROOT,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# PROV §5 — the synthetic badge must reach the rendered PAGE.
+# A screenshot is what escapes; the generator's source header is not.
+# --------------------------------------------------------------------------- #
+
+
+def test_demo_report_page_says_it_is_synthetic(tmp_path):
+    """End-to-end: run the real demo generator, serve what it wrote, and read the HTML the
+    customer would see. Asserting on `pin_status` alone would still pass if the template
+    dropped the badge — and the template is the part that a screenshot carries."""
+    pytest.importorskip("fastapi", reason="optional treval[web] extra not installed")
+    from fastapi.testclient import TestClient
+
+    from tools.make_demo_report import main
+    from treval.web import create_app
+
+    assert main(["--out-dir", str(tmp_path)]) == 0
+    html = TestClient(create_app(store_dir=tmp_path)).get("/").text
+
+    assert "示例数据" in html, "the demo page must declare itself synthetic"
+    assert "pin synthetic" in html, "and must carry the state class the styling keys on"
+    assert "全部数值为合成" in html
+
+
+def test_a_normal_report_page_carries_no_synthetic_badge(client):
+    """The other direction — if every page said 示例数据 the badge would mean nothing."""
+    html = client.get("/").text
+    assert "示例数据" not in html and "pin synthetic" not in html
