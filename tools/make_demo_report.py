@@ -39,6 +39,21 @@ GENERATED_AT_NS = 1767226200_000000000
 
 _REF = EvidenceRef(source="wal:/demo/synthetic.wal", seq=1, request_id="demo-000001")
 
+# The report must declare itself synthetic ON THE PAGE, not only in this file's header. The
+# SYNTHETIC banner above is read by us; a screenshot is read by everyone else — and that is
+# the exact path by which this generator's fabricated `chain_integrity n=520` reached an
+# external document (PROV §5). `pinned:false` is not a slip: pinning is meaningless for data
+# that was never measured, and claiming it would be the same lie in a smaller font.
+PROVENANCE = {
+    "data_source": "synthetic_demo",
+    "pinned": False,
+    "tenant_id": TENANT,
+    "window": list(WINDOW),
+    "wal_dir": None,
+    "wal_segments": None,
+    "record_count": 0,
+}
+
 
 def _m(indicator: str, dimension: str, value: float, unit: str, n: int) -> Measurement:
     """One synthetic aggregate measurement. All VERIFIED (a clean demo); refs are synthetic."""
@@ -140,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     entry = write_bundle(
         args.out_dir,
-        self_contained_bundle_to_json(report, MEASUREMENTS, registry),
+        self_contained_bundle_to_json(report, MEASUREMENTS, registry, PROVENANCE),
         generated_at_ns=GENERATED_AT_NS,
     )
 

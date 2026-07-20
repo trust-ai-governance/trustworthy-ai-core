@@ -627,6 +627,107 @@ stub 至标签器落地）。
 
 ---
 
+## 排期 Backlog（第 3 轮后 · 2026-07-19 定稿 · PM/售前/架构师三方过）
+
+> 三方 review 后的近期次序。三个协调判断:①**PROV(+ 其前置 EV-PIN)排在 EV-FWD 之前** —— 同时卡着待审稿白皮书与 roadmap 对外数字,杠杆最高、size 最小;**EV-PIN 是 PROV 的根因修复**(对外数字必须来自 pinned run,不能是 `__eval__` 0-0 移动窗口);②**P3C-harness 是外部依赖**,spike 点火时可能抢占 EV-FWD,Core 须预留,别让 OSS 增长盖过 Platform 主线 P3-content;③EV-FWD vs #6 的 tiebreaker 仍是"有没有活的生产报告 POC"。
+
+| 序 | 项 | 为什么这个位置 | 规模 |
+|---|---|---|---|
+| 1 | **CI-1** 渲染守卫 CI 里 fail 非 skip | 原 P0,护旗舰守卫,且是 v0.2.0 门 | 小 |
+| 2 | 🔴 **EV-PIN** 冻结评测 run(消除移动窗口) | PROV 的前置:对外数字须来自 pinned run,今天 collect 恒 `window=[0,0]`、无窗口参数 | 小 |
+| 3 | 🔴 **PROV** 数字 provenance 对账(**协作:Core 起头 + Platform 补齐**) | **唯一同时解锁待审稿白皮书 §5.2/§5.4 与 roadmap 对外数字**(9.2-B 硬门);依赖 EV-PIN | 小(Core)/ 跨仓 |
+| 4 | **EV-FWD** standalone 标的抽象 | OSS 推广总开关,便宜、无生产 PII | 中 |
+| 5 | **#4** 窗口键 → `generated_at_ns` | 潜伏 bug,顺手 | 小 |
+| 6 | 🆕 **P3C-harness** P3-content spike 测量 harness | Platform 即将开 P3-content 跨仓依赖,spike 起跑时 Core 须能供 harness | 中 |
+| 7 | **#6** 生产被动路径 | 大头(reader+租户隔离+PII 面);按有无活 POC 定序 | 中 |
+| 8 | **P2 束** UI-3 证据下钻(网关)/#5 执行页/EV-R2/DX 一条命令/UI-6 趋势 | 产品完整性 | 中/大 |
+
+---
+
+### CI-1 — 渲染守卫在 CI 里 fail 而非 skip（P0）
+
+- **从**:`.github/workflows/ci.yml` + `package.json`(jsdom 已声明)
+- **问题**:EV-W2 无头渲染守卫**正因原型三轮上线即坏才存在**,但 CI 无 `npm ci`/node → `pytest.skip` → 在唯一重要处形同虚设。
+- **范围**:CI 加 `setup-node` + `npm ci`;`CI=true` 时守卫**缺 node/jsdom 即 fail,不 skip**。
+- **验收**:CI 日志显示守卫实跑(非 skip);故意破坏一个模板 → CI 红。
+
+### EV-PIN — 冻结评测 run（pinned run，消除移动窗口）🔴 PROV 前置
+
+- **设计定稿**:[docs/issues/EV-PIN.md](issues/EV-PIN.md)
+- **根因**:`collect` 产出 `window=[0,0]`、无窗口参数 → 任何对外引的数都是移动窗口(`__eval__` 0-0 最新)快照,不可复现。`WalEvidenceReader` **已支持 `time_from_ns/time_to_ns` + 按段读**(`wal_reader.py:87-89`)—— **reader 能 pin,producer 不给驱动**。
+- **范围**:① collect 落**真实观测窗口**(min/max received_at_ns,不再 `[0,0]`);② collect 接受 `--window-from-ns/--window-to-ns` 透传 reader → **run 可复现**;③ bundle 带 `{window, wal_segments, WAL 段 sha, pinned:bool}`;④ `pinned:false` 的数**禁止对外引用**。
+- **验收**:同 WAL + 同窗口跑两次 → 同 n/同 value/同段 sha;`chain_integrity` 的 n 不随 WAL 尾部前移变化。
+- **非目标**:改指标计算;UI 窗口选择键(#4,正交);生产租户被动读(#6)。
+
+### PROV — 检测型数字 provenance 对账（🔴 排 EV-FWD 前 · **协作:Core 起头 + Platform 补齐** · 依赖 EV-PIN）
+
+- **设计定稿**:[docs/issues/PROV.md](issues/PROV.md) · **对账 artifact**:[CORE_INJECTION_NUMBER_PROVENANCE.md](../../trustworthy-ai-platform/docs/collab/CORE_INJECTION_NUMBER_PROVENANCE.md)(附可转发的 Platform 待补清单 §6)
+- **根因(两位架构师收敛)**:🔴 对外数字取自 LIVE 移动窗口而非 pinned run → 不可复现。**463 与 404 同病**(我手上的 404 bundle 窗口也是 `[0,0]`)。故依赖 EV-PIN。
+- **裁决**:① 作废 n=463(不可复现,pin 不了);② **Core 用 EV-PIN 冻结唯一规范 run**(关键约束:不能又是"404 最新"移动快照);③ **Platform 对 chain_integrity 只做白皮书 463→规范值换字**(文档编辑,非计算 —— 原让 Platform"钉 463"是派错了活,已更正);④ Platform 真正的活 = 注入两版规则集号;⑤ demo 520 标合成(Core)。
+- **硬门(9.2-B)**:白皮书 §5.2/§5.4 在本对账落定前**不分发**。
+- **非目标**:改数值本身(值是真的,病在窗口不冻结/多源无桥接)。
+- **✅ Core 侧已闭环(2026-07-19)**:两个规范 run 已冻结并可复算(`chain_integrity 100% n=173` /
+  `injection_catch_rate 89.29% n=28`)· §5.0 仲裁表消除双值 · 两份 artifact 带 `canonical_for` +
+  逐条 `canonical_source`(与 §5.0 表机器核对一致,无重叠无缺口)· demo 三态落地。
+  **余下两项全在 Platform**:注入两版 Tier-1 规则集号 + 白皮书 `463 → 173` 换字。
+- 🔴 **换字目标值是 173,不是 404** —— 404 与 463 同病且**覆盖段已被裁掉,无法补 pin**。
+
+### F4 — `collect` 支持离线复算(无 `--gateway`)〔backlog,不阻塞 PROV〕
+
+- **现象**:`collect` 无条件要求 `--gateway`(实测 `error: --gateway ... is required for collect`),
+  即使只想在冻结副本上重算被动指标。
+- **为什么重要**:第三方拿到冻结目录**用不了我们自己的 CLI**,得自己写 Python 才能复算。
+  对一个卖"第三方可复算"的产品,这是真摩擦 —— 复现路径应当是"跑我们的命令",不是"读我们的源码"。
+- **不阻塞 PROV**:现有复现路径(冻结目录 + artifact 的 `evidence_refs`)已成立并实测通过。
+- **建议**:加 `--no-active` / 离线模式,跳过探针驱动,只跑 reader + 被动指标。**规模:小。**
+
+### EV-FWD — standalone 标的抽象（OpenAITarget + 能力声明 + 报告契约）
+
+- **从**:core `treval/active_eval/`(新 `OpenAITarget`)+ `treval/rubric`(能力声明→N/A 叠加)
+- **设计定稿**:[CORE_STANDALONE_TARGET_ABSTRACTION.md §1–6](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md)
+- **范围**:
+  1. `OpenAITarget` 实现已有 `Target` Protocol(`target.py:93`):裸 OpenAI 信封 `/v1/chat/completions` + 解析响应 + 抽输出;覆盖私有端点(自建 base_url / 自定义 auth / 自签 TLS / DashScope·千帆)。**不是换 base_url**。
+  2. **指标能力声明** `evidence_requirement: output_only | needs_decision | needs_wal` —— 🔴 **正确性闸门**:决策/WAL 指标在**跑之前**按 (mode×能力) 排除(`checks.py:41` "无决策→判未拦截→0%",不排除会造出诬告性 0%),报告标 `n/a_needs_gateway`。
+  3. **报告契约**:报告级 `target_kind: raw_model | gateway` + 指标级 `availability` + 命名 `evidence_basis` —— 动 **EV-R1 bundle + eval_report 两处 schema**,`schema_version` 升版 + 同步 golden fixtures/drift-guard,**单独一提交**落对账单。
+  4. **配对报告(paired,一等公民)**:裸 vs 网关同模型·**同一批语料对象(case ID + sha256)**·同窗口/seed;delta 建在**输出侧得逞率**上(非拦截率)。9.2-D:两侧必须同一上游模型。
+- **复用面(已代码核实)**:输出侧 4 个指标逐字复用;决策/WAL 走 N/A。
+- **护栏**:forwarder 永为最小测试客户端(不带规则/PII/审计 WAL);输出侧指标 ≠ 我方做内容安全(9.2-E,守能力边界)。
+- **非目标**:把 forwarder 做成治理路径;standalone 借用"可验证审计/WAL 指纹"话术。
+
+### #4 — 窗口选择键改 `generated_at_ns`（小,潜伏 bug）
+
+- active 跑出的 `window=(0,0)` 使同租户多份报告窗口键相同,选择器两个 option 同值。D2 契约小改;详见 EV-W1 review 发现 #4。
+
+### P3C-harness — P3-content 选型 spike 的测量 harness（🆕 外部依赖,可能抢占 EV-FWD）
+
+- **从**:core active-eval(复用 harness/指标)+ P3-content 语料(受限,NDA)
+- **触发**:Platform 即将开 P3-content 跨仓依赖;spike 点火时 Core 必须能供 harness。
+- **范围(Core 承接四条)**:①**双侧**检测(recall ∧ FPR,守双向门);②**延迟预算**(治理不能把延迟吃穿);③**G4 样本隔离**(train/test + 近重复 + 来源分离);④**失败自解释**(每个判定可回溯到证据,非黑箱)。
+- **红线**:P3-content 语料**不进开源仓**(护栏 3 / 受限语料计划);harness 代码开源,语料 NDA。
+- **协调**:这是 Platform 主线,spike 起跑时优先级**可能高于 EV-FWD** —— Core 预留产能。
+
+### #6 — 生产被动路径（大头,按有无活 POC 定序）
+
+- **从**:core `treval/collect`(去 `--gateway` 硬依赖的被动读)+ 生产 WAL reader
+- **设计**:见 CORE_STANDALONE §3 —— 挂**被动侧接缝** `AuditEvidenceReader`(第三个 reader),**非** EV-FWD 的 `ProbeResult` 缝。
+- **范围**:生产 WAL 被动读 + **租户隔离** + **PII 面独立评估**(比 EV-W1 只读服务的 PII 面大得多)。
+- **今天的缺**:`collect` 强制 `--gateway`(`collect.py:13` "Production-scoped passive reads land later");要给真实租户出报告须绕过 CLI 直接调库。
+- **tiebreaker**:EV-FWD vs #6 谁先 = 有没有活的生产报告 POC;无则 EV-FWD 先。
+
+### P2 束（产品完整性,数据/裁定到位后）
+
+- **UI-3** 证据下钻(`verified` 可点进 WAL/sha256 清单)= 重开 EV-W1 D3 撤销的 `/evidence`,**须重评 PII 面**(仅网关模式)。
+- **#5** 评测执行页(重新评测跳转目标;O1 现落地为显示 CLI 命令)—— 真写面,独立威胁模型。
+- **EV-R2** active-eval 用例级契约(见上)。
+- **DX 一条命令**(9.2-C):v0.2.0 加"一条命令跑起来"开发者体验门。
+- **UI-6** 跨窗口趋势(依赖 #4 + #6 的多窗口真实数据)。
+
+### 已 gate / 外部依赖(观望)
+
+C0-c M1a(等 lead K1 命名空间)· C0-e indirect-benign 扩样 n≥100 · C0-f conformance fixtures · EV-AE14(等语料库 repo + G1–G4)· drift_alert_count(等 P3-drift)· EV-2 Postgres reader。
+
+---
+
 ## 待定决策（第 2 轮 / 随实现调整）
 
 1. ~~**包名 `treval`**~~ → **已定：`treval`**（见顶部决策表）。
