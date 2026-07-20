@@ -15,6 +15,7 @@ previously listed twice on one page.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
@@ -286,6 +287,78 @@ def build_context(bundle: dict) -> dict[str, Any]:
         "gap_count": sum(1 for r in rows if r["gap"]),
         "dimension_titles": titles,
         "measurement_count": len(measurements),
+        # EV-PIN §1.5-2/3: is this report reproducible (⇒ citable), and the window rendered
+        # for humans. The raw ns stays the selector's value elsewhere — this is label only.
+        "pin": pin_status(bundle),
+        "window_label": window_label(report.get("window", [0, 0])),
         "STATUS_LABEL": STATUS_LABEL,
         "STATUS_HELP": STATUS_HELP,
+    }
+
+
+def ts_label(ns: int | None) -> str:
+    """ns-since-epoch → a readable UTC stamp. Bare 19-digit nanoseconds are unreadable to a
+    human (two windows differ only in the middle digits), so labels render this — while the
+    raw ns stays the selector's VALUE, because that value is the selection key (EV-PIN §1.5-3:
+    change the label, never the key, or switching/deep-links break)."""
+    if not ns:
+        return "—"
+    return datetime.fromtimestamp(ns / 1_000_000_000, tz=timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+
+
+def window_label(window: tuple[int, int] | list[int]) -> str:
+    """A window rendered for humans: `2026-07-19 19:45 → 19:57 UTC`."""
+    start, end = ts_label(window[0]), ts_label(window[1])
+    if start == "—" or end == "—":
+        return "未记录窗口"
+    same_day = start[:10] == end[:10]
+    return f"{start} → {end[11:] if same_day else end}"
+
+
+def pin_status(bundle: dict) -> dict[str, Any]:
+    """What kind of report is this, and may it be quoted? (EV-PIN §1.5-2, +PROV §5)
+
+    Three states, in descending order of trust:
+
+    - `pinned`    — measured, window frozen: a third party with the same WAL segments
+                    recomputes the same numbers. Citable.
+    - `unpinned`  — measured, moving-window snapshot (including every pre-EV-PIN bundle,
+                    whose `provenance` is legitimately null). True, but not reproducible.
+    - `synthetic` — not measured at all. The demo report: every number is fabricated.
+
+    `synthetic` outranks the pin question because it is a strictly worse defect — an unpinned
+    report is real data that may drift, a synthetic one was never measured. It is also the one
+    that has already escaped: the demo's fabricated `chain_integrity n=520` reached an external
+    document (PROV §5) precisely because a synthetic report rendered exactly like a real one.
+    The source-level "SYNTHETIC" banner in the generator cannot stop a screenshot; this can.
+
+    Customer-facing wording, no internal jargon."""
+    prov = bundle.get("provenance") or {}
+    synthetic = prov.get("data_source") == "synthetic_demo"
+    pinned = bool(prov.get("pinned")) and not synthetic
+    segs = prov.get("wal_segments") or {}
+    if synthetic:
+        state, label = "synthetic", "示例数据"
+        note = "本报告用于功能演示，全部数值为合成，非任何真实系统的实测结果。"
+    elif pinned:
+        state, label = "pinned", "已固定窗口"
+        note = "本报告的评测窗口已冻结，第三方可用同一批审计日志复算出相同结果。"
+    else:
+        state, label = "unpinned", "未固定窗口"
+        note = "本报告取自移动窗口的快照，数字可能无法复现 —— 不可对外引用。"
+    return {
+        "state": state,
+        "pinned": pinned,
+        "synthetic": synthetic,
+        "label": label,
+        "note": note,
+        "wal_sha": segs.get("sha256", ""),
+        "segment_range": (
+            f"{segs.get('first')} … {segs.get('last')}（{segs.get('count')} 段）"
+            if segs
+            else ""
+        ),
+        "record_count": prov.get("record_count"),
     }

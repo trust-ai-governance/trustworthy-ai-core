@@ -19,7 +19,23 @@
     </span>
   </span>
   <span><b>证据来源</b> <code class="mono basis-{{ report.verification_basis }}">{{ report.verification_basis }}</code></span>
-  <span><b>评测窗口</b> <code class="mono">{{ report.window[0] }}–{{ report.window[1] }}</code></span>
+  <span><b>评测窗口</b>
+    <code class="mono" title="{{ report.window[0] }}–{{ report.window[1] }}">{{ window_label }}</code></span>
+  {# EV-PIN §1.5-2 + PROV §5: what kind of report this is, and whether it may be quoted
+     outside. Three states — pinned / unpinned / synthetic. A pre-EV-PIN report
+     (provenance:null) reads as 未固定窗口; the demo report reads as 示例数据. #}
+  <span id="pinstate" class="pin {{ pin.state }}">
+    <b>{{ pin.label }}</b>
+    <span class="helpwrap">
+      {# label follows the state — "窗口固定说明" is wrong on a 示例数据 badge #}
+      <button type="button" class="help" aria-label="{{ pin.label }}说明" aria-expanded="false">?</button>
+      <span class="pop" role="tooltip">
+        {{ pin.note }}
+        {% if pin.pinned %}<br>审计日志段：<code>{{ pin.segment_range }}</code><br>
+        段内容校验：<code>{{ pin.wal_sha[:23] }}…</code>{% endif %}
+      </span>
+    </span>
+  </span>
   <span><b>实测指标</b> {{ measurement_count }} 条</span>
 </div>
 

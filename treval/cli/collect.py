@@ -43,6 +43,7 @@ from treval.indicators import (
 )
 from treval.models import Measurement
 from treval.protocols import Indicator
+from treval.provenance import build_provenance, observed_window
 from treval.readers import WalEvidenceReader
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -85,20 +86,49 @@ PASSIVE: tuple[Indicator, ...] = (
 )
 
 
-def collect_passive(
-    wal_dir: str, tenant: str, *, warnings: list[str]
-) -> tuple[Measurement, ...]:
-    """Read the eval WAL ONCE and measure every passive indicator over its AuditEvidence
-    stream (EV-5, §6). Best-effort (§5): an unreadable WAL or a failing indicator is a
-    warning, not a crash. The stream is materialized once — each indicator iterates it."""
+@dataclass(frozen=True)
+class PassiveScan:
+    """One passive WAL read: its measurements plus the window it actually covered.
+
+    `observed_window` is the HALF-OPEN `[min, max+1)` of the records read (None when the scan
+    was empty) — the interval that re-selects exactly these records. `record_count` is the
+    scan's n, so the pin artifact states the sample size the numbers came from."""
+
+    measurements: tuple[Measurement, ...]
+    observed_window: tuple[int, int] | None
+    record_count: int
+
+
+def scan_passive(
+    wal_dir: str,
+    tenant: str,
+    *,
+    warnings: list[str],
+    window_from_ns: int | None = None,
+    window_to_ns: int | None = None,
+) -> PassiveScan:
+    """Read the eval WAL ONCE (optionally windowed) and measure every passive indicator over
+    its AuditEvidence stream (EV-5 §6). Best-effort (§5): an unreadable WAL or a failing
+    indicator is a warning, not a crash. The stream is materialized once — each indicator
+    iterates it, and the observed window is derived from the same materialized scan.
+
+    Passing BOTH bounds is what makes a run reproducible (EV-PIN): the reader's filter is
+    half-open `[from, to)`, so the same WAL + the same bounds always yields the same records."""
     try:
-        evidence = tuple(WalEvidenceReader(wal_dir).read_audit(tenant_id=tenant))
+        evidence = tuple(
+            WalEvidenceReader(wal_dir).read_audit(
+                tenant_id=tenant,
+                time_from_ns=window_from_ns,
+                time_to_ns=window_to_ns,
+            )
+        )
     except Exception as e:  # unreadable / undecodable WAL — record, keep going
         warnings.append(f"passive WAL read failed: {type(e).__name__}: {e}")
-        return ()
+        return PassiveScan((), None, 0)
     if not evidence:
         warnings.append(f"passive WAL had no records for tenant {tenant!r}")
-        return ()
+        return PassiveScan((), None, 0)
+
     measurements: list[Measurement] = []
     for ind in PASSIVE:
         try:
@@ -107,7 +137,19 @@ def collect_passive(
             warnings.append(
                 f"passive {ind.indicator_id} failed: {type(e).__name__}: {e}"
             )
-    return tuple(measurements)
+    return PassiveScan(
+        measurements=tuple(measurements),
+        observed_window=observed_window(evidence),
+        record_count=len(evidence),
+    )
+
+
+def collect_passive(
+    wal_dir: str, tenant: str, *, warnings: list[str]
+) -> tuple[Measurement, ...]:
+    """Measurements only — the pre-EV-PIN shape, kept for callers that don't need the
+    window. New code should prefer `scan_passive` (it also reports the covered window)."""
+    return scan_passive(wal_dir, tenant, warnings=warnings).measurements
 
 
 def collect_measurements(
@@ -156,20 +198,62 @@ def run_collect(args: argparse.Namespace) -> int:
 
     warnings: list[str] = []
     active = collect_measurements(target, corpus_root=corpus_root, warnings=warnings)
+
+    # EV-PIN: a run is PINNED only when the operator supplied BOTH window bounds — that is
+    # the reproducibility claim (same WAL + same bounds ⇒ same records ⇒ same n and value).
+    raw_from = getattr(args, "window_from_ns", None)
+    raw_to = getattr(args, "window_to_ns", None)
+    window_from: int | None = int(raw_from) if raw_from is not None else None
+    window_to: int | None = int(raw_to) if raw_to is not None else None
+    pinned = window_from is not None and window_to is not None
+
     # Passive (EV-5): read the same WAL the probes wrote under. Needs --wal; skipped otherwise.
-    passive = (
-        collect_passive(args.wal, args.tenant, warnings=warnings) if args.wal else ()
+    scan = (
+        scan_passive(
+            args.wal,
+            args.tenant,
+            warnings=warnings,
+            window_from_ns=window_from,
+            window_to_ns=window_to,
+        )
+        if args.wal
+        else PassiveScan((), None, 0)
     )
+    passive = scan.measurements
     measurements = active + passive
+
+    # The window we RECORD: the pinned bounds when given, else the window actually observed
+    # (half-open). Never (0,0) — a report that does not state its own window cannot be
+    # reproduced, which is the entire defect EV-PIN exists to fix. A run with no passive read
+    # (no --wal) has no observed window at all; say so with nulls rather than inventing zeros.
+    if window_from is not None and window_to is not None:
+        window = (window_from, window_to)
+    else:
+        window = scan.observed_window or (0, 0)
+        if scan.observed_window is None and args.wal:
+            warnings.append(
+                "no records in the passive scan — window falls back to [0,0]; "
+                "this run is NOT citable externally"
+            )
+    if not pinned:
+        warnings.append(
+            "unpinned run (no --window-from-ns/--window-to-ns): the window is a moving "
+            "snapshot — do NOT cite these numbers in external documents (EV-PIN §1.4)"
+        )
 
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
-        window=(
-            0,
-            0,
-        ),  # active-eval is not time-windowed; production passive path will set this
+        window=window,
         mode="active+passive" if passive else "active",
+        pinned=pinned,
+        provenance=build_provenance(
+            wal_dir=args.wal,
+            window=window if (pinned or scan.observed_window) else None,
+            pinned=pinned,
+            tenant_id=args.tenant,
+            record_count=scan.record_count,
+        ),
     )
     out = args.out or "bundle.json"
     try:
