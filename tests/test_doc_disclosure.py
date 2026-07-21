@@ -28,20 +28,20 @@ def _severities(text: str) -> set[str]:
 
 def test_catches_private_source_paths():
     assert "private_source" in _categories(
-        "上游查出该字段不是内容派生的 —— `上游侧` 取的是静态串"
+        "上游查出该字段不是内容派生的 —— `pipeline.py:314` 取的是静态串"
     )
 
 
 def test_catches_platform_commit_shas():
-    assert "platform_commit" in _categories("它落在 Platform 提交 `〔上游版本A〕` 里")
+    assert "platform_commit" in _categories("它落在 Platform 提交 `12ab5da` 里")
 
 
 def test_catches_control_gap_self_disclosure():
     """The worst category: announcing that our own gate does not run."""
     for line in (
         "公开 Core 的 CI 两样都拿不到，挂在这里是空门",
-        "配置里 ruleset_version 非内容派生",
-        "这个字段 Core 未消费该字段",
+        "配置里 ruleset_version 从未 bump",
+        "这个字段 Core 一行都没读",
     ):
         assert "control_gap" in _categories(line), line
 

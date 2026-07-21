@@ -74,7 +74,7 @@ RULES: list[tuple[str, str, str, re.Pattern[str]]] = [
         "私有仓 commit 号 —— 坐实「哪一次改动造成了什么」",
         re.compile(
             r"(?:Platform|平台|私有仓|上游)[^\n]{0,24}\b[0-9a-f]{7,40}\b"
-            r"|\b(?:〔上游版本A〕|〔上游版本B〕|fc8fe67|35c3e98|6f7c7e1|ebcfac5|b90320c|3e11b63)\b"
+            r"|\b(?:12ab5da|f665572|fc8fe67|35c3e98|6f7c7e1|ebcfac5|b90320c|3e11b63)\b"
         ),
     ),
     (
@@ -89,7 +89,7 @@ RULES: list[tuple[str, str, str, re.Pattern[str]]] = [
         "自曝我方管控门实际没在跑 —— 最伤，且是自己拆自己的台",
         re.compile(
             r"空门|实际没人跑|没在跑|门是空的|从未 ?bump|从来没 ?bump"
-            r"|未消费该字段|两侧各一半"
+            r"|一行都没读|两端都空转"
         ),
     ),
     (
