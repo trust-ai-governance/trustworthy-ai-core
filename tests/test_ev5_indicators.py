@@ -11,6 +11,8 @@ from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval import (
     ChainIntegrity,
+    DurationP50,
+    DurationP95,
     DurationP99,
     TerminalErrorRatio,
     UnclosedLoopRate,
@@ -131,6 +133,30 @@ def test_duration_p99_nearest_rank():
     assert m.value == 99.0  # nearest-rank p99 of 1..100
     assert m.unit == "ms"
     assert m.sample_size == 100
+
+
+def test_duration_p50_p95_nearest_rank():
+    # P3C-harness C1: the distribution, not just the tail. Same nearest-rank formula,
+    # different rank. 1..100 → p50 = ceil(0.50·100) = 50th, p95 = 95th.
+    evidence = [_b(f"r{i}", duration_ms=i) for i in range(1, 101)]
+    (p50,) = DurationP50().measure(evidence)
+    (p95,) = DurationP95().measure(evidence)
+    assert p50.value == 50.0 and p50.indicator_id == "duration_p50"
+    assert p95.value == 95.0 and p95.indicator_id == "duration_p95"
+    assert p50.dimension == p95.dimension == "efficient_reliability"
+
+
+def test_duration_percentiles_share_exclusions_and_ordering():
+    # The three read the SAME sample (B records, duration > 0); only the rank differs, so
+    # p50 <= p95 <= p99 always and all agree on sample_size.
+    evidence = [_a("r0"), _b("z", duration_ms=0)] + [
+        _b(f"r{i}", duration_ms=i) for i in (5, 200, 30, 90, 9999)
+    ]
+    p50, p95, p99 = (
+        cls().measure(evidence)[0] for cls in (DurationP50, DurationP95, DurationP99)
+    )
+    assert p50.sample_size == p95.sample_size == p99.sample_size == 5
+    assert p50.value <= p95.value <= p99.value
 
 
 def test_duration_p99_excludes_a_records_and_zero_durations():
