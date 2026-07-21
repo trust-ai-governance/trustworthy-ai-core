@@ -15,7 +15,11 @@ from treval.indicators.block_rate import BlockRate
 from treval.indicators.boundary_breach_rate import BoundaryBreachRate
 from treval.indicators.chain_integrity import ChainIntegrity
 from treval.indicators.correlate import JoinResult, join_ab
-from treval.indicators.duration_p99 import DurationP50, DurationP95, DurationP99
+from treval.indicators.duration_percentiles import (
+    DurationP50,
+    DurationP95,
+    DurationP99,
+)
 from treval.indicators.pii import PiiExposureSurface, RedactionHitRatio
 from treval.indicators.registry import IndicatorRegistry
 from treval.indicators.runner import run_indicators

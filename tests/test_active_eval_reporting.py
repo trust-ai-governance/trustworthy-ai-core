@@ -6,12 +6,15 @@ internal Platform artifact (gitignored), not exercised here.
 
 from __future__ import annotations
 
+import dataclasses
+
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.active_eval import (
     CorpusCase,
     ProbeResult,
     attack_class_breakdown,
+    false_positive_by_content_class,
     format_attribution_report,
 )
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
@@ -115,3 +118,72 @@ def test_format_report_is_internal_and_lists_per_case():
     assert "[CAUGHT] a1" in report and "[missed] b1" in report
     assert "caught 1/2" in report
     assert "direct: 1/1" in report and "indirect: 0/1" in report
+
+
+# --------------------------------------------------------------------------- #
+# false_positive_by_content_class (P3C-harness C3-2): per-content_class FPR slice.
+# On the FPR side `_probe(caught=True)` = a HARD block on a BENIGN case = a false
+# positive; errored / evidence-less probes are `excluded` (Option C 3-tuple), NOT
+# folded into the denominator (that would be §C2-2's fake 0%, per class).
+# --------------------------------------------------------------------------- #
+
+
+def _benign(cid, content_class):
+    """A benign case carrying a content_class slice key (P3C-harness C3-2)."""
+    return dataclasses.replace(_case(cid, "benign"), content_class=content_class)
+
+
+def test_fp_by_content_class_unclassified_is_own_bucket_never_folded():
+    cases = [
+        _benign("p1", "政治"),
+        _benign("p2", "政治"),
+        _benign("v1", "暴恐"),
+        _benign("u1", ""),
+        _benign("u2", ""),
+    ]
+    results = [
+        _probe("p1", caught=True),  # HARD block on benign → false positive
+        _probe("p2", caught=False),  # allowed → measurable, clean
+        _probe("v1", caught=True),  # false positive
+        _probe("u1", caught=False),  # unclassified, measurable
+        _probe("u2", error="Timeout"),  # unclassified, excluded
+    ]
+    out = false_positive_by_content_class(cases, results)
+    # ① "" is an independent key alongside the classified classes, sorted.
+    assert set(out) == {"政治", "暴恐", ""}
+    assert list(out) == sorted(out)  # deterministic, sorted by content_class
+    assert out["政治"] == (1, 2, 0)  # 1 false_pos / 2 measurable / 0 excluded
+    assert out["暴恐"] == (1, 1, 0)
+    assert out[""] == (0, 1, 1)  # unclassified: 0 fp, 1 measurable, 1 excluded
+    # ② §5.1-B1: sum(measurable) + sum(excluded) == matched probes (nothing vanishes),
+    #    and the "" probes are NOT folded into any classified class's counts.
+    matched = len(results)
+    measurable = sum(m for _, m, _ in out.values())
+    excluded = sum(e for _, _, e in out.values())
+    assert measurable + excluded == matched
+    classified = sum(m + e for cc, (_, m, e) in out.items() if cc != "")
+    assert classified == 3  # p1, p2, v1 only — u1/u2 live solely in the "" bucket
+
+
+def test_fp_by_content_class_all_unclassified_single_bucket():
+    # The current shipped-corpus shape (every case content_class == "") → one "" bucket.
+    cases = [_benign("a", ""), _benign("b", ""), _benign("c", "")]
+    results = [
+        _probe("a", caught=True),
+        _probe("b", caught=False),
+        _probe("c", caught=False),
+    ]
+    assert false_positive_by_content_class(cases, results) == {"": (1, 3, 0)}
+
+
+def test_fp_by_content_class_empty_results():
+    assert false_positive_by_content_class([_benign("a", "政治")], []) == {}
+
+
+def test_fp_by_content_class_errored_and_evidence_less_are_excluded_not_measurable():
+    # The crux of the Option-C ruling: excluded probes are NOT in the denominator. A
+    # 2-tuple (0, 2) here would read as a clean 0% FPR; (0, 0, 2) shows measurable=0 —
+    # nothing was actually measured, so no 0% is claimed.
+    cases = [_benign("e", "政治"), _benign("n", "政治")]
+    results = [_probe("e", error="Timeout"), _probe("n", evidence=False)]
+    assert false_positive_by_content_class(cases, results) == {"政治": (0, 0, 2)}

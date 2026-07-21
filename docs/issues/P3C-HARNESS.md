@@ -67,8 +67,26 @@
 1. ✅ **`CorpusCase.content_class` 字段 —— 首次 check-in 已落地（2026-07-21）。**
    可选、缺省 `""`（未分类切片，单独可见不并入总数）；**不在 `_REQUIRED`** ⇒ 现有语料原样加载
    （回归守卫 `test_shipped_in_tree_corpus_stays_content_safety_taxonomy_free` 断言这条）。
-2. **切片输出（下一 increment）**：`FalsePositiveRate` / `benign_flag_rate` 按该键切片。
-   前置：`ProbeResult` 要携带 case 的 `content_class`（现在没带），是紧接的下一步。
+2. **切片输出（下一 increment）**：按 `content_class` 出 per-class FPR。
+   - **不需要改 `ProbeResult`**：传 `cases` + `results`，按 `case_id` 匹配回 case、按
+     `case.content_class` 分组（`attack_class_breakdown` 的结构），`""` 是独立桶。
+   - 🔴 **但分母不能照抄 `attack_class_breakdown` 的 2 元组（implementer 2026-07-21 抓到的矛盾，已裁）。**
+     recall 侧把 errored/无证据探针**计入 total** 是保守的（errored 攻击 = 未捕获 = 记在你头上）；
+     **FPR 侧会翻成反保守** —— errored/无证据 → `hard_blocked` fail-closed False → 不算 false_pos
+     但落在 total 里 → **FPR 被稀释**。一个 class 若探针全无证据 ⇒ `0/N = 0% FPR` = **假"该类从不过拦"**，
+     正是 §C2-2 那个"评测身份未注册、静默假 0%"按 class 重演。
+   - **裁决 = 选 C（三元组）**：`false_positive_by_content_class(cases, results)` 返回
+     `{content_class: (false_pos, measurable, excluded)}` —— 分母是 **`measurable`**（排除
+     errored + 无证据，与聚合 `FalsePositiveRate` 一致），**且把 `excluded` 逐 class 显形**
+     （§2.2.4 "honestly absent, never fabricated" 落到切片粒度；不像选 B 让 excluded 静默消失）。
+     判据用 `hard_blocked`（已导出）。**偏离 2 元组形状是对的,不是 wart** —— 2 元组是 recall 侧的正确形状,
+     FPR 是不同指标、有不同的正确语义,强套同形状是拿正确性换形状一致。
+   - ✅ **已落地并 review 通过（2026-07-21）**：`false_positive_by_content_class`（选 C 三元组），
+     4 测试，teeth-check 实证（退回选 A ⇒ crux 与 B1 守卫两条变红）。
+   - 📌 **live 验证状态（file it,非可选）**：**切片的 live 验证 blocked on 标注良性语料**（依赖 #4,
+     out-of-tree/NDA,现无）—— 公开语料 `content_class` 全 `""`（taxonomy-free 不变量），
+     benign-only 的 live run 只出单一 `""` 桶,**不展示 per-class 切片**。⇒ 切片的真实数据验证
+     **随 spike 在标注语料上跑时兑现**,不是现在能补的;单测 + teeth-check 已锁住纯函数正确性。
 3. Platform 保证每条内容规则带 `content_class`（上游 31 小类为准，对客 17 类是渲染视图）。
 
 ### C4 — eval_report 标的/模式标注（零新增）
@@ -316,13 +334,50 @@ class OllamaLogprobJudge (实现 Target Protocol):
   prompt/输出契约是 §2.4.3 那个"选型轴",所以 `契约id` 必须进版本串,否则换个读法出的数不可归因。
 - **延迟不在此处测**（CPU，§2.4.5）；本适配器只产**质量分**,可离线批跑。
 
-## 3. 待裁
+## 3. 裁定（R1/R2 已拍，PM 2026-07-21；G2 归属未决）
 
-| # | 项 | Core 建议 | 为什么现在定 |
-|---|---|---|---|
-| **R1** | `target_kind` 扩 `moderation_api` + `evidence_basis: self_reported` | **建议扩** | C2 能否干净落地的前提；动 EV-R1 bundle + eval_report 两处 schema，按 §8.7 要单独提交 + 升 `schema_version` + 同步 golden fixtures |
-| **R2** | "曲线" = 点 还是 阈值扫描 | ✅ **条件已满足，建议裁定「做曲线」—— 但附三条**（见 §3.1） | 两家均回连续分数（数美 `probability` / 易盾 `rate`），障碍消失 |
-| **G2** | 重叠门的**归属** | **不挂公开 Core CI** | 🔒 本门依赖的资产不在公开仓 ⇒ **归属见私有侧**。在归属落实前，不得在任何材料中把它描述为「已生效的硬门」 |
+| # | 项 | 裁定 |
+|---|---|---|
+| **R2** | "曲线" vs "点" | ✅ **做曲线** —— 自建稳定性已实测（方差 0，§2.4.2）。**但是逐候选策略,不是"一律画曲线"**：每候选先过自己的稳定性,方差大的（自由生成式 / 远程 API）**只给点 + 波动带**。绑 §3.1 三条。 |
+| **R1** | `target_kind` 扩 `moderation_api` + `evidence_basis: self_reported` | ✅ **契约现在定**（省一次升版）。🔴 **但拆开契约与实现：C2 适配器编码 gate 在"至少一家厂商清准入（HTTPS + 数据条款都过）"之后** —— 现状数美已出局、易盾数据条款未答,**别为出局/未决选手写适配器**。 |
+| **G2** | 重叠门的**归属** | ⏳ 未决。**不挂公开 Core CI** 🔒 依赖资产不在公开仓 ⇒ 归属见私有侧;落实前不得称"已生效的硬门"。 |
+
+### 3.0 R1/R2 的精度约束（PM 附加,务必随裁定保留,别丢）
+
+**R2:**
+- 实证的是**本地确定性**,不是"所有候选都能画曲线"。旧观测 `0.10→0.95` 是**远程 API**、非本轮 N×6 复测 —— 这不影响裁 R2,因为 §3.1-1 已正确处理（逐候选先过稳定性）。
+- ×6 对**确定性**结论足够（确定性是二元的:位级一致或不是;饱和 + 非饱和都 6/6 一致即坐实）。
+
+**R1:**
+- 🔴 **`evidence_basis: self_reported` 是硬绑定,不是标签** —— 这一档**绝不能借用"可验证审计 / WAL 指纹"话术**（同 [CORE_STANDALONE](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md) §5 的 N/A 纪律）;报告里必须显形为"**厂商自报 · 最弱档 · 不可复算**"。
+- **DashScope 独立比较项（§2.4.6）不吃这条** —— 它是**生成端点当判官**（走 logprob,同自建那套）,不是 moderation 分类器,`target_kind` **不是** `moderation_api`。⇒ 即便两家厂商全 washout,§2.4.6 的"至少一个第三方独立比较项"仍由 DashScope 满足,**R1 的价值不依赖厂商是否入场**。
+- **schema 纪律（§8.7）**：两处 schema 同批改 + 升 `schema_version` + 同步 golden fixtures/drift-guard + 对账单**单独一次提交**,不折进代码提交。
+- 🔴 **耦合警告（2026-07-21,对着代码）：`target_kind`/`evidence_basis` 在 Core 一处都没有**
+  （EV-FWD 未落,设计只在私有 CORE_STANDALONE §5.2）。⇒ **R1 不是"加第三值",是把整个
+  `target_kind{raw_model|gateway|moderation_api}` + `evidence_basis` 概念一次性落进 schema。**
+  这仍是"契约现在定、省一次升版"（一次 bump 覆盖三值,好过先落两值再补第三值两次 bump），
+  但**规模是 EV-FWD 那块,不是一行**。
+
+  ✅ **PM 已裁（2026-07-21）：现在做,一次 bump。** 理由比"省升版"更强一层 ——
+  **C4（eval_report 标的/模式标注）本来就要 `target_kind`/`evidence_basis`**（§C4 明写"跟
+  CORE_STANDALONE §5.2 走"）。所以这块不是 R1 的额外工作,是 **C4 无论如何都要落的**;
+  R1 真正新增的只是 `moderation_api` 值 + `self_reported` 档。一次落齐,同时服务 C4 和 R1。
+
+  🔴 **R1 落地的三条守护（缺一条就从"实现已裁契约"滑成"借 C2 之名重新发明 EV-FWD schema"）:**
+  1. **逐字实现 CORE_STANDALONE §5.2 的已裁形状,不重新设计** —— 报告级
+     `target_kind{raw_model|gateway|moderation_api}` + 指标级 `availability{measured|n/a_needs_gateway}`
+     + 命名 `evidence_basis`。R1 落的必须**等于** §5.2;有任何出入,先对齐再落。
+  2. **只落 schema 骨架,不落 EV-FWD 运行时** —— `OpenAITarget`、harness 自抓打分接缝那些运行时
+     按 EV-FWD 自己排期。R1 只落契约字段（三值枚举 + `evidence_basis` + `availability` + golden fixtures），
+     别让 schema 把整个 EV-FWD 实现拖进 P3C（范围失控）。
+  3. **`moderation_api` 值现在落 schema,但消费者 C2 适配器仍 gate 在厂商清准入之后** ——
+     会出现"枚举有值、暂无候选用它",这对枚举可接受（前向兼容、永久产品概念）;但报告必须
+     诚实显形"**本次无候选走 `moderation_api`**"（honestly-absent,不伪造），同 §5.2 的 N/A 纪律。
+
+  🔴 **归属纪律(PM 协调项,防同一 schema 被两个 issue 争夺):一处定义（§5.2 已裁）· 落地一次（R1）·
+  多处消费（C4 / EV-FWD）。** ⇒ 将来 EV-FWD issue（Core 现无此文件）创建时,**必须交叉引用
+  "`target_kind`/`evidence_basis`/`availability` 的 schema 已由 R1/P3C 落地,EV-FWD 消费、不重定义"**,
+  否则 EV-FWD 真做时会撞上已存在的 schema 又想重定义一遍。**此义务记在此,免得 EV-FWD 创建时丢。**
 
 ### 3.1 R2 裁定「做曲线」的三条附加条件（缺一条，曲线就是装饰）
 
@@ -373,8 +428,10 @@ class OllamaLogprobJudge (实现 Target Protocol):
 
 - **B1〔切片器落地时〕未分类切片必须有 guard test**（兑现 §5-3）：
   构造混含 `content_class=""` 与已分类 case 的一批 `ProbeResult`，断言
-  ① `""` 桶在报告里**单独出现**；② 它**不被并进任何 class 的 total**。
-  没有这条,§5-3 永远是空头承诺。
+  ① `""` 桶在报告里**单独出现**；② 它**不被并进任何 class 的 total**；
+  ③ 🔴 **excluded 不静默消失**（因分母是 `measurable` 而非 total，见 §C3-2 裁决 C）：
+  断言 **`sum(measurable over all buckets) + sum(excluded) == matched probes`** ——
+  errored/无证据探针必须在 `excluded` 里能被数出来,不能凭空蒸发。
 - **B2〔延迟渲染落地时〕`sample_size=0` 不得裸露成 `0 ms`**：
   三个百分位在空窗口都返回 `value=0.0 · VERIFIED`（继承自旧 p99，非本次回归）——
   但 **"p50=0ms" 比 "p99=0ms" 更易被误读成"极快"**，唯一信号是 `sample_size=0`。
