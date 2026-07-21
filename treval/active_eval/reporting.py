@@ -21,7 +21,12 @@ from typing import Any
 
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
-from treval.active_eval.checks import caught_by_tier2, evaluate, injection_score
+from treval.active_eval.checks import (
+    caught_by_tier2,
+    evaluate,
+    hard_blocked,
+    injection_score,
+)
 from treval.active_eval.corpus import CorpusCase
 from treval.active_eval.target import ProbeResult
 
@@ -56,6 +61,44 @@ def attack_class_breakdown(
         if _caught(pr):
             agg[case.attack_class][0] += 1
     return {k: (v[0], v[1]) for k, v in sorted(agg.items())}
+
+
+def false_positive_by_content_class(
+    cases: Iterable[CorpusCase], results: Iterable[ProbeResult]
+) -> dict[str, tuple[int, int, int]]:
+    """`{content_class: (false_pos, measurable, excluded)}`, results matched to cases by id
+    and grouped by `case.content_class` (P3C-harness C3-2 — the per-content_class slice of
+    the benign over-refusal / FPR side). `""` is the unclassified bucket: it surfaces as its
+    OWN key and is NEVER folded into any classified class's counts.
+
+    FPR side, so the signal is `hard_blocked` (the user was DENIED on a benign case), NOT
+    `_caught` (that is the recall side). Denominator matches FalsePositiveRate: errored /
+    evidence-less probes are `excluded` — counted NEITHER as a false_pos NOR in `measurable`
+    (no WAL ⇒ cannot confirm block/allow, fail-closed). Unlike a 2-tuple (caught, total),
+    which on the FPR side would DEFLATE the rate — a class of all-unmeasurable probes would
+    read as a clean 0% (§C2-2's fake 0%, per class) — `excluded` is surfaced PER CLASS so
+    absence shows honestly (§2.2.4 honestly-absent, never fabricated). Pure + deterministic
+    (WAL rule decisions). Sorted by content_class.
+
+    Invariant (§5.1-B1): each matched probe lands in exactly one of {measurable, excluded}
+    of exactly one class, so per class measurable + excluded == probes routed to it, and
+    sum(measurable) + sum(excluded) == matched probes — no probe silently vanishes."""
+    by_id = {c.id: c for c in cases}
+    # [false_pos, measurable, excluded] per content_class
+    agg: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
+    for pr in results:
+        case = by_id.get(pr.case_id)
+        if case is None:
+            continue
+        bucket = agg[case.content_class]
+        # excluded: no confirmable block/allow without the WAL (as FalsePositiveRate)
+        if pr.error is not None or pr.evidence is None:
+            bucket[2] += 1
+            continue
+        bucket[1] += 1  # measurable
+        if hard_blocked(pr):  # a HARD block (user denied) on benign IS a false positive
+            bucket[0] += 1
+    return {k: (v[0], v[1], v[2]) for k, v in sorted(agg.items())}
 
 
 def _catching_rules(pr: ProbeResult) -> str:

@@ -52,6 +52,7 @@ from treval.active_eval.perturb import (
 )
 from treval.active_eval.reporting import (
     attack_class_breakdown,
+    false_positive_by_content_class,
     format_attribution_report,
     format_variant_report,
     rule_robustness,
@@ -99,6 +100,8 @@ __all__ = [
     "Tier2ShadowRecallLift",
     "BenignShadowFlagRate",
     "attack_class_breakdown",
+    # P3C-harness C3-2 — per-content_class FPR slice (honest-absence 3-tuple)
+    "false_positive_by_content_class",
     "format_attribution_report",
     # EV-AE7 — adversarial variants + rule-robustness diagnostic
     "PERTURBATIONS",
