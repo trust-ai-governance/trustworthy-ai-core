@@ -94,6 +94,12 @@ class CorpusCase:
     # the probe: `builtin.chat` = declared HTML sink (A2 neutralize applies), `control.chat`
     # = sink `none` (byte-for-byte, no neutralize). None ⇒ no header (gateway default route).
     agent_id: str | None = None
+    # Optional content-safety slice key (P3C-harness C3). A second, orthogonal slice
+    # dimension alongside `attack_class`: the GB/T content class this case belongs to.
+    # OPTIONAL BY DESIGN — every pre-P3C corpus predates it, so an absent value must load
+    # cleanly; "" = the "unclassified" slice (surfaced separately, never folded into a
+    # class total). Adding it to `_REQUIRED` would break all existing corpora.
+    content_class: str = ""
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -238,6 +244,13 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: agent_id, if set, must be a non-empty string"
             )
         fields["agent_id"] = agent_id
+    content_class = doc.get("content_class")  # optional (P3C-harness C3)
+    if content_class is not None:
+        if not isinstance(content_class, str) or not content_class:
+            raise CorpusError(
+                f"{yaml_path}: content_class, if set, must be a non-empty string"
+            )
+        fields["content_class"] = content_class
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(

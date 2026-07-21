@@ -21,6 +21,8 @@ from treval.indicators import (
     BlockRate,
     BoundaryBreachRate,
     ChainIntegrity,
+    DurationP50,
+    DurationP95,
     DurationP99,
     IndicatorRegistry,
     JoinResult,
@@ -94,6 +96,8 @@ __all__ = [
     "build_default_registry",
     # EV-5 — passive WAL indicators + A↔B join
     "ChainIntegrity",
+    "DurationP50",
+    "DurationP95",
     "DurationP99",
     "TerminalErrorRatio",
     "UnclosedLoopRate",

@@ -101,6 +101,40 @@ def test_shipped_corpus_has_marker_cases():
     assert len(marked) >= 6
 
 
+# --------------------------------------------------------------------------- #
+# content_class (P3C-harness C3): optional, must not break existing corpora.
+# --------------------------------------------------------------------------- #
+
+
+def test_content_class_is_optional_and_defaults_empty(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.content_class == ""  # absent ⇒ "" (the unclassified slice)
+
+
+def test_content_class_loads_when_set(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc(content_class="政治")))
+    assert case.content_class == "政治"
+
+
+def test_empty_content_class_raises(tmp_path):
+    # Present-but-empty is an author mistake (fail-closed), same as output_marker.
+    with pytest.raises(CorpusError, match="content_class"):
+        load_corpus(_write_case(tmp_path, _valid_doc(content_class="")))
+
+
+def test_shipped_in_tree_corpus_stays_content_safety_taxonomy_free():
+    # Two invariants in one assertion (intentional, not accidental over-strictness):
+    #  1) backward-compat: pre-C3 cases load cleanly (absent field ⇒ "") — also covered by
+    #     test_content_class_is_optional_and_defaults_empty.
+    #  2) DESIGN INTENT (this test's unique value): the PUBLIC Core corpus is injection/
+    #     security (keyed by attack_class) and carries NO content_class. Content-safety
+    #     classification happens on the OUT-OF-TREE content corpus (§0 --corpus <path>, NDA).
+    #     An in-tree case acquiring a content_class would mean the closed GB/T taxonomy
+    #     leaked into the public corpus — so this SHOULD red until someone consciously
+    #     revisits the invariant here.
+    assert all(c.content_class == "" for c in load_corpus())
+
+
 def test_missing_required_field_raises(tmp_path):
     doc = _valid_doc()
     del doc["input"]

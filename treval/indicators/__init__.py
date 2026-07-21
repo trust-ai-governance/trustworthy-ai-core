@@ -15,7 +15,7 @@ from treval.indicators.block_rate import BlockRate
 from treval.indicators.boundary_breach_rate import BoundaryBreachRate
 from treval.indicators.chain_integrity import ChainIntegrity
 from treval.indicators.correlate import JoinResult, join_ab
-from treval.indicators.duration_p99 import DurationP99
+from treval.indicators.duration_p99 import DurationP50, DurationP95, DurationP99
 from treval.indicators.pii import PiiExposureSurface, RedactionHitRatio
 from treval.indicators.registry import IndicatorRegistry
 from treval.indicators.runner import run_indicators
@@ -45,6 +45,11 @@ __all__ = [
     # EV-5a — passive single-record WAL indicators
     "ChainIntegrity",
     "DurationP99",
+    # P3C-harness C1 — latency distribution (p50/p95 alongside the p99 baseline). Exported
+    # for the selection spike; NOT in build_default_registry (the maturity report keeps p99
+    # as its single latency objective — adding p50/p95 there would churn every golden bundle).
+    "DurationP50",
+    "DurationP95",
     "TerminalErrorRatio",
     # EV-5b — A↔B join + closed-loop check
     "UnclosedLoopRate",
