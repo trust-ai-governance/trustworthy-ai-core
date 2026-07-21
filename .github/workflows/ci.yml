@@ -95,6 +95,12 @@ jobs:
         if: steps.detect.outputs.has_py == 'true'
         run: bandit -r tools treval
 
+      # This repo is public; our work is not. Four times private material reached (or
+      # nearly reached) a public file, and the fourth time a human review missed two of
+      # the files. See docs/DISCLOSURE_POLICY.md for the categories and the rewrite table.
+      - name: Disclosure gate (public-repo docs)
+        run: python tools/check_doc_disclosure.py
+
       - name: Vulnerability scan with pip-audit
         run: pip-audit || true
 

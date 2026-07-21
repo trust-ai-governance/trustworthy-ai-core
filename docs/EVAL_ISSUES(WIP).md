@@ -674,24 +674,21 @@ stub 至标签器落地）。
 
 ### RULEPIN — 审计记录里钉住"跑的是哪版规则"〔🆕 单开,两侧各一半〕
 
-- **发现**:Platform 架构师查出 `policy_snapshot_version` 不是内容派生的 —— `pipeline.py:314`
-  取的是配置里的静态串 `ruleset_version: "v1"`,**从未 bump**。⇒ 审计记录分不出跑的是哪版规则集。
-- 🔴 **Core 侧核实后补一半**:这个字段 **Core 一行都没读**(`grep policy_snapshot|ruleset_version
-  treval/ tools/` → 0 命中;proto 里字段是有的)。**两端都空转** —— 所以只改 Platform 一侧,
-  Core 的 pinned run 里照样不会出现规则集版本。
-- **两侧动作**:Platform 改成**编译后规则集的内容哈希**;**Core 在 pinned run 的 `provenance` 里
-  记录本次观测到的 `policy_snapshot_version` 集合**(与窗口 / 段 sha 同级)。
+- **Core 半边设计定稿**:[docs/issues/RULEPIN-CORE.md](issues/RULEPIN-CORE.md)
+- 🔴 **不阻塞 PROV**(Platform 架构师提醒,采纳):PROV item 2 要的"哪版规则集"用**规则集文件的
+  git commit/tag** 做印记就够(语料侧本来就是这么钉的)。PROV 已用 git 印记闭环;根因 issue 独立推进。
+
+- **发现**:上游写入的规则集版本字段**非内容派生**(已由上游确认,细节在私有对账文档)。
+  ⇒ 审计记录分不出跑的是哪版规则集。
+- 🔴 **Core 侧核实后补一半**:该字段 **Core 侧未消费** —— `provenance` 里没有任何规则集信息。
+  ⇒ **两侧各一半**;只改上游一侧,Core 的 pinned run 里照样不会出现规则集版本。
+- **两侧动作**:上游改成**编译后规则集的内容哈希**;**Core 在 pinned run 的 `provenance` 里
+  记录本次观测到的版本取值集合**(与窗口 / 段 sha 同级)。
 - **为什么值得单开**:我们卖"可验证审计",却无法从审计记录回答"这条决策用的是哪版规则"。
-  这比白皮书数字对不上**更结构性** —— 数字错了能改文档,证据链缺一环改不了。
-- 🔴 **motivating case(比设计缺陷本身更硬 —— 这是一次真实发生过的归因失败)**:
-  57% 那次测量的规则集变更是 **P2-a.2**(两个 anchor:unconditional-output-override /
-  fake-authority+disable-safety)。它落在 Platform 提交 `12ab5da` 里 —— 而那个提交的 subject 是
-  **"P2-b v1 — Tier-2 model-based injection detection (shadow) + P2-a′ hint seam"**,
-  **一个字没提 P2-a.2**。
-  ⇒ **规则集的真实变更搭便车藏在别的 issue 的提交里,commit subject 不是可靠的版本记录。**
-  最终定位靠的是 `git log -S` 标签 + anchor 特征词,**不是靠数字** —— 数字那条路上还埋着
-  `16/28` 在两个版本里含义相反的陷阱(PROV §3.1-1),两位架构师都差点栽进去。
-  **这正是 `policy_snapshot_version` 该顶上的班:** 它若是内容哈希,上面整段考古一次都不必做。
+  这比数字对不上**更结构性** —— 数字错了能改文档,证据链缺一环改不了。
+- 🔴 **motivating case**:某个数字对应的规则集变更,**其提交 subject 完全没提到它** ——
+  真正的改动搭便车藏在另一个 issue 的提交里。⇒ **提交信息不是可靠的版本记录**;
+  只有**记录自己携带的指纹**才是。(具体版本号与案例在私有对账文档。)
 - **与 EV-PIN 同一模式**:EV-PIN 钉住「跑的是哪批 WAL」,本条钉住「跑的是哪版规则」。两者齐了,
   一次 run 才真正可复现。它的直接代价已经现场发生:PROV §3.1 那一整节 git 考古就是为了补这个缺口。
 - **规模**:小(两侧各一小改)· **不阻塞 PROV**。
@@ -723,6 +720,9 @@ stub 至标签器落地）。
 - active 跑出的 `window=(0,0)` 使同租户多份报告窗口键相同,选择器两个 option 同值。D2 契约小改;详见 EV-W1 review 发现 #4。
 
 ### P3C-harness — P3-content 选型 spike 的测量 harness（🆕 外部依赖,可能抢占 EV-FWD）
+
+- **设计定稿**:[docs/issues/P3C-HARNESS.md](issues/P3C-HARNESS.md)(C1–C4 定标 + 依赖表 + R1/R2/G2 待裁 + 排期)
+- **今天就能起步**:C1 骨架 · C3 `content_class` 可选字段 · C4(零新增)。**卡的是良性对照集 + content_class 标签 + 两条免费裁定**。
 
 - **从**:core active-eval(复用 harness/指标)+ P3-content 语料(受限,NDA)
 - **触发**:Platform 即将开 P3-content 跨仓依赖;spike 点火时 Core 必须能供 harness。
