@@ -72,9 +72,14 @@ RULES: list[tuple[str, str, str, re.Pattern[str]]] = [
         "error",
         "platform_commit",
         "私有仓 commit 号 —— 坐实「哪一次改动造成了什么」",
+        # GENERIC only, by design: a private SHA almost always appears with a private-repo
+        # context word nearby (Platform / 上游 / 私有仓 / 提交). We deliberately do NOT
+        # hardcode the actual private SHAs here — this file is PUBLIC, and listing them to
+        # detect them would itself disclose them (the exact trap that motivated this gate).
+        # A bare hex with no such context is indistinguishable from one of OUR OWN public
+        # commit SHAs (e.g. "git 5b1d104" in the provenance docs), so it must NOT match.
         re.compile(
-            r"(?:Platform|平台|私有仓|上游)[^\n]{0,24}\b[0-9a-f]{7,40}\b"
-            r"|\b(?:12ab5da|f665572|fc8fe67|35c3e98|6f7c7e1|ebcfac5|b90320c|3e11b63)\b"
+            r"(?:Platform|平台|私有仓|上游|上游仓|上游提交)[^\n]{0,24}\b[0-9a-f]{7,40}\b"
         ),
     ),
     (

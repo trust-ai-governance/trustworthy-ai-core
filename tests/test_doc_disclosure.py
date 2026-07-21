@@ -33,7 +33,16 @@ def test_catches_private_source_paths():
 
 
 def test_catches_platform_commit_shas():
-    assert "platform_commit" in _categories("它落在 Platform 提交 `12ab5da` 里")
+    # Fake hex on purpose: this file is PUBLIC, so it must not embed a real private SHA
+    # to test with — that would re-leak the very thing the gate exists to stop. The gate
+    # detects the SHATTER *shape* (private-repo context word + hex), not a hardcoded list.
+    assert "platform_commit" in _categories("它落在 Platform 提交 `deadc0de` 里")
+
+
+def test_a_bare_hex_without_private_context_is_not_flagged():
+    """Our OWN public commit SHAs appear in the provenance docs ("git 5b1d104"). A bare hex
+    with no private-repo context word must pass, or the gate cries wolf on our own history."""
+    assert "platform_commit" not in _categories("语料 git 5b1d104,2026-06-28 起未改")
 
 
 def test_catches_control_gap_self_disclosure():
