@@ -14,7 +14,7 @@ _POSTURE_SAMPLE = _ROOT / "docs" / "posture.sample.yaml"
 
 def _bundle_doc(measurements, *, tenant_id="__eval__", window=(1000, 2000)):
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": "active",
@@ -60,7 +60,7 @@ def test_report_json_is_valid_and_min_gated(tmp_path):
     bundle = _injection_met_bundle(tmp_path)
     text, _ = run_report(bundle, _POSTURE_SAMPLE, "json")
     doc = json.loads(text)
-    assert doc["schema_version"] == 1
+    assert doc["schema_version"] == 2
     rob = next(d for d in doc["report"]["dimensions"] if d["dimension"] == "robustness")
     # injection met → measured L2; posture sample attests robustness L3 → gap at L3, awarded L2.
     assert rob["measured_ceiling"] == "L2"
@@ -157,7 +157,7 @@ def test_main_report_ok(tmp_path, capsys):
     rc = main(["report", "--measurement-bundle", str(bundle), "--format", "json"])
     assert rc == EXIT_OK
     out = capsys.readouterr().out
-    assert json.loads(out)["schema_version"] == 1
+    assert json.loads(out)["schema_version"] == 2
 
 
 def test_main_bad_bundle_path_is_io_error(capsys):
@@ -196,4 +196,4 @@ def test_main_writes_out_file(tmp_path, capsys):
         ]
     )
     assert rc == EXIT_OK
-    assert json.loads(out.read_text())["schema_version"] == 1
+    assert json.loads(out.read_text())["schema_version"] == 2

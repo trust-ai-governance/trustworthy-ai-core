@@ -37,7 +37,7 @@ def test_six_fixtures_index_resolve_and_round_trip(tmp_path):
     assert len(entries) == 6  # index lists 6
     for e in entries:
         assert store.read_bytes(e) == (tmp_path / e.file).read_bytes()  # byte-identical
-        assert json.loads(store.read_bytes(e))["schema_version"] == 1
+        assert json.loads(store.read_bytes(e))["schema_version"] == 2
 
 
 def test_index_is_newest_first(tmp_path):

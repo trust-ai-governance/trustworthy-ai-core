@@ -16,7 +16,9 @@ from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = (
+    2  # R1: collect bundle top level gains target_kind + derived evidence_basis
+)
 _VALID_INTEGRITY = {s.value for s in IntegrityStatus}
 
 
@@ -37,6 +39,9 @@ class LoadedBundle:
     # pre-EV-PIN bundle — that absence is meaningful (unpinned), never faked.
     provenance: dict[str, Any] | None = None
     pinned: bool = False
+    # R1: which target this run probed; flows into the graded delivery bundle. Defaults
+    # `gateway` — every pre-R1 bundle is a gateway run (R1 §1.5-B).
+    target_kind: str = "gateway"
 
 
 def _require(raw: dict[str, Any], key: str, where: str) -> Any:
@@ -168,6 +173,26 @@ def load_bundle(path: str | Path) -> LoadedBundle:
             "in external documents (EV-PIN §1.4)"
         )
 
+    # R1: target_kind (absent ⇒ gateway, the only pre-R1 kind). A bad value fails closed;
+    # a stored evidence_basis must equal derive(target_kind) — the derivation gate (§2/§7-2).
+    from treval.rubric.serialize import (
+        TARGET_KINDS,
+        assert_evidence_basis_derived,
+    )
+
+    target_kind = doc.get("target_kind", "gateway")
+    if target_kind not in TARGET_KINDS:
+        raise BundleError(
+            f"bundle {p}: target_kind must be one of {list(TARGET_KINDS)}, "
+            f"got {target_kind!r}"
+        )
+    evidence_basis = doc.get("evidence_basis")
+    if evidence_basis is not None:
+        try:
+            assert_evidence_basis_derived(target_kind, evidence_basis)
+        except ValueError as e:
+            raise BundleError(f"bundle {p}: {e}") from e
+
     return LoadedBundle(
         schema_version=schema_version,
         tenant_id=tenant_id,
@@ -176,6 +201,7 @@ def load_bundle(path: str | Path) -> LoadedBundle:
         warnings=tuple(warnings),
         provenance=provenance,
         pinned=pinned,
+        target_kind=target_kind,
     )
 
 
@@ -198,6 +224,7 @@ def build_bundle(
     mode: str,
     pinned: bool = False,
     provenance: dict[str, Any] | None = None,
+    target_kind: str = "gateway",
 ) -> dict[str, Any]:
     """The bundle `collect` writes: measurements[] + run metadata (no graded `report`;
     `report` produces that). Reuses the EV-7 serializer for the measurement shape.
@@ -206,12 +233,17 @@ def build_bundle(
     explicit bounds, and the WAL segment bytes + record count behind it. They are additive
     metadata on the COLLECT bundle (which has no frozen schema) — the EV-R1 delivery envelope
     is untouched. The observed/pinned `window` flows into the graded report through
-    `_grade(window=bundle.window)`, so fixing it here fixes the delivered report too."""
-    from treval.rubric.serialize import serialize_measurement
+    `_grade(window=bundle.window)`, so fixing it here fixes the delivered report too.
+
+    `target_kind` (R1) records WHICH target this run probed; `evidence_basis` is DERIVED from
+    it (never stored independently, R1 裁定 A). Both flow into the graded delivery bundle."""
+    from treval.rubric.serialize import derive_evidence_basis, serialize_measurement
 
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
+        "target_kind": target_kind,
+        "evidence_basis": derive_evidence_basis(target_kind),
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": mode,

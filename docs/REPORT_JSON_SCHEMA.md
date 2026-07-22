@@ -21,7 +21,9 @@ never mis-pair or lose a part. Assembly happens at serialize time
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "target_kind": "gateway",
+  "evidence_basis": "wal_anchored",
   "registry_fingerprint": "sha256:…",
   "report": { /* MaturityReport */ },
   "registry": { /* DimensionRegistry — the EV-W0 serialize_registry shape */ },
@@ -30,6 +32,16 @@ never mis-pair or lose a part. Assembly happens at serialize time
 ```
 
 - `schema_version` (int): this contract's version; bump on any additive change (§8).
+- `target_kind` (string, R1): **what was evaluated** — `raw_model` (bare-model baseline) ·
+  `gateway` (governed, WAL-anchored) · `moderation_api` (third-party moderation API).
+  Report-level; default `gateway` (every pre-R1 run is a gateway run).
+- `evidence_basis` (string, R1 裁定 A): the **evidence strength**, **DERIVED from `target_kind`,
+  never stored independently** — `gateway→wal_anchored` / `raw_model→harness_observed` /
+  `moderation_api→self_reported`. A single source of truth (`target_kind`); a serializer/loader
+  gate FAILS if `evidence_basis ≠ derive(target_kind)`. `self_reported` is the **weakest tier
+  (vendor self-report, NOT reproducible)** and must **never** borrow "verifiable audit / WAL
+  anchored / reproducible" wording. (`availability`/`evidence_requirement` are **EV-FWD**, not
+  R1 — see R1-TARGET-KIND-SCHEMA §1.5-A.)
 - `registry_fingerprint` (string, `sha256:<64 hex>`): sha256 over the registry's canonical
   (sorted-key, compact) serialization. Within a self-contained bundle it is redundant (the
   registry is inlined); it stays for the future decoupled path and as an integrity check.

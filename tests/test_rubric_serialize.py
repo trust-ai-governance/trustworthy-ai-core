@@ -115,8 +115,17 @@ def _sample_bundle():
 def test_bundle_envelope_shape():
     report, measurements = _sample_bundle()
     bundle = serialize_bundle(report, measurements)
-    assert bundle["schema_version"] == 1
-    assert set(bundle) == {"schema_version", "report", "measurements"}
+    assert bundle["schema_version"] == 2
+    # R1: +target_kind (default gateway) + derived evidence_basis at the envelope top level
+    assert set(bundle) == {
+        "schema_version",
+        "target_kind",
+        "evidence_basis",
+        "report",
+        "measurements",
+    }
+    assert bundle["target_kind"] == "gateway"
+    assert bundle["evidence_basis"] == "wal_anchored"
     rep = bundle["report"]
     assert set(rep) == {
         "tenant_id",
@@ -203,4 +212,8 @@ def test_bundle_round_trips_through_json():
     report, measurements = _sample_bundle()
     parsed = json.loads(bundle_to_json(report, measurements))
     assert parsed["report"]["dimensions"][0]["dimension"] == "robustness"
-    assert parsed["schema_version"] == 1
+    assert parsed["schema_version"] == 2
+    assert (
+        parsed["target_kind"] == "gateway"
+        and parsed["evidence_basis"] == "wal_anchored"
+    )
