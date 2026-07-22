@@ -47,7 +47,8 @@ def test_build_then_load_round_trips(tmp_path):
     loaded = load_bundle(_write(tmp_path, doc))
     assert loaded.tenant_id == "t"
     assert loaded.window == (1, 2)
-    assert loaded.schema_version == 1
+    assert loaded.schema_version == 2
+    assert loaded.target_kind == "gateway"  # R1: default, round-trips
     # same measurements (order-independent: compare as sets of key fields)
     got = {
         (m.indicator_id, m.subject, m.value, m.integrity) for m in loaded.measurements
@@ -62,7 +63,7 @@ def test_build_then_load_round_trips(tmp_path):
 
 
 def test_missing_tenant_and_window_warn_and_default(tmp_path):
-    doc = {"schema_version": 1, "measurements": []}
+    doc = {"schema_version": 2, "measurements": []}
     loaded = load_bundle(_write(tmp_path, doc))
     assert loaded.tenant_id == "unknown"
     assert loaded.window == (0, 0)

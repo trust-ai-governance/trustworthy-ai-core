@@ -7,6 +7,8 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "target_kind",
+    "evidence_basis",
     "registry_fingerprint",
     "provenance",
     "report",
@@ -17,6 +19,24 @@
     "schema_version": {
       "type": "integer",
       "minimum": 1
+    },
+    "target_kind": {
+      "description": "R1: what was evaluated. raw_model = bare-model baseline · gateway = governed (WAL-anchored) · moderation_api = third-party moderation API. Default gateway.",
+      "type": "string",
+      "enum": [
+        "raw_model",
+        "gateway",
+        "moderation_api"
+      ]
+    },
+    "evidence_basis": {
+      "description": "R1 (裁定 A): evidence strength, DERIVED from target_kind, never stored independently — gateway→wal_anchored / raw_model→harness_observed / moderation_api→self_reported. self_reported is the weakest tier (vendor self-report, NOT reproducible); it must never borrow verifiable-audit wording.",
+      "type": "string",
+      "enum": [
+        "wal_anchored",
+        "harness_observed",
+        "self_reported"
+      ]
     },
     "registry_fingerprint": {
       "type": "string",

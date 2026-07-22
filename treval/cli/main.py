@@ -51,10 +51,11 @@ def _grade(
     tuple[Measurement, ...],
     list[str],
     dict[str, Any] | None,
+    str,
 ]:
     """The shared grade step: measurement bundle + posture + registry → graded report,
-    plus the run's pin `provenance` (None when the source bundle predates EV-PIN).
-    Pure (no clock, no gateway). Used by both `report` renderings and the
+    plus the run's pin `provenance` (None when the source bundle predates EV-PIN) and its
+    `target_kind` (R1). Pure (no clock, no gateway). Used by both `report` renderings and the
     `--self-contained` store producer, so they can never grade differently."""
     reg = registry if registry is not None else load_registry()
     bundle = load_bundle(bundle_path)
@@ -81,7 +82,14 @@ def _grade(
         window=bundle.window,
         tenant_id=bundle.tenant_id,
     )
-    return reg, report, bundle.measurements, warnings, bundle.provenance
+    return (
+        reg,
+        report,
+        bundle.measurements,
+        warnings,
+        bundle.provenance,
+        bundle.target_kind,
+    )
 
 
 def run_self_contained(
@@ -99,12 +107,14 @@ def run_self_contained(
     `--format json`, which emits the core-layer (decoupled) form. `generated_at_ns` is
     store metadata (a wall-clock fact about the run, NOT part of the deterministic
     report); it defaults to now and is injectable for tests."""
-    reg, report, measurements, warnings, provenance = _grade(
+    reg, report, measurements, warnings, provenance, target_kind = _grade(
         bundle_path, posture_path, registry
     )
     # EV-PIN §1.5-1: carry the pin stamp into the delivery artifact so a third party can
-    # tell from the bundle ALONE whether it is citable.
-    bundle_json = self_contained_bundle_to_json(report, measurements, reg, provenance)
+    # tell from the bundle ALONE whether it is citable. R1: carry target_kind too.
+    bundle_json = self_contained_bundle_to_json(
+        report, measurements, reg, provenance, target_kind=target_kind
+    )
     entry = write_bundle(
         out_dir,
         bundle_json,
@@ -126,12 +136,12 @@ def run_report(
     """The pure grade+render path. Returns (rendered_text, warnings). Raises BundleError /
     RegistryError / PostureFileError (→ io exit) or DuplicateIndicatorError (→ grading exit);
     a partial/empty bundle renders an honest report, it does not raise (§5)."""
-    reg, report, measurements, warnings, _prov = _grade(
+    reg, report, measurements, warnings, _prov, target_kind = _grade(
         bundle_path, posture_path, registry
     )
 
     if fmt == "json":
-        text = bundle_to_json(report, measurements)
+        text = bundle_to_json(report, measurements, target_kind=target_kind)
     elif fmt == "csv":
         text = render_csv(reg, report, measurements)
     else:  # human

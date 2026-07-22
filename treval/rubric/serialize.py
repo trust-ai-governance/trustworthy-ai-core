@@ -27,7 +27,47 @@ from treval.models import (
 )
 from treval.registry import DimensionRegistry, serialize_registry
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # R1: bundle top level gains target_kind + derived evidence_basis
+
+# --- R1 — target_kind (report-level) + evidence_basis (DERIVED, single source of truth) ---
+# target_kind names WHAT was evaluated; evidence_basis is its evidence strength and is NEVER
+# stored independently — it is computed from target_kind here (R1 裁定 A). A new target_kind is
+# ONE row below; do NOT invent an evidence_basis input. (`availability`/`evidence_requirement`
+# are EV-FWD, not R1 — see R1 §1.5-A.)
+TARGET_KINDS = ("raw_model", "gateway", "moderation_api")
+DEFAULT_TARGET_KIND = "gateway"  # every current report is a gateway run (R1 §1.5-B)
+
+_EVIDENCE_BASIS = {
+    "gateway": "wal_anchored",  # WAL 锚定 · 可复算 · 最强
+    "raw_model": "harness_observed",  # harness 自观测 · 中
+    "moderation_api": "self_reported",  # 厂商自报 · 最弱 · 不可复算
+}
+
+
+def derive_evidence_basis(target_kind: str) -> str:
+    """The evidence strength implied by a target_kind — the single source of truth for
+    evidence_basis (R1 裁定 A). Fail-closed on an unknown target_kind so a typo cannot
+    silently ship a bundle with no evidence tier."""
+    try:
+        return _EVIDENCE_BASIS[target_kind]
+    except KeyError:
+        raise ValueError(
+            f"unknown target_kind {target_kind!r}; expected one of {TARGET_KINDS}"
+        ) from None
+
+
+def assert_evidence_basis_derived(target_kind: str, evidence_basis: str) -> None:
+    """Machine gate (R1 §2): a bundle's evidence_basis MUST equal derive(target_kind). The
+    serializers always compute it that way; this guards a future regression that reintroduces
+    independent setting (a param / a stored field) — such a bundle FAILS here instead of
+    silently shipping a mislabelled evidence tier. 靠门不靠人。"""
+    expected = derive_evidence_basis(target_kind)
+    if evidence_basis != expected:
+        raise ValueError(
+            f"evidence_basis {evidence_basis!r} != derive({target_kind!r})={expected!r} "
+            "— evidence_basis is derived from target_kind, never stored independently "
+            "(R1 裁定 A)"
+        )
 
 
 def _ref_sort_key(ref: EvidenceRef) -> tuple[str, bool, int, str]:
@@ -91,24 +131,38 @@ def serialize_measurement(m: Measurement) -> dict[str, Any]:
 
 
 def serialize_bundle(
-    report: MaturityReport, measurements: Iterable[Measurement]
+    report: MaturityReport,
+    measurements: Iterable[Measurement],
+    *,
+    target_kind: str = DEFAULT_TARGET_KIND,
 ) -> dict[str, Any]:
-    """The full report bundle: `{schema_version, report, measurements}`. Measurements are
-    sorted by `(indicator_id, subject)` for a stable array order (REPORT_JSON_SCHEMA §3)."""
+    """The full report bundle: `{schema_version, target_kind, evidence_basis, report,
+    measurements}`. `target_kind` (report-level, R1) names what was evaluated; `evidence_basis`
+    is DERIVED from it, never an input. Measurements are sorted by `(indicator_id, subject)`
+    for a stable array order (REPORT_JSON_SCHEMA §3)."""
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
+    evidence_basis = derive_evidence_basis(target_kind)
+    assert_evidence_basis_derived(target_kind, evidence_basis)  # single source of truth
     return {
         "schema_version": SCHEMA_VERSION,
+        "target_kind": target_kind,
+        "evidence_basis": evidence_basis,
         "report": serialize_report(report),
         "measurements": [serialize_measurement(m) for m in ordered],
     }
 
 
-def bundle_to_json(report: MaturityReport, measurements: Iterable[Measurement]) -> str:
+def bundle_to_json(
+    report: MaturityReport,
+    measurements: Iterable[Measurement],
+    *,
+    target_kind: str = DEFAULT_TARGET_KIND,
+) -> str:
     """Byte-identical (up to encoding) JSON for the bundle: sorted keys + compact, stable
     separators. `ensure_ascii=False` keeps the Chinese statements readable; UTF-8 encode
     for on-disk bytes."""
     return json.dumps(
-        serialize_bundle(report, measurements),
+        serialize_bundle(report, measurements, target_kind=target_kind),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -144,15 +198,21 @@ def serialize_self_contained_bundle(
     measurements: Iterable[Measurement],
     registry: DimensionRegistry,
     provenance: dict[str, Any] | None = None,
+    *,
+    target_kind: str = DEFAULT_TARGET_KIND,
 ) -> dict[str, Any]:
-    """The EV-R1 delivery envelope `{schema_version, registry_fingerprint, report, registry,
-    measurements}` (docs/REPORT_JSON_SCHEMA.md §1a). The registry is inlined via the EV-W0
-    serializer — the same shape EV-W0 renders — so the UI loads one file and never mis-pairs
-    parts. `report`/`measurements` are the EV-7 shapes, unchanged."""
+    """The EV-R1 delivery envelope `{schema_version, target_kind, evidence_basis,
+    registry_fingerprint, provenance, report, registry, measurements}`
+    (docs/REPORT_JSON_SCHEMA.md §1a). `target_kind`/`evidence_basis` (R1) ride the SAME
+    derivation as `serialize_bundle` (one source of truth). The registry is inlined via the
+    EV-W0 serializer so the UI loads one file and never mis-pairs parts. `report`/`measurements`
+    are the EV-7 shapes, unchanged."""
     registry_dict = serialize_registry(registry)
-    base = serialize_bundle(report, measurements)
+    base = serialize_bundle(report, measurements, target_kind=target_kind)
     return {
         "schema_version": base["schema_version"],
+        "target_kind": base["target_kind"],
+        "evidence_basis": base["evidence_basis"],
         "registry_fingerprint": _fingerprint_of(registry_dict),
         # EV-PIN §1.5-1: the pin stamp must reach the DELIVERY artifact, not stop at the
         # collect bundle. Without it a `window=0-0` snapshot is indistinguishable from a
@@ -171,11 +231,15 @@ def self_contained_bundle_to_json(
     measurements: Iterable[Measurement],
     registry: DimensionRegistry,
     provenance: dict[str, Any] | None = None,
+    *,
+    target_kind: str = DEFAULT_TARGET_KIND,
 ) -> str:
     """Byte-deterministic JSON for the self-contained bundle (sorted keys + compact
     separators + ensure_ascii=False). This is the golden-fixture / delivery form."""
     return json.dumps(
-        serialize_self_contained_bundle(report, measurements, registry, provenance),
+        serialize_self_contained_bundle(
+            report, measurements, registry, provenance, target_kind=target_kind
+        ),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
