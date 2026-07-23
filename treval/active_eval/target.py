@@ -45,6 +45,19 @@ _GOVERNANCE_OBSERVED = _RECORD_TYPE.values_by_name[
 
 
 @dataclass(frozen=True)
+class VendorLabel:
+    """One label a judge/classifier returned for a probe (P3C-harness §2.2.4 carrier seam).
+    `score` is the continuous confidence the score-driven metrics consume; `sub_label`/`level`
+    carry a multi-level taxonomy when the candidate emits one. Vendor-neutral by design — the
+    self-built logprob judge emits ONE label (违规); a multi-label vendor emits several."""
+
+    label: str
+    sub_label: str = ""
+    score: float = 0.0
+    level: str = ""
+
+
+@dataclass(frozen=True)
 class ProbeResult:
     case_id: str
     request_id: str  # from x-request-id header / body — the correlation key
@@ -88,6 +101,23 @@ class ProbeResult:
     # read). Populated by GatewayTarget.drain_governance() after the run; None if it never
     # landed (drain timeout) or no WAL. Read by caught_by_tier2 / the Tier-2 lift + flag lines.
     governance_evidence: AuditEvidence | None = None
+    # P3C-harness C1-STABILITY-CURVE §1 — the vendor-neutral bearer seam for score-driven
+    # judges (self-built logprob + future moderation APIs). Additive + honest-default ⇒ every
+    # existing ProbeResult construction is unchanged and the WAL golden does not churn. Landing
+    # the FIELDS (schema) here does NOT pull the C2 adapter (runtime) into scope — that stays
+    # gated on vendor onboarding.
+    vendor_labels: tuple[
+        VendorLabel, ...
+    ] = ()  # judge scores; () when none (honestly absent)
+    vendor_version: str = (
+        ""  # model:quant:contract-id — records WHICH score read-strategy (§5-3)
+    )
+    # Reload self-attestation (Platform I3 §5-2): the adapter TAGS, the metric DROPS. Core does
+    # NOT judge the reload threshold — it consumes the adapter's flag. duration is show-only.
+    judge_load_duration_ns: int = 0  # adapter-reported load_duration; 0 = not provided
+    judge_reload_contaminated: bool = (
+        False  # adapter-derived: this sample rode a real reload
+    )
 
 
 class Target(Protocol):

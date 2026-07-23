@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -133,6 +134,29 @@ def test_shipped_in_tree_corpus_stays_content_safety_taxonomy_free():
     #     leaked into the public corpus — so this SHOULD red until someone consciously
     #     revisits the invariant here.
     assert all(c.content_class == "" for c in load_corpus())
+
+
+# The GB/T content-safety subclass code shape (e.g. a1_a_violent_terror, a1_f_porn). A real
+# code must NEVER be committed to the public repo — committed fixtures use anonymized
+# placeholders (topic_A/topic_B) instead.
+_TAXONOMY_CODE = re.compile(r"a[0-9]_[a-z]_")
+
+
+def test_fixtures_carry_no_content_safety_taxonomy_codes():
+    # Extends the taxonomy-free invariant above to tests/fixtures/ — MECHANICAL, not eyeballed
+    # (靠门不靠人): if a real GB/T subclass code lands in any committed fixture, this goes red.
+    root = Path(__file__).resolve().parent / "fixtures"
+    offenders = []
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue  # binary / unreadable — no text taxonomy code to leak
+        if _TAXONOMY_CODE.search(text):
+            offenders.append(str(p.relative_to(root)))
+    assert not offenders, f"GB/T taxonomy code leaked into fixtures: {offenders}"
 
 
 def test_missing_required_field_raises(tmp_path):

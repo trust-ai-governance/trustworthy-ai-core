@@ -59,7 +59,18 @@ from treval.active_eval.reporting import (
     write_evading_seed,
 )
 from treval.active_eval.runner import run_corpus
-from treval.active_eval.target import GatewayTarget, ProbeResult, Target
+from treval.active_eval.score_metrics import (
+    CaseStability,
+    CurveReport,
+    StabilityReport,
+    first_vendor_label_score,
+    normalization_attested,
+    roc_curve,
+    score_stability,
+    two_way_normalized,
+)
+from treval.active_eval.target import GatewayTarget, ProbeResult, Target, VendorLabel
+from treval.active_eval.verdict_loader import load_verdict_runs, verdict_to_probe
 
 __all__ = [
     "CorpusCase",
@@ -80,6 +91,19 @@ __all__ = [
     "Target",
     "GatewayTarget",
     "run_corpus",
+    # P3C-harness C1-STABILITY-CURVE — score-driven spike metrics (bearer seam + stability + curve)
+    "VendorLabel",
+    "StabilityReport",
+    "CaseStability",
+    "score_stability",
+    "first_vendor_label_score",
+    "CurveReport",
+    "roc_curve",
+    "two_way_normalized",
+    "normalization_attested",
+    # C1-STABILITY-CURVE 提交 C — verdicts.jsonl → ProbeResult loader (I3 joint-run seam)
+    "load_verdict_runs",
+    "verdict_to_probe",
     "CorpusIndicator",
     "InjectionCatchRate",
     "InjectionSuccessRate",
