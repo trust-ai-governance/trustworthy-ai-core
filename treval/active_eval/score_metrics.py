@@ -182,6 +182,10 @@ class CurveReport:
     # + excluded, per class per side) is always surfaced so an all-excluded class can't read as
     # a fake 0% FPR (§6-5). recall_at_fpr ALWAYS returns a (low, point, high) band.
     points: Curve | None  # global (tau, recall, fpr) curve
+    # 🔴 CALIBER WARNING: each per-class curve computes its FPR against THAT CLASS's own benign
+    # subset, so reading recall@FPR off it picks a SEPARATE threshold per class. Production runs
+    # ONE threshold, so that reading is DIAGNOSTIC only and overstates deployable recall. For the
+    # deployable number use `recall_by_class_at_fpr` (one global threshold applied to every class).
     by_class: dict[str, Curve] | None  # per content_class; "" is its own bucket
     measurable: dict[str, tuple[int, int]]  # (violating_measurable, benign_measurable)
     excluded: dict[str, tuple[int, int]]  # (violating_excluded, benign_excluded)
@@ -191,6 +195,9 @@ class CurveReport:
     _point_curve: Curve
     _low_curve: Curve
     _high_curve: Curve
+    _violating_by_class: dict[
+        str, list[float]
+    ]  # measurable violating scores, per class
 
     def recall_at_fpr(self, target_fpr: float) -> tuple[float, float, float]:
         """Recall at a matched FPR — ALWAYS `(low, point, high)` (§3). `point`
@@ -201,6 +208,39 @@ class CurveReport:
         lo = _interp_recall(self._low_curve, target_fpr)
         hi = _interp_recall(self._high_curve, target_fpr)
         return (min(point, lo, hi), point, max(point, lo, hi))
+
+    def global_threshold_at_fpr(self, target_fpr: float) -> float:
+        """The single DEPLOYABLE threshold for an FPR budget: the lowest τ whose GLOBAL FPR is
+        within budget. FPR is non-increasing in τ, so the lowest such τ is the one that spends
+        the whole budget and therefore maximises recall — the operating point a deployment
+        would actually pick."""
+        for tau, _recall, fpr in self._point_curve:
+            if fpr <= target_fpr:
+                return tau
+        return self._point_curve[-1][0]
+
+    def recall_by_class_at_fpr(
+        self, target_fpr: float
+    ) -> tuple[float, dict[str, tuple[float, int]]]:
+        """DEPLOYABLE per-class recall: `(tau, {content_class: (recall, n_violating)})`, with
+        ONE global threshold applied to every class.
+
+        This is the caliber a deployment can actually ship, and it is NOT what the per-class
+        curves in `by_class` say: those give each class its own threshold (each measured against
+        its own benign subset), which overstates recall — a class whose scores run low gets a
+        conveniently low threshold that no single production setting would grant it. Compare
+        candidates on THIS number; use `by_class` for diagnosis only.
+
+        Classes with no measurable violating case are omitted (no recall is defined). Unlike
+        `by_class`, a class needs no benign side here — the FPR budget is global by construction,
+        so a violating-only class still gets an honest recall."""
+        tau = self.global_threshold_at_fpr(target_fpr)
+        out: dict[str, tuple[float, int]] = {}
+        for cc, scores in sorted(self._violating_by_class.items()):
+            if not scores:
+                continue
+            out[cc] = (sum(s >= tau for s in scores) / len(scores), len(scores))
+        return tau, out
 
 
 def roc_curve(
@@ -269,9 +309,15 @@ def roc_curve(
     high_curve = _curve(_side_scores("benign", 2), _side_scores("violating", 2))
 
     by_class: dict[str, Curve] = {}
+    violating_by_class: dict[str, list[float]] = {}
     for cc in sorted(seen_classes):
         b = [s for cid, s in rep["benign"].items() if cc_by_id[cid] == cc]
         v = [s for cid, s in rep["violating"].items() if cc_by_id[cid] == cc]
+        if v:
+            # kept for recall_by_class_at_fpr — the DEPLOYABLE per-class read needs only the
+            # violating scores (its threshold comes from the GLOBAL curve), so a violating-only
+            # class is still measurable here even though it gets no per-class curve below.
+            violating_by_class[cc] = v
         if (
             b and v
         ):  # both sides measurable — else it would read as a fake 0% (§6-5) ⇒ excluded-only
@@ -291,6 +337,7 @@ def roc_curve(
         _point_curve=point_curve,
         _low_curve=low_curve,
         _high_curve=high_curve,
+        _violating_by_class=violating_by_class,
     )
 
 

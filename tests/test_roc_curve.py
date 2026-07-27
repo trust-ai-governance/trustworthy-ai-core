@@ -52,6 +52,13 @@ def _pr(cid, score=None, *, error=None, contaminated=False):
     )
 
 
+def _interp(curve, target_fpr):
+    """Read recall off a curve at a target FPR (the per-class, self-tuned reading)."""
+    from treval.active_eval.score_metrics import _interp_recall
+
+    return _interp_recall(curve, target_fpr)
+
+
 def _stable(results):
     """A curve_eligible StabilityReport: warmup + two identical measured passes over `results`."""
     return score_stability(
@@ -215,3 +222,70 @@ def test_two_way_normalized_and_attestation_guard():
         remote_unrecorded, vendor_version="sm:v3:contract-B"
     )
     assert normalization_attested(remote_recorded) is True
+
+
+# --- deployable caliber: ONE global threshold vs per-class self-tuned thresholds --------- #
+
+
+def _spread_curve():
+    """Two classes whose violating scores sit at different levels — the shape where a
+    per-class threshold flatters the low-scoring class."""
+    benign = [_case(f"b{i}", "topic_A") for i in range(5)] + [
+        _case(f"c{i}", "topic_B") for i in range(5)
+    ]
+    violating = [_case(f"va{i}", "topic_A") for i in range(4)] + [
+        _case(f"vb{i}", "topic_B") for i in range(4)
+    ]
+    results = (
+        [_pr(f"b{i}", 0.30) for i in range(5)]  # topic_A benign: high-ish
+        + [_pr(f"c{i}", 0.05) for i in range(5)]  # topic_B benign: low
+        + [_pr(f"va{i}", 0.90) for i in range(4)]  # topic_A violating: clearly above
+        + [_pr("vb0", 0.20), _pr("vb1", 0.20), _pr("vb2", 0.06), _pr("vb3", 0.06)]
+    )
+    stab = _stable(results)
+    return roc_curve(
+        benign, violating, results, stab, score_of=first_vendor_label_score
+    )
+
+
+def test_recall_by_class_at_global_threshold_is_the_deployable_caliber():
+    curve = _spread_curve()
+    tau, by_cls = curve.recall_by_class_at_fpr(0.0)
+    # ONE threshold for every class — it must clear the highest benign score (0.30)
+    assert tau > 0.30
+    assert by_cls["topic_A"] == (1.0, 4)  # all four topic_A violating are at 0.90
+    assert by_cls["topic_B"] == (0.0, 4)  # topic_B violating (0.20/0.06) fall below it
+
+    # The per-class curve reads FAR better for topic_B because it gets its OWN threshold,
+    # measured against its OWN (lower) benign subset — a threshold production cannot grant it.
+    assert curve.by_class is not None
+    per_class_read = _interp(curve.by_class["topic_B"], 0.0)
+    assert (
+        per_class_read > by_cls["topic_B"][0]
+    )  # the overstatement the caliber note warns of
+
+
+def test_global_threshold_spends_the_whole_fpr_budget():
+    curve = _spread_curve()
+    tau_strict = curve.global_threshold_at_fpr(0.0)
+    tau_loose = curve.global_threshold_at_fpr(0.5)
+    assert (
+        tau_loose <= tau_strict
+    )  # a bigger budget buys a lower threshold ⇒ more recall
+    _, strict = curve.recall_by_class_at_fpr(0.0)
+    _, loose = curve.recall_by_class_at_fpr(0.5)
+    assert loose["topic_B"][0] >= strict["topic_B"][0]
+
+
+def test_violating_only_class_still_gets_a_deployable_recall():
+    # by_class omits a one-sided class (no FPR side); the global-threshold read still defines a
+    # recall for it, because the budget is global by construction.
+    benign = [_case("b0", "topic_A")]
+    violating = [_case("v0", "topic_A"), _case("v1", "topic_B")]
+    results = [_pr("b0", 0.1), _pr("v0", 0.8), _pr("v1", 0.9)]
+    curve = roc_curve(
+        benign, violating, results, _stable(results), score_of=first_vendor_label_score
+    )
+    assert curve.by_class is not None and "topic_B" not in curve.by_class
+    _tau, by_cls = curve.recall_by_class_at_fpr(0.05)
+    assert by_cls["topic_B"] == (1.0, 1)

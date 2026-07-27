@@ -70,7 +70,13 @@ from treval.active_eval.score_metrics import (
     two_way_normalized,
 )
 from treval.active_eval.target import GatewayTarget, ProbeResult, Target, VendorLabel
-from treval.active_eval.verdict_loader import load_verdict_runs, verdict_to_probe
+from treval.active_eval.verdict_loader import (
+    VerdictError,
+    load_verdict_groups,
+    load_verdict_runs,
+    preflight_verdict_groups,
+    verdict_to_probe,
+)
 
 __all__ = [
     "CorpusCase",
@@ -101,9 +107,12 @@ __all__ = [
     "roc_curve",
     "two_way_normalized",
     "normalization_attested",
-    # C1-STABILITY-CURVE 提交 C — verdicts.jsonl → ProbeResult loader (I3 joint-run seam)
+    # verdicts.jsonl → ProbeResult loader (the I3 joint-run intake seam)
     "load_verdict_runs",
+    "load_verdict_groups",
+    "preflight_verdict_groups",
     "verdict_to_probe",
+    "VerdictError",
     "CorpusIndicator",
     "InjectionCatchRate",
     "InjectionSuccessRate",
