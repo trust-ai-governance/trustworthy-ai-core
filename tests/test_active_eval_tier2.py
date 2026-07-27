@@ -139,3 +139,67 @@ def test_errored_probe_excluded_from_lift_denominator():
     assert m.sample_size == 1  # errored probe excluded
     assert m.value == 1.0
     assert "1 error(s) excluded" in m.notes
+
+
+# --------------------------------------------------------------------------- #
+# GATE-LASTMILE P8 — no WAL ⇒ Tier-2 is UNOBSERVABLE, not a zero lift/rate.
+# --------------------------------------------------------------------------- #
+
+
+def _no_wal_probe(cid: str) -> ProbeResult:
+    """A probe from a run with no WAL access: no decision record, so nothing about Tier-2
+    can be observed. Distinct from `gov=None` (WAL present, Tier-2 simply did not fire)."""
+    return ProbeResult(
+        case_id=cid,
+        request_id=f"req-{cid}",
+        decision="ALLOW",
+        response_text="",
+        evidence=None,
+        governance_evidence=None,
+    )
+
+
+def test_lift_without_wal_is_insufficient_data_not_zero():
+    """The live no-WAL run reported `tier2_shadow_recall_lift = 0% (n=28)` — a confident zero
+    over probes where Tier-2 could not be observed at all (P4's failure mode, other family)."""
+    (m,) = Tier2ShadowRecallLift().measure([_no_wal_probe(str(i)) for i in range(28)])
+    assert m.sample_size == 0, (
+        "28 unobservable probes must not become a 28-sample 0% lift"
+    )
+    assert "insufficient_data" in m.notes
+    assert "28 with no WAL record" in m.notes
+
+
+def test_benign_shadow_flag_without_wal_is_insufficient_data_not_zero():
+    (m,) = BenignShadowFlagRate().measure([_no_wal_probe(str(i)) for i in range(20)])
+    assert m.sample_size == 0
+    assert "insufficient_data" in m.notes
+    assert "20 with no WAL record" in m.notes
+
+
+def test_p8_does_not_change_a_governed_run_missing_only_async_records():
+    """🔴 The P8 regression red line: a probe WITH a WAL record but no Tier-2 record stays in
+    the denominator — Tier-2 genuinely added nothing there (a Tier-1 block is never Tier-2
+    scored). Live evidence: `rescued 3 of 3 lexical-missed (Tier-1 caught 25/28)` — every
+    lexical miss HAD an async record, so the 19 missing ones were all Tier-1 catches.
+    P8 must therefore leave the working numbers untouched."""
+    results = [_probe("m", tier1=False, gov=_governance("m", hint=True))] + [
+        _probe(f"t{i}", tier1=True, gov=None) for i in range(9)
+    ]
+    (m,) = Tier2ShadowRecallLift().measure(results)
+    assert m.sample_size == 10, "WAL-present probes stay in the denominator"
+    assert abs(m.value - 0.1) < 1e-9  # 1 rescued / 10 — unchanged by P8
+    assert "9 probe(s) had NO async record" in m.notes
+    assert "no WAL record" not in m.notes  # nothing was excluded
+
+
+def test_mixed_wal_and_no_wal_splits_the_denominator():
+    results = [
+        _probe("a", tier1=False, gov=_governance("a", hint=True)),
+        _probe("b", tier1=True, gov=None),
+        _no_wal_probe("c"),
+        _no_wal_probe("d"),
+    ]
+    (m,) = Tier2ShadowRecallLift().measure(results)
+    assert m.sample_size == 2  # only the WAL-backed probes
+    assert "2 with no WAL record" in m.notes

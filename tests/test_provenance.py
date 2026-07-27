@@ -395,10 +395,12 @@ def test_injection_catch_is_decided_by_wal_records_not_the_http_response():
     assert m.value == 1.0, "catch must follow the WAL records, not the HTTP response"
 
 
-def test_injection_catch_is_fail_closed_when_the_frozen_wal_lacks_the_record():
-    """No record in the frozen segments ⇒ NOT caught. The failure mode this pins is the
-    live one: an unprovisioned eval identity yields 400s with no decision record, which
-    must read as an honest 0%-with-no-evidence rather than a silent pass."""
+def test_injection_catch_without_a_decision_record_is_unmeasurable_not_zero():
+    """No decision record ⇒ UNMEASURABLE, not a 0% miss (GATE-LASTMILE P4, corrects the
+    earlier reading here). The live failure mode: an unprovisioned eval identity yields 400s
+    with no decision record — counting those as "not caught" is exactly the silent false 0%
+    that C2-2 hit and that P4 forbids. So the probe is excluded (n=0) and flagged, never a
+    plausible-looking 0%."""
     from treval.active_eval.indicators import InjectionCatchRate
     from treval.active_eval.target import ProbeResult
 
@@ -415,7 +417,10 @@ def test_injection_catch_is_fail_closed_when_the_frozen_wal_lacks_the_record():
             )
         ]
     )
-    assert m.value == 0.0 and m.sample_size == 1
+    assert m.sample_size == 0, (
+        "a probe with no decision record must not enter the denominator"
+    )
+    assert "undecided" in m.notes and "insufficient_data" in m.notes
 
 
 # --------------------------------------------------------------------------- #
