@@ -55,12 +55,21 @@ def _probe(
     canary="",
     allowed=None,
     evidence=True,
+    rules=True,
 ):
     ev = None
     if error is None and evidence:
         ctx = rc_pb.RequestContext()
         ctx.envelope.request_id = f"req-{cid}"
         ctx.decision.final_decision = _BLOCK if caught else _ALLOW  # type: ignore[assignment]
+        # A GOVERNED decision evaluated rules — an allow with zero rules is "gateway never
+        # judged" (GATE-LASTMILE P4), not a measured miss. FakeTarget models a working gateway,
+        # so populate one non-matching rule; `caught=False` then reads as a real governed allow.
+        # (rules_evaluated does not affect the catch signal — that reads final_decision / hint.)
+        if rules:
+            r = ctx.decision.rules_evaluated.add()
+            r.rule_id = "inj-lexical-1"
+            r.matched = caught
         if allowed is not None:
             ctx.decision.authorization.allowed = allowed
         ev = AuditEvidence(
@@ -128,6 +137,118 @@ def test_run_corpus_then_catch_rate():
 
 
 # --------------------------------------------------------------------------- #
+# GATE-LASTMILE P4 — "no decision" ≠ "not caught": undecided probes are unmeasurable
+# --------------------------------------------------------------------------- #
+
+
+def _undecided_probe(cid, *, final=None):
+    """A governed-looking probe the gateway never actually judged: no rules evaluated, and
+    (by default) final_decision left at the proto UNSPECIFIED default. `final` can force
+    UNDECIDED explicitly. This is the shape of the 142-probe incident."""
+    ctx = rc_pb.RequestContext()
+    ctx.envelope.request_id = f"req-{cid}"
+    if final is not None:
+        ctx.decision.final_decision = final  # type: ignore[assignment]
+    # no rules_evaluated → the rule engine never ran
+    ev = AuditEvidence(
+        ref=EvidenceRef(source="wal:x", seq=0, request_id=f"req-{cid}"),
+        integrity=IntegrityStatus.VERIFIED,
+        tenant_id="__eval__",
+        received_at_ns=0,
+        record=ctx,
+    )
+    return ProbeResult(
+        case_id=cid, request_id=f"req-{cid}", decision="", response_text="", evidence=ev
+    )
+
+
+def test_gateway_undecided_classifier():
+    from treval.active_eval.checks import gateway_undecided
+
+    _UNDECIDED = rc_pb.DecisionTrace.FINAL_DECISION_UNDECIDED
+    # governed + allowed (rules evaluated, final ALLOW) — a REAL miss, measurable
+    assert not gateway_undecided(_probe("miss", caught=False))
+    # governed + blocked — caught, never undecided
+    assert not gateway_undecided(_probe("hit", caught=True))
+    # UNDECIDED final / zero rules — the incident: undecided
+    assert gateway_undecided(_undecided_probe("u", final=_UNDECIDED))
+    # UNSPECIFIED (proto default) + zero rules — undecided
+    assert gateway_undecided(_undecided_probe("z"))
+    # no decision record at all — cannot confirm a decision, undecided
+    assert gateway_undecided(_probe("none", evidence=False))
+    # errored probes are handled by the error branch, not this classifier
+
+
+def test_undecided_probes_are_excluded_from_catch_denominator_not_counted_as_miss():
+    """Mixed run: 2 caught + 1 real miss + 3 undecided ⇒ denominator = 3 (the decided ones),
+    value = 2/3, and the 3 undecided are countable in the output (not silently dropped)."""
+    results = [
+        _probe("a", caught=True),
+        _probe("b", caught=True),
+        _probe(
+            "c", caught=False
+        ),  # governed allow — a real miss, stays in the denominator
+        _undecided_probe("d"),
+        _undecided_probe("e"),
+        _undecided_probe("f"),
+    ]
+    (m,) = InjectionCatchRate().measure(results)
+    assert m.sample_size == 3, "only decided probes form the denominator"
+    assert m.value == 2 / 3
+    assert (
+        "3 undecided" in m.notes
+    )  # countable: decided(3) + undecided(3) == 6 measurable
+
+
+def test_all_undecided_is_insufficient_data_not_zero_percent():
+    """The incident shape: every probe UNDECIDED / zero-rule ⇒ n=0 (insufficient_data), NOT a
+    0% that looks authoritative. Reverting P4 (counting them as misses) makes n=142 → red."""
+    results = [_undecided_probe(str(i)) for i in range(142)]
+    (m,) = InjectionCatchRate().measure(results)
+    assert m.sample_size == 0, "142 undecided probes must not become a 142-sample 0%"
+    assert (
+        m.value == 0.0
+    )  # 0/0 sentinel — but sample_size==0 is what marks it unmeasurable
+    assert "insufficient_data" in m.notes and "142 undecided" in m.notes
+
+
+def test_response_stage_catch_on_undecided_decision_still_counts():
+    """A probe caught at the RESPONSE stage (output-DLP) but whose DECISION is UNDECIDED was
+    still governed — it must count as caught, not be excluded as undecided."""
+    _UNDECIDED = rc_pb.DecisionTrace.FINAL_DECISION_UNDECIDED
+    dec = rc_pb.RequestContext()
+    dec.envelope.request_id = "req-r"
+    dec.decision.final_decision = _UNDECIDED  # type: ignore[assignment]
+    resp = rc_pb.RequestContext()
+    resp.envelope.request_id = "req-r"
+    resp.response.final_terminal = "BLOCKED"  # response-stage block
+    ev = AuditEvidence(
+        ref=EvidenceRef(source="wal:x", seq=0, request_id="req-r"),
+        integrity=IntegrityStatus.VERIFIED,
+        tenant_id="__eval__",
+        received_at_ns=0,
+        record=dec,
+    )
+    rev = AuditEvidence(
+        ref=EvidenceRef(source="wal:x", seq=1, request_id="req-r"),
+        integrity=IntegrityStatus.VERIFIED,
+        tenant_id="__eval__",
+        received_at_ns=0,
+        record=resp,
+    )
+    pr = ProbeResult(
+        case_id="r",
+        request_id="req-r",
+        decision="",
+        response_text="",
+        evidence=ev,
+        response_evidence=rev,
+    )
+    (m,) = InjectionCatchRate().measure([pr])
+    assert m.sample_size == 1 and m.value == 1.0
+
+
+# --------------------------------------------------------------------------- #
 # Empty corpus (acceptance #4)
 # --------------------------------------------------------------------------- #
 
@@ -175,7 +296,7 @@ def test_probe_error_excluded_with_notes():
     (m,) = InjectionCatchRate().measure(results)
     assert m.sample_size == 2  # errored probe not in the denominator
     assert m.value == 0.5
-    assert "1 probe error" in m.notes
+    assert "1 error" in m.notes  # C3-2 "excluded:" convention
 
 
 def test_run_corpus_records_target_exception():
@@ -186,7 +307,7 @@ def test_run_corpus_records_target_exception():
     # an all-error run yields sample_size 0, not a crash
     (m,) = InjectionCatchRate().measure(results)
     assert m.sample_size == 0
-    assert "1 probe error" in m.notes
+    assert "1 error" in m.notes  # C3-2 "excluded:" convention
 
 
 # --------------------------------------------------------------------------- #

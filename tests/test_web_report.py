@@ -6,12 +6,15 @@ without node+jsdom (`npm ci`), and says so loudly rather than passing vacuously.
 
 from __future__ import annotations
 
+import importlib.util
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from _pytest.outcomes import Failed, Skipped
 
 from treval.report_store import ReportStore, window_key, write_bundle
 
@@ -393,6 +396,24 @@ def test_token_when_configured_is_required(store_dir):
 # --------------------------------------------------------------------------- #
 
 
+def _guard_dep(present: bool, missing_what: str, how_to_enable: str) -> None:
+    """A guard-dependency check that FAILS under CI/strict and SKIPS locally.
+
+    A guard that silently skips is worse than no guard — it manufactures false confidence
+    (GATE-LASTMILE CI-1 / EV-W2 §8.3): the render guard exists precisely because three
+    prototype rounds shipped broken, yet it was skipping on the one surface that matters (CI).
+    So when `CI` (GitHub sets it) — or `TREVAL_STRICT_GUARDS=1`, which lets a dev verify this
+    locally — is set, a missing dependency is a hard failure that NAMES what to install; on a
+    plain dev machine it skips with the same message (we don't force node onto every laptop).
+    """
+    if present:
+        return
+    message = f"{missing_what} — {how_to_enable}"
+    if os.environ.get("CI") or os.environ.get("TREVAL_STRICT_GUARDS"):
+        pytest.fail(message, pytrace=False)
+    pytest.skip(message)
+
+
 def _render_all(tmp_path: Path, out: Path) -> None:
     """Render every fixture's two views to files for the DOM guard.
 
@@ -416,24 +437,40 @@ def _render_all(tmp_path: Path, out: Path) -> None:
             (out / f"{f.stem}.{suffix}.html").write_text(resp.text, encoding="utf-8")
 
 
-def test_headless_render_guard(client, tmp_path):
+def test_headless_render_guard(tmp_path):
     """Load every rendered page in a real DOM: zero JS errors + the key elements exist.
 
     Three prototype rounds shipped visually broken and ALL THREE passed source review
     (a mismatched quote swallowed a cell; a stray title="…" inside a JS string threw a
     SyntaxError that blanked the page). This is the guard that catches that class.
+
+    Its three dependencies each used to skip silently (node / jsdom / the `treval[web]`
+    extra — the last one via the `client` fixture's `importorskip`, which shows no skip
+    record at all). Under CI/strict each is now a hard failure that names the fix, so the
+    guard cannot vanish on the surface it exists to protect (GATE-LASTMILE CI-1).
     """
-    if shutil.which("node") is None:
-        pytest.skip(
-            "node not installed — run `npm ci` to enforce the EV-W2 render guard"
-        )
+    # Layer ③ (was the `client` fixture's silent importorskip): the guard renders the pages
+    # itself, so it owns the web-extra check directly rather than inheriting a quiet skip.
+    _guard_dep(
+        importlib.util.find_spec("fastapi") is not None,
+        "treval[web] not installed (fastapi missing)",
+        "pip install -r requirements-web.txt to enforce the EV-W2 render guard",
+    )
+    # Layer ① node.
+    _guard_dep(
+        shutil.which("node") is not None,
+        "node not installed",
+        "run `npm ci` to enforce the EV-W2 render guard",
+    )
+    # Layer ② jsdom.
     probe = subprocess.run(
         ["node", "-e", "require('jsdom')"], capture_output=True, cwd=_ROOT
     )
-    if probe.returncode != 0:
-        pytest.skip(
-            "jsdom not installed — run `npm ci` to enforce the EV-W2 render guard"
-        )
+    _guard_dep(
+        probe.returncode == 0,
+        "jsdom not installed",
+        "run `npm ci` to enforce the EV-W2 render guard",
+    )
 
     pages = tmp_path / "pages"
     _render_all(tmp_path, pages)
@@ -444,6 +481,59 @@ def test_headless_render_guard(client, tmp_path):
         cwd=_ROOT,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("hide", ["fastapi", "node", "jsdom"])
+def test_render_guard_fails_not_skips_when_a_dep_is_missing(
+    hide, tmp_path, monkeypatch
+):
+    """teeth: each of the three skip layers must go RED under CI/strict — verified one layer
+    at a time by simulating exactly that dependency missing, at the guard's real call sites.
+
+    Same construction proves the local contract too: without the strict flag the identical
+    missing dependency SKIPS (with a message that names the fix), so a dev laptop without node
+    isn't forced to install it. Strict flips skip→fail; nothing else changes.
+    """
+    if hide == "fastapi":
+        real_find = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util,
+            "find_spec",
+            lambda name, *a, **k: (
+                None if name == "fastapi" else real_find(name, *a, **k)
+            ),
+        )
+    elif hide == "node":
+        monkeypatch.setattr(shutil, "which", lambda _name: None)
+    else:  # jsdom present-check fails though node is on PATH
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **k):
+            if cmd[:2] == ["node", "-e"]:
+                return subprocess.CompletedProcess(cmd, 1, b"", b"")
+            return real_run(cmd, *a, **k)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+    # strict (CI-equivalent) ⇒ FAIL, not a silent skip. Catch BOTH outcomes and assert it
+    # was a failure: if we only `raises(Failed)`, a regressed guard that skips would let the
+    # Skipped bubble out and mark THIS teeth test skipped — and CI never goes red on a skip,
+    # so the teeth would silently lose their teeth. Asserting the type makes that a failure.
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setenv("TREVAL_STRICT_GUARDS", "1")
+    with pytest.raises((Failed, Skipped)) as fi:
+        test_headless_render_guard(tmp_path)
+    assert isinstance(fi.value, Failed), (
+        f"under strict a missing {hide} dep must FAIL, not skip — got "
+        f"{type(fi.value).__name__}: {fi.value}"
+    )
+    assert hide in str(fi.value).lower() or "web" in str(fi.value).lower()
+
+    # local (no strict, no CI) ⇒ skip with the how-to-fix message
+    monkeypatch.delenv("TREVAL_STRICT_GUARDS", raising=False)
+    with pytest.raises(Skipped) as si:
+        test_headless_render_guard(tmp_path)
+    assert "npm ci" in str(si.value) or "requirements-web" in str(si.value)
 
 
 # --------------------------------------------------------------------------- #

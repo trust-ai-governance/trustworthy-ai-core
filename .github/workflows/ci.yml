@@ -62,6 +62,18 @@ jobs:
           if [ -f requirements-web.txt ]; then pip install -r requirements-web.txt; fi
           if [ -f requirements-eval.txt ]; then pip install -r requirements-eval.txt; fi
 
+      # The EV-W2 headless render guard needs node + jsdom. Without this, node is absent on
+      # CI and the guard SKIPS — protecting the one surface it exists to protect nowhere.
+      # GitHub sets CI=true, so with the deps present the guard now RUNS, and if any of
+      # node/jsdom/treval[web] goes missing it FAILS loudly instead of skipping (CI-1).
+      - name: Set up Node.js (EV-W2 render guard)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Node deps (jsdom)
+        run: npm ci
+
       - name: Detect Python sources
         id: detect
         run: |

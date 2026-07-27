@@ -1,0 +1,16 @@
+# Ruff configuration — GATE-LASTMILE P2 (RUFF-SELECT).
+#
+# WHY this file exists: pinning the ruff VERSION (requirements-dev.txt) only fixes
+# "which ruff"; it does NOT fix "which rules". Without an explicit `select`, the gate
+# lints whatever set that ruff version happens to default to — so a routine `ruff`
+# upgrade can pull new rules into the default set and turn the gate red with ZERO code
+# changes (this already happened once: ~80 new errors on an untouched tree). A
+# deterministic gate needs BOTH pinned: the version AND the rule set.
+#
+# This commit only FREEZES TODAY'S EFFECTIVE SET — no behavior change, no code change.
+# `["E4","E7","E9","F"]` is exactly ruff's current default here (verified: `ruff check .`
+# and `ruff format --check .` produce byte-identical output before and after this file).
+# Adopting NEW rules (RUF022 et al.) is a SEPARATE, reviewable increment — deliberately
+# not bundled here so an "upgrade" diff never hides a "changed 80 lines" diff.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
