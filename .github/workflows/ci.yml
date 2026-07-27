@@ -52,7 +52,11 @@ jobs:
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
-          pip install ruff mypy pytest pytest-cov bandit pip-audit pip-licenses
+          # Deterministic gate tools (ruff/mypy/bandit/pytest) are PINNED in
+          # requirements-dev.txt — installed below, not here, so CI and a local
+          # `pip install -r requirements-dev.txt` run the identical gate.
+          # Only the advisory scanners float (freshness is their whole point).
+          pip install pip-audit pip-licenses
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
           if [ -f requirements-web.txt ]; then pip install -r requirements-web.txt; fi

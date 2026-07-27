@@ -3,3 +3,18 @@
 #   pip install -r requirements-dev.txt
 # Permissive-licensed (MIT), per Charter §1.2.
 jsonschema>=4.0   # MIT — validates report bundles against docs/report.schema.json (EV-R1 contract test)
+
+# --- CI gate tooling: PINNED so the gate is deterministic ---------------------
+# An unpinned linter/type-checker turns CI red on a TOOL upgrade with zero code
+# change (ruff 0.15 → a newer default rule set did exactly that: 80 errors, no
+# commit). Same discipline the eval side already applies to the judge runtime —
+# a version that decides a pass/fail must be pinned and upgraded deliberately.
+# Bump these in their own commit, with the resulting fixes reviewed as a change.
+ruff==0.15.17     # MIT — lint + format check
+mypy==2.1.0       # MIT
+bandit==1.9.4     # Apache-2.0
+pytest==9.1.0     # MIT
+pytest-cov==7.1.0 # MIT
+# NOT pinned, by design: pip-audit / pip-licenses are advisory scanners whose
+# value IS freshness — a new CVE or a changed dep license SHOULD turn the gate
+# red without a code change. Deterministic gates pin; advisory scanners float.
