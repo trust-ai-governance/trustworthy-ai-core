@@ -47,7 +47,7 @@ def test_build_then_load_round_trips(tmp_path):
     loaded = load_bundle(_write(tmp_path, doc))
     assert loaded.tenant_id == "t"
     assert loaded.window == (1, 2)
-    assert loaded.schema_version == 2
+    assert loaded.schema_version == 3  # EV-FWD: collect bundle aligned to v3
     assert loaded.target_kind == "gateway"  # R1: default, round-trips
     # same measurements (order-independent: compare as sets of key fields)
     got = {

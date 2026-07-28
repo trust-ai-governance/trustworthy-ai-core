@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from treval.models import (
@@ -27,7 +27,7 @@ from treval.models import (
 )
 from treval.registry import DimensionRegistry, serialize_registry
 
-SCHEMA_VERSION = 2  # R1: bundle top level gains target_kind + derived evidence_basis
+SCHEMA_VERSION = 3  # EV-FWD: each measurement gains a derived `availability`
 
 # --- R1 — target_kind (report-level) + evidence_basis (DERIVED, single source of truth) ---
 # target_kind names WHAT was evaluated; evidence_basis is its evidence strength and is NEVER
@@ -67,6 +67,69 @@ def assert_evidence_basis_derived(target_kind: str, evidence_basis: str) -> None
             f"evidence_basis {evidence_basis!r} != derive({target_kind!r})={expected!r} "
             "— evidence_basis is derived from target_kind, never stored independently "
             "(R1 裁定 A)"
+        )
+
+
+# --- EV-FWD — availability (indicator-level), DERIVED from (evidence_requirement × target_kind) ---
+# `availability` answers "can this indicator be MEASURED in this mode?" (mechanism axis) — a
+# SEPARATE, orthogonal axis from `evidence_basis`, which answers "how trustworthy / reproducible
+# is what was measured?" (evidence axis). A "measurable-but-not-auditable" indicator is
+# `measured` + a weaker `evidence_basis`, NEVER `n/a` (EV-FWD §0.1). Like `evidence_basis`,
+# `availability` is a serialization overlay with a single source of truth — never stored
+# independently, always derived. The rubric grading is untouched.
+EVIDENCE_REQUIREMENTS = ("output_only", "needs_decision", "needs_wal")
+AVAILABILITY_VALUES = ("measured", "n/a_needs_gateway", "n/a_self_reported")
+
+# (evidence_requirement × target_kind) → availability (EV-FWD §5). For `gateway` EVERY
+# requirement is `measured` (the governed path produces every kind of evidence). Under a
+# non-gateway target, `output_only` still measures (harness reads the response itself), while
+# `needs_decision` / `needs_wal` are architecturally absent: `n/a_needs_gateway` for a bare model
+# (§5), `n/a_self_reported` for a moderation API (no WAL, and "缺网关" would misname a
+# vendor-self-report absence — §5.1).
+_AVAILABILITY: dict[tuple[str, str], str] = {
+    ("output_only", "gateway"): "measured",
+    ("output_only", "raw_model"): "measured",
+    ("output_only", "moderation_api"): "measured",
+    ("needs_decision", "gateway"): "measured",
+    ("needs_decision", "raw_model"): "n/a_needs_gateway",
+    ("needs_decision", "moderation_api"): "n/a_self_reported",
+    ("needs_wal", "gateway"): "measured",
+    ("needs_wal", "raw_model"): "n/a_needs_gateway",
+    ("needs_wal", "moderation_api"): "n/a_self_reported",
+}
+
+
+def derive_availability(target_kind: str, evidence_requirement: str | None) -> str:
+    """The availability of an indicator on a target — the single source of truth (EV-FWD §5).
+
+    `evidence_requirement` is the indicator's declared need (see active_eval's
+    EVIDENCE_REQUIREMENTS). `None` means "not one of the classified indicators": that must NEVER
+    silently claim `measured` on a non-gateway target, so it defaults to the CONSERVATIVE
+    `needs_wal` (a gateway run still resolves to `measured`; a standalone run to n/a). Fail-closed
+    on an unknown target_kind so a typo cannot ship a bundle with a bogus availability."""
+    req = evidence_requirement or "needs_wal"
+    try:
+        return _AVAILABILITY[(req, target_kind)]
+    except KeyError:
+        raise ValueError(
+            f"cannot derive availability for (target_kind={target_kind!r}, "
+            f"evidence_requirement={req!r}); target_kind must be one of {TARGET_KINDS} "
+            f"and requirement one of {EVIDENCE_REQUIREMENTS}"
+        ) from None
+
+
+def assert_availability_derived(
+    target_kind: str, evidence_requirement: str | None, availability: str
+) -> None:
+    """Machine gate (EV-FWD §5, mirrors assert_evidence_basis_derived): a serialized
+    `availability` MUST equal derive(). Guards a future regression that stores it independently
+    — such a bundle FAILS here rather than shipping a mislabelled availability. 靠门不靠人。"""
+    expected = derive_availability(target_kind, evidence_requirement)
+    if availability != expected:
+        raise ValueError(
+            f"availability {availability!r} != derive(target_kind={target_kind!r}, "
+            f"requirement={evidence_requirement!r})={expected!r} — availability is derived, "
+            "never stored independently (EV-FWD §5)"
         )
 
 
@@ -114,9 +177,30 @@ def serialize_report(report: MaturityReport) -> dict[str, Any]:
     }
 
 
-def serialize_measurement(m: Measurement) -> dict[str, Any]:
+def serialize_measurement(
+    m: Measurement,
+    *,
+    target_kind: str,
+    evidence_requirements: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """A `measurements[]` entry. `integrity` (EV-7 D1) rides along so the UI can show the
-    trust basis of each value without a live call."""
+    trust basis of each value without a live call. `availability` (EV-FWD) is DERIVED from
+    (this indicator's declared evidence_requirement × target_kind) — the honest per-indicator
+    "does this dimension exist in this mode?" mark. `evidence_requirements` maps
+    indicator_id → requirement; an id absent from it resolves conservatively (see
+    derive_availability).
+
+    🔴 `target_kind` is REQUIRED — no default. A DEFAULT here would turn "a caller forgot to
+    thread target_kind" into "silently claims gateway ⇒ measured", which is exactly the EV-FWD
+    live bug (cli/bundle.py forgot it and a raw_model run was mislabelled `measured`). Missing
+    ⇒ TypeError, loud, at the call site — not a wrong availability shipped in a bundle."""
+    req = None
+    if evidence_requirements is not None:
+        req = evidence_requirements.get(m.indicator_id)
+    availability = derive_availability(target_kind, req)
+    assert_availability_derived(
+        target_kind, req, availability
+    )  # single source of truth
     return {
         "indicator_id": m.indicator_id,
         "dimension": m.dimension,
@@ -126,6 +210,7 @@ def serialize_measurement(m: Measurement) -> dict[str, Any]:
         "subject": m.subject,
         "notes": m.notes,
         "integrity": m.integrity.value,
+        "availability": availability,
         "evidence_refs": _serialize_refs(m.evidence_refs),
     }
 
@@ -135,11 +220,13 @@ def serialize_bundle(
     measurements: Iterable[Measurement],
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
+    evidence_requirements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """The full report bundle: `{schema_version, target_kind, evidence_basis, report,
     measurements}`. `target_kind` (report-level, R1) names what was evaluated; `evidence_basis`
-    is DERIVED from it, never an input. Measurements are sorted by `(indicator_id, subject)`
-    for a stable array order (REPORT_JSON_SCHEMA §3)."""
+    is DERIVED from it, never an input. Each measurement's `availability` (EV-FWD) is likewise
+    derived from (target_kind × the indicator's evidence_requirement). Measurements are sorted
+    by `(indicator_id, subject)` for a stable array order (REPORT_JSON_SCHEMA §3)."""
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
     evidence_basis = derive_evidence_basis(target_kind)
     assert_evidence_basis_derived(target_kind, evidence_basis)  # single source of truth
@@ -148,7 +235,12 @@ def serialize_bundle(
         "target_kind": target_kind,
         "evidence_basis": evidence_basis,
         "report": serialize_report(report),
-        "measurements": [serialize_measurement(m) for m in ordered],
+        "measurements": [
+            serialize_measurement(
+                m, target_kind=target_kind, evidence_requirements=evidence_requirements
+            )
+            for m in ordered
+        ],
     }
 
 
@@ -157,12 +249,18 @@ def bundle_to_json(
     measurements: Iterable[Measurement],
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
+    evidence_requirements: Mapping[str, str] | None = None,
 ) -> str:
     """Byte-identical (up to encoding) JSON for the bundle: sorted keys + compact, stable
     separators. `ensure_ascii=False` keeps the Chinese statements readable; UTF-8 encode
     for on-disk bytes."""
     return json.dumps(
-        serialize_bundle(report, measurements, target_kind=target_kind),
+        serialize_bundle(
+            report,
+            measurements,
+            target_kind=target_kind,
+            evidence_requirements=evidence_requirements,
+        ),
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
@@ -200,15 +298,22 @@ def serialize_self_contained_bundle(
     provenance: dict[str, Any] | None = None,
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
+    evidence_requirements: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """The EV-R1 delivery envelope `{schema_version, target_kind, evidence_basis,
     registry_fingerprint, provenance, report, registry, measurements}`
     (docs/REPORT_JSON_SCHEMA.md §1a). `target_kind`/`evidence_basis` (R1) ride the SAME
-    derivation as `serialize_bundle` (one source of truth). The registry is inlined via the
+    derivation as `serialize_bundle` (one source of truth); each measurement's `availability`
+    (EV-FWD) is derived from (target_kind × evidence_requirement). The registry is inlined via the
     EV-W0 serializer so the UI loads one file and never mis-pairs parts. `report`/`measurements`
     are the EV-7 shapes, unchanged."""
     registry_dict = serialize_registry(registry)
-    base = serialize_bundle(report, measurements, target_kind=target_kind)
+    base = serialize_bundle(
+        report,
+        measurements,
+        target_kind=target_kind,
+        evidence_requirements=evidence_requirements,
+    )
     return {
         "schema_version": base["schema_version"],
         "target_kind": base["target_kind"],
@@ -233,12 +338,18 @@ def self_contained_bundle_to_json(
     provenance: dict[str, Any] | None = None,
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
+    evidence_requirements: Mapping[str, str] | None = None,
 ) -> str:
     """Byte-deterministic JSON for the self-contained bundle (sorted keys + compact
     separators + ensure_ascii=False). This is the golden-fixture / delivery form."""
     return json.dumps(
         serialize_self_contained_bundle(
-            report, measurements, registry, provenance, target_kind=target_kind
+            report,
+            measurements,
+            registry,
+            provenance,
+            target_kind=target_kind,
+            evidence_requirements=evidence_requirements,
         ),
         sort_keys=True,
         ensure_ascii=False,

@@ -27,7 +27,11 @@ from pathlib import Path
 from treval.active_eval import (
     CorpusIndicator,
     InjectionCatchRate,
+    InjectionSuccessRate,
+    SensitiveDisclosureRate,
+    SystemPromptLeakRate,
     ToolScopeViolationRate,
+    UnsafeOutputPassthroughRate,
     load_corpus,
     run_corpus,
 )
@@ -62,10 +66,38 @@ class Producer:
     corpus_subdir: str
 
 
-# The D3 curation map (§3). ACTIVE producers — one canonical corpus each.
+# The D3 curation map (§3). Each bound indicator_id ← exactly ONE canonical corpus (so the
+# bundle holds one aggregate per id — DuplicateIndicatorError never trips). Corpus subdirs are
+# copied VERBATIM from eval_report's bindings (one source of truth for corpus↔indicator).
+#
+# DECISION-side (read the WAL decision record): `measured` only on a gateway; on a raw_model /
+# moderation_api they are `n/a_needs_gateway` by construction (EV-FWD) — kept so a gateway run
+# still measures them.
+# OUTPUT-side (EV-PAIR-A): read response_text / secret_canary / output_marker only, so they are
+# `measured` on BOTH gateway AND raw_model — this is what lets `collect --target-kind raw_model`
+# produce real numbers (the same corpus↔indicator pairs eval_report already runs). NOTE: llm01 is
+# driven twice (catch + success) — one run per producer is the existing table model (no grouping;
+# not new logic). `within_cost_budget` is deliberately NOT here — it needs a budget arg while
+# `factory()` is no-arg; it lands with EV-PAIR's factory-form change (EV-PAIR-A §3).
 CURATION: tuple[Producer, ...] = (
+    # decision-side
     Producer("injection_catch_rate", InjectionCatchRate, "llm01_prompt_injection"),
     Producer("tool_scope_violation_rate", ToolScopeViolationRate, "llm06_tool_scope"),
+    # output-side (measurable on a bare model)
+    Producer("injection_success_rate", InjectionSuccessRate, "llm01_prompt_injection"),
+    Producer(
+        "sensitive_disclosure_rate",
+        SensitiveDisclosureRate,
+        "llm02_sensitive_disclosure",
+    ),
+    Producer(
+        "unsafe_output_passthrough_rate",
+        UnsafeOutputPassthroughRate,
+        "llm05_improper_output",
+    ),
+    Producer(
+        "system_prompt_leak_rate", SystemPromptLeakRate, "llm07_system_prompt_leak"
+    ),
 )
 
 # PASSIVE producers (EV-5, EV-9): measured over the eval WAL's AuditEvidence stream, feeding the
@@ -152,52 +184,142 @@ def collect_passive(
     return scan_passive(wal_dir, tenant, warnings=warnings).measurements
 
 
+@dataclass(frozen=True)
+class ActiveScan:
+    """The active-collection result: the aggregate measurements PLUS run-level probe stats.
+
+    `probe_count`/`error_count` are the totals across ALL producers' probes; `first_error` is the
+    first probe error seen (verbatim). They power the EV-PAIR-A2 whole-run guard: when every probe
+    across the whole run errored, `collect` must SHOUT at the top (not bury `N error(s) excluded`
+    in each indicator's notes) and exit non-zero — a wasted run is not a success."""
+
+    measurements: tuple[Measurement, ...]
+    probe_count: int
+    error_count: int
+    first_error: str | None
+
+
 def collect_measurements(
     target: object,
     *,
     corpus_root: Path,
     warnings: list[str],
-) -> tuple[Measurement, ...]:
+) -> ActiveScan:
     """Run every curated producer against `target`. A producer exception is caught, noted
     in `warnings`, and skipped (best-effort collection — §5). Pure w.r.t. `target`: pass a
-    fake Target in tests to exercise this without a gateway."""
+    fake Target in tests to exercise this without a gateway. Also tallies probe-level errors
+    across the run for the whole-run guard (EV-PAIR-A2 §1)."""
     measurements: list[Measurement] = []
+    probe_count = 0
+    error_count = 0
+    first_error: str | None = None
     for prod in CURATION:
         try:
             corpus = load_corpus(corpus_root / prod.corpus_subdir)
             results = run_corpus(corpus, target)  # type: ignore[arg-type]
+            for pr in results:
+                probe_count += 1
+                if pr.error is not None:
+                    error_count += 1
+                    if first_error is None:
+                        first_error = pr.error
             (m,) = prod.factory().measure(results)
             measurements.append(m)
         except Exception as e:  # env/transport/corpus failure — record, keep going
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
             )
-    return tuple(measurements)
+    return ActiveScan(tuple(measurements), probe_count, error_count, first_error)
+
+
+def _resolve_target(args: argparse.Namespace) -> tuple[str, str] | None:
+    """(target_url, target_kind) from the EV-FWD D3 CLI, or None after printing the error.
+
+    `--gateway` is SUGAR for a gateway run (mutually exclusive with the explicit pair);
+    `--target-kind` is NEVER inferred from the URL — a bare-model URL must not be silently
+    mislabelled as a governed gateway (R1 honesty)."""
+    gw = args.gateway
+    url = getattr(args, "target_url", None)
+    kind = getattr(args, "target_kind", None)
+    if gw and (url or kind):
+        print(
+            "error: --gateway is sugar for a gateway run and is mutually exclusive with "
+            "--target-url / --target-kind",
+            file=sys.stderr,
+        )
+        return None
+    if gw:
+        return gw, "gateway"
+    if url:
+        if not kind:
+            print(
+                "error: --target-url requires --target-kind (gateway|raw_model|"
+                "moderation_api) — the kind is never inferred from the URL",
+                file=sys.stderr,
+            )
+            return None
+        return url, kind
+    print(
+        "error: need --gateway (or TREVAL_EVAL_GATEWAY_URL), or --target-url + --target-kind",
+        file=sys.stderr,
+    )
+    return None
 
 
 def run_collect(args: argparse.Namespace) -> int:
-    if not args.gateway:
+    resolved = _resolve_target(args)
+    if resolved is None:
+        return EXIT_IO
+    target_url, target_kind = resolved
+
+    # EV-PAIR-A2 §2: `--model` is REQUIRED for a non-gateway target — `deepseek-v4-flash` is the
+    # GATEWAY deployment's model id, no default is correct for an arbitrary endpoint (unset ⇒
+    # near-certain 404 + a whole wasted run). Same discipline as D3's "never infer target_kind":
+    # what can't be guessed isn't guessed. The gateway keeps its meaningful default.
+    model = args.model
+    if not model:
+        if target_kind == "gateway":
+            model = "deepseek-v4-flash"
+        else:
+            print(
+                f"error: --model is required for --target-kind {target_kind} (no default "
+                "for an arbitrary endpoint); it reads TREVAL_EVAL_MODEL",
+                file=sys.stderr,
+            )
+            return EXIT_IO
+
+    # Lazy — the targets pull httpx only when we actually collect.
+    from treval.active_eval import GatewayTarget, OpenAITarget
+
+    target: object
+    if target_kind == "gateway":
+        target = GatewayTarget(
+            target_url,
+            wal_dir=args.wal,
+            tenant_id=args.tenant,
+            user_id=args.user,  # MUST be provisioned (else all-unmeasurable)
+            model=model,
+            temperature=0.0,  # pin for the statistical verticals
+        )
+    elif target_kind == "raw_model":
+        # EV-FWD: a bare OpenAI-compatible model. NO wal_dir / NO tenant — it is not governed;
+        # only the output-side indicators measure on it, the rest surface as availability=n/a.
+        target = OpenAITarget(target_url, model=model, temperature=0.0)
+    else:  # moderation_api
         print(
-            "error: --gateway (or TREVAL_EVAL_GATEWAY_URL) is required for collect",
+            "error: --target-kind moderation_api has no runtime in EV-FWD (its vendor-catch "
+            "indicator lands with C2); only gateway | raw_model can be driven today",
             file=sys.stderr,
         )
         return EXIT_IO
-
-    # Lazy — GatewayTarget pulls httpx only when we actually collect.
-    from treval.active_eval import GatewayTarget
-
-    target = GatewayTarget(
-        args.gateway,
-        wal_dir=args.wal,
-        tenant_id=args.tenant,
-        user_id=args.user,  # MUST be provisioned on the target (else all-unmeasurable)
-        model=args.model,
-        temperature=0.0,  # pin for the statistical verticals
-    )
     corpus_root = Path(args.corpus) if args.corpus else _DEFAULT_CORPUS
 
     warnings: list[str] = []
     active = collect_measurements(target, corpus_root=corpus_root, warnings=warnings)
+    # EV-PAIR-A2 §1: did the WHOLE run get zero model responses? (every probe errored). Computed
+    # here so the guard can shout at the top + exit non-zero, rather than leaving the only clue
+    # in each indicator's `N error(s) excluded` notes.
+    all_errored = active.probe_count > 0 and active.error_count == active.probe_count
 
     # EV-PIN: a run is PINNED only when the operator supplied BOTH window bounds — that is
     # the reproducibility claim (same WAL + same bounds ⇒ same records ⇒ same n and value).
@@ -207,7 +329,8 @@ def run_collect(args: argparse.Namespace) -> int:
     window_to: int | None = int(raw_to) if raw_to is not None else None
     pinned = window_from is not None and window_to is not None
 
-    # Passive (EV-5): read the same WAL the probes wrote under. Needs --wal; skipped otherwise.
+    # Passive (EV-5): read the same WAL the probes wrote under. GATEWAY-only — a raw_model /
+    # moderation_api run has no governed WAL, so passive indicators do not apply (EV-FWD).
     scan = (
         scan_passive(
             args.wal,
@@ -216,11 +339,11 @@ def run_collect(args: argparse.Namespace) -> int:
             window_from_ns=window_from,
             window_to_ns=window_to,
         )
-        if args.wal
+        if (args.wal and target_kind == "gateway")
         else PassiveScan((), None, 0)
     )
     passive = scan.measurements
-    measurements = active + passive
+    measurements = active.measurements + passive
 
     # The window we RECORD: the pinned bounds when given, else the window actually observed
     # (half-open). Never (0,0) — a report that does not state its own window cannot be
@@ -246,6 +369,7 @@ def run_collect(args: argparse.Namespace) -> int:
         tenant_id=args.tenant,
         window=window,
         mode="active+passive" if passive else "active",
+        target_kind=target_kind,  # EV-FWD/R1: records WHAT was evaluated (drives availability)
         pinned=pinned,
         provenance=build_provenance(
             wal_dir=args.wal,
@@ -266,11 +390,26 @@ def run_collect(args: argparse.Namespace) -> int:
         print(f"error: cannot write bundle {out}: {e}", file=sys.stderr)
         return EXIT_IO
 
+    # EV-PAIR-A2 §1: the whole-run guard — SHOUT before the warnings (top of the output) when the
+    # run got no model responses at all, and exit non-zero so a script never reads a wasted run as
+    # success. A PARTIAL error stays quiet (each indicator already shows its own `N excluded`).
+    if all_errored:
+        print(
+            "🔴 本次运行未取得任何模型响应 —— 指标不可测，非 0%"
+            f"（{active.error_count}/{active.probe_count} 探针全部 error）",
+            file=sys.stderr,
+        )
+        print(f"   首个 error: {active.first_error}", file=sys.stderr)
+        print(
+            "   排查：检查 --target-url / --model / 端点可达性",
+            file=sys.stderr,
+        )
+
     for w in warnings:
         print(f"  ⚠ {w}", file=sys.stderr)
     print(
-        f"wrote {out}: {len(active)}/{len(CURATION)} active producer(s) + "
+        f"wrote {out}: {len(active.measurements)}/{len(CURATION)} active producer(s) + "
         f"{len(passive)} passive measurement(s)",
         file=sys.stderr,
     )
-    return EXIT_OK
+    return EXIT_IO if all_errored else EXIT_OK

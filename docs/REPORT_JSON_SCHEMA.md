@@ -21,17 +21,18 @@ never mis-pair or lose a part. Assembly happens at serialize time
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "target_kind": "gateway",
   "evidence_basis": "wal_anchored",
   "registry_fingerprint": "sha256:…",
   "report": { /* MaturityReport */ },
   "registry": { /* DimensionRegistry — the EV-W0 serialize_registry shape */ },
-  "measurements": [ /* Measurement, ... */ ]
+  "measurements": [ /* Measurement (each with a derived `availability`), ... */ ]
 }
 ```
 
 - `schema_version` (int): this contract's version; bump on any additive change (§8).
+  **v3 (EV-FWD): each `measurements[]` entry gains a derived `availability`.**
 - `target_kind` (string, R1): **what was evaluated** — `raw_model` (bare-model baseline) ·
   `gateway` (governed, WAL-anchored) · `moderation_api` (third-party moderation API).
   Report-level; default `gateway` (every pre-R1 run is a gateway run).
@@ -123,6 +124,8 @@ Rules: snake_case keys identical to the dataclass fields; `tuple` → array; `No
 | `value` | number | |
 | `unit` | string | `"ratio"/"count"/"tokens"/"ms"/...` |
 | `sample_size` | int | `0` ⇒ insufficient data (distinct from `value: 0`) |
+| `integrity` | enum | `"verified"/"unverified"/"broken"` |
+| `availability` | enum (EV-FWD) | `"measured"` · `"n/a_needs_gateway"` · `"n/a_self_reported"`. **DERIVED** from (`target_kind` × the indicator's `evidence_requirement`: `output_only`/`needs_decision`/`needs_wal`), never stored independently — a serializer gate FAILS if `availability ≠ derive()`. This is the **mechanism axis** ("can it be measured here?"), ORTHOGONAL to `evidence_basis` (the **evidence axis** — "how trustworthy is it?"). `n/a_*` ≠ `insufficient_data`: `n/a` is architecturally absent (will *never* exist in this mode), `insufficient_data` (`sample_size: 0`) is a this-run miss. |
 | `evidence_refs` | array of EvidenceRef | |
 | `subject` | string | `""` = aggregate; non-empty = per-entity (e.g. agent_id) |
 | `notes` | string | |
