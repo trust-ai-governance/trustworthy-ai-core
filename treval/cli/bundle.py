@@ -16,9 +16,7 @@ from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = (
-    2  # R1: collect bundle top level gains target_kind + derived evidence_basis
-)
+SCHEMA_VERSION = 3  # EV-FWD: measurements gain a derived `availability` (aligned with report bundle v3)
 _VALID_INTEGRITY = {s.value for s in IntegrityStatus}
 
 
@@ -236,7 +234,13 @@ def build_bundle(
     `_grade(window=bundle.window)`, so fixing it here fixes the delivered report too.
 
     `target_kind` (R1) records WHICH target this run probed; `evidence_basis` is DERIVED from
-    it (never stored independently, R1 裁定 A). Both flow into the graded delivery bundle."""
+    it (never stored independently, R1 裁定 A). Both flow into the graded delivery bundle.
+
+    🔴 `target_kind` + the evidence_requirement map MUST reach serialize_measurement, or a
+    raw_model collect gets `availability=measured` off the gateway default — the EV-FWD live bug.
+    This is the SECOND serialization path (the report envelope is the first); both must derive
+    availability the same way (R1's "two schemas, one truth" discipline)."""
+    from treval.active_eval import EVIDENCE_REQUIREMENTS
     from treval.rubric.serialize import derive_evidence_basis, serialize_measurement
 
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
@@ -248,7 +252,14 @@ def build_bundle(
         "window": list(window),
         "mode": mode,
         "pinned": pinned,
-        "measurements": [serialize_measurement(m) for m in ordered],
+        "measurements": [
+            serialize_measurement(
+                m,
+                target_kind=target_kind,
+                evidence_requirements=EVIDENCE_REQUIREMENTS,
+            )
+            for m in ordered
+        ],
     }
     if provenance is not None:
         doc["provenance"] = provenance

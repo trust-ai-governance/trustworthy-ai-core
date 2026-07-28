@@ -35,6 +35,7 @@ from treval.rubric import (
     evaluate,
     self_contained_bundle_to_json,
 )
+from treval.rubric.serialize import TARGET_KINDS
 
 EXIT_OK = 0
 EXIT_GRADING = 2
@@ -110,10 +111,20 @@ def run_self_contained(
     reg, report, measurements, warnings, provenance, target_kind = _grade(
         bundle_path, posture_path, registry
     )
+    # EV-FWD: the per-indicator evidence_requirement map drives each measurement's `availability`.
+    # Imported lazily (active_eval is the harness) so the pure grade/render path stays isolated
+    # from a collection-only dependency (§0②); it's httpx-free at import.
+    from treval.active_eval import EVIDENCE_REQUIREMENTS
+
     # EV-PIN §1.5-1: carry the pin stamp into the delivery artifact so a third party can
     # tell from the bundle ALONE whether it is citable. R1: carry target_kind too.
     bundle_json = self_contained_bundle_to_json(
-        report, measurements, reg, provenance, target_kind=target_kind
+        report,
+        measurements,
+        reg,
+        provenance,
+        target_kind=target_kind,
+        evidence_requirements=EVIDENCE_REQUIREMENTS,
     )
     entry = write_bundle(
         out_dir,
@@ -141,7 +152,14 @@ def run_report(
     )
 
     if fmt == "json":
-        text = bundle_to_json(report, measurements, target_kind=target_kind)
+        from treval.active_eval import EVIDENCE_REQUIREMENTS
+
+        text = bundle_to_json(
+            report,
+            measurements,
+            target_kind=target_kind,
+            evidence_requirements=EVIDENCE_REQUIREMENTS,
+        )
     elif fmt == "csv":
         text = render_csv(reg, report, measurements)
     else:  # human
@@ -273,7 +291,22 @@ def build_parser() -> argparse.ArgumentParser:
         ("run", "collect ∘ report (convenience)"),
     ):
         col = sub.add_parser(name, help=help_text)
+        # EV-FWD D3: the target is (URL, kind). `--gateway` is retained as SUGAR for a gateway
+        # run (⇒ --target-url=<gw> --target-kind=gateway); it is mutually exclusive with the
+        # explicit pair. `--target-kind` is a CLOSED enum and is NEVER inferred from the URL —
+        # a bare-model URL must not be silently mislabelled as a governed gateway (R1 honesty).
         col.add_argument("--gateway", default=os.environ.get("TREVAL_EVAL_GATEWAY_URL"))
+        col.add_argument(
+            "--target-url",
+            default=None,
+            help="target endpoint URL (with --target-kind); alternative to --gateway",
+        )
+        col.add_argument(
+            "--target-kind",
+            choices=TARGET_KINDS,
+            default=None,
+            help="what the target IS (never inferred): gateway | raw_model | moderation_api",
+        )
         col.add_argument("--wal", default=os.environ.get("TREVAL_EVAL_WAL_DIR"))
         col.add_argument("--corpus", default=None)
         col.add_argument(
@@ -285,8 +318,16 @@ def build_parser() -> argparse.ArgumentParser:
         col.add_argument(
             "--user", default=os.environ.get("TREVAL_EVAL_USER", "eval-user")
         )
+        # EV-PAIR-A2 §2: no hard default — `deepseek-v4-flash` is the gateway deployment's model,
+        # meaningless on an arbitrary endpoint. gateway falls back to it in code; raw_model /
+        # moderation_api REQUIRE it. Reads TREVAL_EVAL_MODEL (NOT TREVAL_TARGET_MODEL — a doc
+        # footgun: exporting the latter is silently ignored ⇒ a wasted run).
         col.add_argument(
-            "--model", default=os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash")
+            "--model",
+            default=os.environ.get("TREVAL_EVAL_MODEL"),
+            help="model id — REQUIRED for --target-kind raw_model/moderation_api (no default "
+            "for an arbitrary endpoint); gateway defaults to deepseek-v4-flash. Env: "
+            "TREVAL_EVAL_MODEL (NOT TREVAL_TARGET_MODEL).",
         )
         col.add_argument("--out", default=None)
         # EV-PIN: freeze the run's window. Supplying BOTH bounds makes the run reproducible

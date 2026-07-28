@@ -309,6 +309,7 @@
         "subject",
         "notes",
         "integrity",
+        "availability",
         "evidence_refs"
       ],
       "properties": {
@@ -339,6 +340,14 @@
             "verified",
             "unverified",
             "broken"
+          ]
+        },
+        "availability": {
+          "description": "EV-FWD: can this indicator be MEASURED on this target? DERIVED from (target_kind × the indicator's evidence_requirement), never stored independently. measured = a value exists (its trust tier is evidence_basis, a SEPARATE axis) · n/a_needs_gateway = architecturally absent on a bare model (needs the governed decision/WAL path) · n/a_self_reported = absent on a moderation API (no WAL; not 'needs gateway' but 'vendor self-report, no such dimension'). n/a is NOT insufficient_data — it will never exist in this mode, not 'this run missed it'.",
+          "enum": [
+            "measured",
+            "n/a_needs_gateway",
+            "n/a_self_reported"
           ]
         },
         "evidence_refs": {

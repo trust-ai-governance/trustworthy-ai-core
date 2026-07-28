@@ -13,6 +13,7 @@ httpx is imported lazily inside probe(), so importing this module — and
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from dataclasses import dataclass, replace
@@ -181,6 +182,66 @@ def _finish_reason(body: dict[str, object]) -> str:
     return ""
 
 
+def _parse_body(resp: object) -> tuple[dict[str, object], str]:
+    """The response JSON body (dict, defensively) + the full raw text. A non-JSON / non-dict
+    body → ({}, best-effort text). Shared by GatewayTarget and OpenAITarget (EV-FWD §3 — one
+    parser, not a copy)."""
+    body: dict[str, object] = {}
+    try:
+        parsed = resp.json()  # type: ignore[attr-defined]
+        if isinstance(parsed, dict):
+            body = parsed
+    except ValueError:
+        body = {}
+    raw = getattr(resp, "text", "")
+    return body, raw if isinstance(raw, str) else ""
+
+
+def _has_completion(body: dict[str, object]) -> bool:
+    """A well-formed OpenAI chat completion carries a NON-EMPTY `choices` array. Its absence is
+    an error payload — some compat layers return HTTP 200 with `{"error": …}` / `{"detail": …}`
+    and no choices — NOT a clean empty answer. OpenAITarget must record that as an error, not
+    measure it as "nothing leaked" (a false 0%). An empty content string INSIDE a valid choices
+    entry is a real (if empty) model output and stays measurable — only a missing structure fails."""
+    choices = body.get("choices")
+    return isinstance(choices, list) and len(choices) > 0
+
+
+def _usage_tokens(body: dict[str, object]) -> tuple[int, int, int, int]:
+    """The OpenAI `usage` accounting → (total, prompt, completion, reasoning) tokens (EV-AE5).
+    reasoning_tokens lives under completion_tokens_details; absent / blocked → 0. Shared by both
+    targets (returned as a tuple, not **kwargs, so the typed ProbeResult fields stay explicit)."""
+    usage = body.get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    ctd = usage.get("completion_tokens_details")
+    ctd = ctd if isinstance(ctd, dict) else {}
+    return (
+        _coerce_int(usage.get("total_tokens")),
+        _coerce_int(usage.get("prompt_tokens")),
+        _coerce_int(usage.get("completion_tokens")),
+        _coerce_int(ctd.get("reasoning_tokens")),
+    )
+
+
+def _chat_params(
+    case: CorpusCase, model: str, temperature: float | None
+) -> dict[str, object]:
+    """The OpenAI chat params for a case: the authored wire array (EV-AE11) sent verbatim, else
+    a single-turn [system?, user]. temperature is pinned when not None. Shared so GatewayTarget
+    and OpenAITarget build the request the same way (EV-FWD §3 — reuse, not copy)."""
+    if case.messages is not None:
+        messages: list[dict[str, object]] = _to_wire(case.messages)
+    else:
+        messages = []
+        if case.system_prompt:
+            messages.append({"role": "system", "content": case.system_prompt})
+        messages.append({"role": "user", "content": case.input})
+    params: dict[str, object] = {"model": model, "messages": messages}
+    if temperature is not None:
+        params["temperature"] = temperature
+    return params
+
+
 class GatewayTarget:
     """Drives the gateway invoke API under the eval tenant, then attaches the WAL
     record by request_id.
@@ -228,21 +289,12 @@ class GatewayTarget:
         # non-"chat" tool_id is an out-of-scope probe (LLM06): the authorization stage
         # decides on scope derived from tool_id BEFORE execution, so minimal params
         # suffice (EV-AE3 D2 — confirmed live: params:{} reaches authz).
+        # EV-AE11: a "chat" case sends the authored wire array / single-turn messages verbatim
+        # (shared _chat_params); a non-"chat" tool_id is an out-of-scope LLM06 probe (empty
+        # params — authz decides on tool_id before execution).
         params: dict[str, object]
         if case.tool_id == "chat":
-            if case.messages is not None:
-                # EV-AE11: send the authored wire array verbatim (author controls role /
-                # index / nesting). `messages` is authoritative — system_prompt/input are
-                # NOT prepended (the author places any system turn explicitly).
-                params = {"model": self._model, "messages": _to_wire(case.messages)}
-            else:
-                messages: list[dict[str, str]] = []
-                if case.system_prompt:
-                    messages.append({"role": "system", "content": case.system_prompt})
-                messages.append({"role": "user", "content": case.input})
-                params = {"model": self._model, "messages": messages}
-            if self._temperature is not None:
-                params["temperature"] = self._temperature
+            params = _chat_params(case, self._model, self._temperature)
         else:
             params = {}
         headers = {
@@ -276,42 +328,28 @@ class GatewayTarget:
                 timed_out=isinstance(e, httpx.ReadTimeout),
             )
 
-        body = {}
-        try:
-            parsed = resp.json()
-            if isinstance(parsed, dict):
-                body = parsed
-        except ValueError:
-            body = {}
-
-        raw = getattr(resp, "text", "")
-        raw_response = raw if isinstance(raw, str) else ""
+        body, raw_response = _parse_body(resp)
         request_id = resp.headers.get("x-request-id", "") or str(
             body.get("request_id", "")
         )
         decision = str(body.get("decision", ""))
-        response_text = _extract_text(body)
-        usage = body.get("usage")
-        usage = usage if isinstance(usage, dict) else {}
-        # reasoning_tokens lives in usage.completion_tokens_details.reasoning_tokens (EV-AE5.3)
-        ctd = usage.get("completion_tokens_details")
-        ctd = ctd if isinstance(ctd, dict) else {}
         if self._wal_dir is not None and request_id:
             evidence, response_evidence = self._read_evidence(request_id)
         else:
             evidence, response_evidence = None, None
+        total, prompt, completion, reasoning = _usage_tokens(body)
         return ProbeResult(
             case_id=case.id,
             request_id=request_id,
             decision=decision,
-            response_text=response_text,
+            response_text=_extract_text(body),
             raw_response=raw_response,
             evidence=evidence,
             response_evidence=response_evidence,
-            total_tokens=_coerce_int(usage.get("total_tokens")),
-            prompt_tokens=_coerce_int(usage.get("prompt_tokens")),
-            completion_tokens=_coerce_int(usage.get("completion_tokens")),
-            reasoning_tokens=_coerce_int(ctd.get("reasoning_tokens")),
+            total_tokens=total,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            reasoning_tokens=reasoning,
             finish_reason=_finish_reason(body),
         )
 
@@ -483,3 +521,110 @@ class GatewayTarget:
             else r
             for r in results
         ]
+
+
+class OpenAITarget:
+    """Drives any OpenAI-compatible `/chat/completions` endpoint — a BARE model, before any
+    governance (EV-FWD §3). This is the 'measured, treatment-free' half of the "before vs after"
+    picture: point the same corpus at the raw model, then at the gateway, and the delta is what
+    governance bought.
+
+    🔴 A MINIMAL TEST CLIENT, NEVER A GOVERNANCE PATH (guardrail 1): it evaluates NO rules, does
+    NO PII handling, and writes NO audit WAL. It therefore returns `decision=""` and
+    `evidence=None`, so only the OUTPUT-side indicators (injection_success / *_leak_rate /
+    unsafe_output_passthrough / within_cost_budget) measure on it; the decision/WAL-side ones are
+    architecturally absent and surface as `availability=n/a_needs_gateway`, NOT a fake 0%.
+
+    `api_key` (param or TREVAL_OPENAI_API_KEY) rides the Authorization header ONLY — it never
+    enters a ProbeResult, a report, or a log line (§3)."""
+
+    target_id = "raw_model"
+
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        model: str,
+        api_key: str | None = None,
+        temperature: float | None = 0.0,  # pin for reproducible statistical runs
+        timeout: float = 30.0,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        # Read from env when not passed; kept private and never serialized (§3).
+        self._api_key = api_key or os.environ.get("TREVAL_OPENAI_API_KEY")
+        self._temperature = temperature
+        self._timeout = timeout
+
+    def probe(self, case: CorpusCase) -> ProbeResult:
+        import httpx  # lazy: only needed to drive a live endpoint
+
+        headers = {"content-type": "application/json"}
+        if self._api_key:  # secret stays in the header — never in the ProbeResult/log
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        # A bare model is pure chat — every case is a completion (tool_id is a gateway concept).
+        params = _chat_params(case, self._model, self._temperature)
+        try:
+            resp = httpx.post(
+                self._base_url + "/chat/completions",
+                headers=headers,
+                json=params,
+                timeout=self._timeout,
+            )
+        except httpx.HTTPError as e:
+            return ProbeResult(
+                case_id=case.id,
+                request_id="",
+                decision="",
+                response_text="",
+                evidence=None,
+                error=f"{type(e).__name__}: {e}",
+                timed_out=isinstance(e, httpx.ReadTimeout),
+            )
+
+        body, raw_response = _parse_body(resp)
+        # 🔴 OpenAITarget has NO WAL oracle — the HTTP response is its ONLY signal. A non-2xx
+        # (404 wrong URL / 401 bad-or-missing key / 429 rate-limit) or a 200 carrying no
+        # completion is an ENDPOINT FAILURE, NOT a clean empty answer. Letting it through makes
+        # every probe "succeed" empty ⇒ the output-side indicators read a FALSE 0% ("zero
+        # leaked / zero succeeded") — a bare model looking safer than the gateway, on the ONE
+        # side raw_model can measure. So it becomes a recorded `error` (→ excluded from the
+        # denominator, insufficient_data), never a measured 0%. (Contrast GatewayTarget, which
+        # intentionally accepts non-2xx: there a governance BLOCK is a valid non-2xx the WAL
+        # confirms; OpenAITarget has no such record to lean on.)
+        status = getattr(resp, "status_code", 0)
+        if not 200 <= status < 300:
+            return ProbeResult(
+                case_id=case.id,
+                request_id="",
+                decision="",
+                response_text="",
+                raw_response=raw_response,
+                evidence=None,
+                error=f"HTTP {status}: {raw_response[:200]}",
+            )
+        if not _has_completion(body):
+            return ProbeResult(
+                case_id=case.id,
+                request_id="",
+                decision="",
+                response_text="",
+                raw_response=raw_response,
+                evidence=None,
+                error=f"no completion in 2xx response: {raw_response[:200]}",
+            )
+
+        total, prompt, completion, reasoning = _usage_tokens(body)
+        return ProbeResult(
+            case_id=case.id,
+            request_id="",  # no gateway request_id — standalone has no WAL correlation key
+            decision="",  # 🔴 a bare model makes NO decision (there is no "block")
+            response_text=_extract_text(body),
+            raw_response=raw_response,
+            evidence=None,  # 🔴 NO WAL — guardrail 1
+            total_tokens=total,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            reasoning_tokens=reasoning,
+            finish_reason=_finish_reason(body),
+        )

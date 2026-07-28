@@ -27,6 +27,7 @@ from treval.active_eval.corpus import (
     load_corpus,
 )
 from treval.active_eval.indicators import (
+    EVIDENCE_REQUIREMENTS,
     BenignFlagRate,
     BenignShadowFlagRate,
     CanaryLeakRate,
@@ -69,7 +70,13 @@ from treval.active_eval.score_metrics import (
     score_stability,
     two_way_normalized,
 )
-from treval.active_eval.target import GatewayTarget, ProbeResult, Target, VendorLabel
+from treval.active_eval.target import (
+    GatewayTarget,
+    OpenAITarget,
+    ProbeResult,
+    Target,
+    VendorLabel,
+)
 from treval.active_eval.verdict_loader import (
     VerdictError,
     load_verdict_groups,
@@ -96,6 +103,8 @@ __all__ = [
     "ProbeResult",
     "Target",
     "GatewayTarget",
+    "OpenAITarget",
+    "EVIDENCE_REQUIREMENTS",
     "run_corpus",
     # P3C-harness C1-STABILITY-CURVE — score-driven spike metrics (bearer seam + stability + curve)
     "VendorLabel",

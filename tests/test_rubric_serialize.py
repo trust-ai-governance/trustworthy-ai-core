@@ -115,7 +115,7 @@ def _sample_bundle():
 def test_bundle_envelope_shape():
     report, measurements = _sample_bundle()
     bundle = serialize_bundle(report, measurements)
-    assert bundle["schema_version"] == 2
+    assert bundle["schema_version"] == 3  # EV-FWD: measurements gain `availability`
     # R1: +target_kind (default gateway) + derived evidence_basis at the envelope top level
     assert set(bundle) == {
         "schema_version",
@@ -163,6 +163,8 @@ def test_report_field_mapping_enum_none_tuple():
     m0 = bundle["measurements"][0]
     assert m0["integrity"] == "verified"  # enum → value
     assert m0["subject"] == ""
+    # EV-FWD: availability rides each measurement; default target_kind=gateway ⇒ measured
+    assert m0["availability"] == "measured"
 
 
 def test_measurements_sorted_by_indicator_then_subject():
@@ -212,7 +214,7 @@ def test_bundle_round_trips_through_json():
     report, measurements = _sample_bundle()
     parsed = json.loads(bundle_to_json(report, measurements))
     assert parsed["report"]["dimensions"][0]["dimension"] == "robustness"
-    assert parsed["schema_version"] == 2
+    assert parsed["schema_version"] == 3
     assert (
         parsed["target_kind"] == "gateway"
         and parsed["evidence_basis"] == "wal_anchored"
