@@ -250,6 +250,14 @@ def _cmd_collect(args: argparse.Namespace) -> int:
     return run_collect(args)
 
 
+def _cmd_pair(args: argparse.Namespace) -> int:
+    # EV-PAIR §3: the pairing gate is a function of TWO bundles, so it is its own subcommand (P2),
+    # not a flag on any single-run path. Imported lazily like the other operator paths.
+    from treval.cli.pair import run_pair
+
+    return run_pair(args)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from treval.cli.collect import run_collect
 
@@ -285,6 +293,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--out-dir", default=None, help="report store directory (--self-contained)"
     )
     rep.set_defaults(func=_cmd_report)
+
+    # EV-PAIR §3 / P2: `pair RAW.json GATEWAY.json` — the fail-closed governance-effect delta.
+    pair = sub.add_parser(
+        "pair",
+        help="two collect bundles → governance-effect delta (fail-closed; EV-PAIR)",
+    )
+    pair.add_argument("bundle_a", help="a collect bundle (raw_model or gateway)")
+    pair.add_argument("bundle_b", help="the other collect bundle")
+    pair.add_argument(
+        "--out", default=None, help="write the delta JSON here (else stdout)"
+    )
+    pair.set_defaults(func=_cmd_pair)
 
     for name, help_text in (
         ("collect", "drive the live gateway → Measurement bundle (operator)"),

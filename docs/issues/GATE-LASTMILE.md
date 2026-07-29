@@ -206,9 +206,28 @@ benign_shadow_flag_rate  = 0%  (n=20)   … 20 probe(s) had NO async record …
 
 ### P7 小 —— 文档：评测身份与网关就绪
 
-- `eval_report` 的 docstring/README 写明：**用专用评测身份**（如 `TREVAL_EVAL_USER=jack`），并列全常用变量
+- `eval_report` 的 docstring/README 写明：**用专用评测身份**（如 `TREVAL_EVAL_USER=<provisioned-eval-user>`），并列全常用变量
   （`TREVAL_EVAL_GATEWAY_URL` / `WAL_DIR` / `TENANT` / `USER` / `TIMEOUT`）——本次事故里架构师给出的命令就漏了变量，徒增排查噪声。
 - 🔴 **写明"端口在听 ≠ 治理就绪"**：起网关后应确认治理管线已加载再跑评测；P4 的护栏会在没确认时直接把结果标成不可测。
+
+#### P7 补充（2026-07-29 live 实证）：**"网关在跑" ≠ "你的评测身份被开通"**
+
+**事故形状**：手工 `curl`（`x-tenant-id: acme` / `x-user-id: <已开通用户>`）**正常返回、规则正常评估**；
+同一网关上 `collect` 的**默认身份**（`--tenant __eval__ --user eval-user`）却 **108 条探针零规则评估、全 UNDECIDED**。
+⇒ **网关是好的，是评测身份在这套部署里没有开通。** 代码里那行注释早写着：`user_id=args.user,  # MUST be provisioned`。
+
+🔴 **同一个坑（§C2-2「评测身份未注册 ⇒ 静默假 0%」）在本项目已发生三次，且架构师两次归因错误**
+（先怀疑上游回归、再怀疑网关就绪时序）。**⇒ 判据必须写死，不靠经验判断。**
+
+**文档要写的三条：**
+1. **必须显式传身份**：`--tenant` / `--user`（或 `TREVAL_EVAL_TENANT/USER`），**且该身份必须在目标部署里已开通**。
+   默认值 `__eval__` / `eval-user` 只在开通了它们的部署上有效 —— **换一套容器/环境就可能失效**。
+2. 🔴 **唯一可靠的"治理生效"判据**（三选一皆可，语义等价）：
+   - `collect` 产出的 **`injection_catch_rate` 是 `measured` 且 `sample_size > 0`**（最省事，跑完即知）；
+   - 或 WAL 中**该租户/该用户**的记录 **`rules_evaluated` 数 > 0**；
+   - 或 WAL 中该批记录出现 **ALLOW/BLOCK**（非全 `UNDECIDED`）。
+   **"端口在听"、"docker ps 是 Up"、"curl 别的身份通" 都不是判据。**
+3. **排查顺序**：端点可达 → **身份已开通**（上面的判据）→ 治理管线已加载。**第 2 步最常被跳过。**
 
 > 📌 **顺带印证：** 正常那跑的表头是 `evidence: 139/142 probes WAL-anchored` —— **3 条未锚定**。
 > 这正是 P3 覆盖行的价值（它把"不是每条都有证据"如实显形），也说明**该行必须继续按 P6 收紧口径**。

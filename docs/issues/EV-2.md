@@ -2,7 +2,7 @@
 
 > Dev brief. Self-contained with this file + the repo. Parent contract:
 > `docs/POSTGRES_READ_CONTRACT.md` (reconciled with Platform A4 — **A4 satisfies
-> it**); A4 design refs (platform): `A4_audit_index_port.md`, `DEPLOYMENT.md`,
+> it**); A4 design refs (platform): 上游审计索引端口设计（私有）, `DEPLOYMENT.md`,
 > `deploy/postgres/audit_schema.sql`. Builds on **EV-0** + reuses **EV-1**'s shared
 > decoder (`tools/_rc_decode`). `docs/EVAL_ISSUES(WIP).md` EV-2.
 

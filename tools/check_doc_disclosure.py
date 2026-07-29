@@ -107,10 +107,45 @@ RULES: list[tuple[str, str, str, re.Pattern[str]]] = [
         ),
     ),
     (
+        "error",
+        "internal_identity",
+        "真实的部署身份（已开通的用户名 / 非示例邮箱）—— 泄露内部账号，且会被照抄进别人的命令。"
+        "示例一律用占位符（<provisioned-eval-user>）或 RFC-2606 示例域（*.example）",
+        re.compile(
+            # An eval identity assigned a CONCRETE value (a placeholder starts with '<').
+            r"TREVAL_EVAL_USER(?:_ID)?\s*=\s*(?!<)[A-Za-z0-9._@-]+"
+            # An e-mail address outside the RFC-2606 example domains. The leading lookbehind
+            # keeps SSH/VCS URLs out (`git+ssh://git@github.com/...` is a transport, not an
+            # identity) and stops a match starting mid-token.
+            r"|(?<![/\w.+-])[A-Za-z0-9._%+-]+@"
+            r"(?!(?:[A-Za-z0-9-]+\.)*example(?:\.[A-Za-z]{2,})?\b)"
+            r"[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+        ),
+    ),
+    (
+        "error",
+        "private_repo_path",
+        "指向私有仓的【路径】—— 泄露私有仓名与目录结构，且在公开仓里是 dangling 链接。"
+        "方向纪律：私有→公开 可以，公开→私有【路径】禁止，改成不带路径的泛指",
+        re.compile(
+            r"trustworthy-ai-platform"  # the private repo by name
+            r"|\.\./\.\./[A-Za-z0-9_-]*platform"  # a relative climb into it
+            r"|docs/collab/"  # its cross-repo doc directory
+        ),
+    ),
+    (
         "warn",
         "private_doc_ref",
         "指向私有文档的裸交叉引用 —— 只暴露「有这么份文档」，不含其内容;可接受但要看得见",
-        re.compile(r"PLATFORM_ASK[A-Z_]*"),
+        re.compile(
+            r"PLATFORM_ASK[A-Z_]*"
+            r"|CORE_STANDALONE_TARGET[A-Z_]*"
+            r"|CORE_INJECTION_NUMBER[A-Z_]*"
+            r"|PLATFORM_CORE_COLLAB[A-Z_]*"
+            r"|CORE_RESTRICTED_CORPUS[A-Z_]*"
+            r"|P3C_PRIVATE[A-Z_]*"
+            r"|A4_audit_index_port"
+        ),
     ),
 ]
 

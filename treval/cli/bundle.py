@@ -16,7 +16,7 @@ from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = 3  # EV-FWD: measurements gain a derived `availability` (aligned with report bundle v3)
+SCHEMA_VERSION = 4  # EV-PAIR: bundle gains model/temperature/target_url_host/traffic_tier + per-measurement corpus_sha
 _VALID_INTEGRITY = {s.value for s in IntegrityStatus}
 
 
@@ -223,6 +223,11 @@ def build_bundle(
     pinned: bool = False,
     provenance: dict[str, Any] | None = None,
     target_kind: str = "gateway",
+    model: str | None = None,
+    temperature: float | None = None,
+    target_url_host: str | None = None,
+    corpus_sha: dict[str, str] | None = None,
+    traffic_tier: str = "b_assumed_mix",
 ) -> dict[str, Any]:
     """The bundle `collect` writes: measurements[] + run metadata (no graded `report`;
     `report` produces that). Reuses the EV-7 serializer for the measurement shape.
@@ -244,6 +249,17 @@ def build_bundle(
     from treval.rubric.serialize import derive_evidence_basis, serialize_measurement
 
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
+    sha_map = corpus_sha or {}
+    serialized = []
+    for m in ordered:
+        entry = serialize_measurement(
+            m, target_kind=target_kind, evidence_requirements=EVIDENCE_REQUIREMENTS
+        )
+        # EV-PAIR §3.1 (P3): per-measurement corpus_sha — the pairing gate compares it PER
+        # indicator, so "only one indicator changed corpus" cannot pass unnoticed.
+        if m.indicator_id in sha_map:
+            entry["corpus_sha"] = sha_map[m.indicator_id]
+        serialized.append(entry)
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "target_kind": target_kind,
@@ -252,14 +268,16 @@ def build_bundle(
         "window": list(window),
         "mode": mode,
         "pinned": pinned,
-        "measurements": [
-            serialize_measurement(
-                m,
-                target_kind=target_kind,
-                evidence_requirements=EVIDENCE_REQUIREMENTS,
-            )
-            for m in ordered
-        ],
+        # EV-PAIR §2 — "决定这次结果的配置" travels WITH the numbers (the EV-PIN discipline: what
+        # determined the value is recorded next to it). `target_url_host` is HOST:PORT only —
+        # 🔴 never the full URL, never the api_key. `traffic_tier` is the §0.1 flow口径 (collect
+        # drives curated corpora ⇒ representative-mix (b)); the pairing gate requires both sides
+        # to declare it and match, so an (a) real-traffic run can't be silently paired with (b).
+        "model": model,
+        "temperature": temperature,
+        "target_url_host": target_url_host,
+        "traffic_tier": traffic_tier,
+        "measurements": serialized,
     }
     if provenance is not None:
         doc["provenance"] = provenance

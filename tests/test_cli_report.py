@@ -14,7 +14,7 @@ _POSTURE_SAMPLE = _ROOT / "docs" / "posture.sample.yaml"
 
 def _bundle_doc(measurements, *, tenant_id="__eval__", window=(1000, 2000)):
     return {
-        "schema_version": 3,  # EV-FWD: current collect-bundle version
+        "schema_version": 4,  # EV-PAIR: current collect-bundle version
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": "active",

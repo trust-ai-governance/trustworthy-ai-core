@@ -1,6 +1,6 @@
 # EV-AE6 — Detector quality: false-positive rate + two-sided injection-detection acceptance
 
-> Dev brief. Self-contained: implement from this file + `PLATFORM_ASK_INJECTION_DETECTION.md`
+> Dev brief. Self-contained: implement from this file + 上游注入检测对接文档（私有）
 > §7.1 + the **EV-AE0–EV-AE3** harness in `treval/active_eval/`. **Prereq: EV-AE0 merged**
 > (the LLM01 recall path already exists). **Priority: ahead of EV-AE4 (LLM05)** — this
 > unblocks Platform **P2-a (Tier-3 injection ruleset)** by making its acceptance

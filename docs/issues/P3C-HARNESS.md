@@ -92,7 +92,7 @@
 
 ### C4 — eval_report 标的/模式标注（零新增）
 
-跟 [CORE_STANDALONE_TARGET_ABSTRACTION](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md) §5.2 走即可，本 issue 不重复定义。**本次 check-in 无 C4 代码。**
+跟 上游标的抽象设计（私有，不公开） §5.2 走即可，本 issue 不重复定义。**本次 check-in 无 C4 代码。**
 
 ## 2. 依赖（Platform 架构师列了三条，核对后补两条 + 消掉一条）
 
@@ -123,7 +123,7 @@ G4b"语料与判官不得同源"挡的是判官，**挡不住这个**。
 ## 2.2 第三方候选的技术形态（中性摘要）
 
 > 🔒 **具名厂商评估、逐条缺陷核实与商务判断已搬去私有侧**
-> （`docs/collab/P3C_PRIVATE_ANNEX.md` §1）。**公开侧只保留影响 Core 实现的技术事实。**
+> （私有侧文档 §1）。**公开侧只保留影响 Core 实现的技术事实。**
 > 理由见 [DISCLOSURE_POLICY](../DISCLOSURE_POLICY.md)：在公开仓点名陈述厂商产品缺陷，
 > 既是商业诋毁面，也把采购底牌亮给对方。
 
@@ -382,7 +382,7 @@ class OllamaLogprobJudge (实现 Target Protocol):
 - ×6 对**确定性**结论足够（确定性是二元的:位级一致或不是;饱和 + 非饱和都 6/6 一致即坐实）。
 
 **R1:**
-- 🔴 **`evidence_basis: self_reported` 是硬绑定,不是标签** —— 这一档**绝不能借用"可验证审计 / WAL 指纹"话术**（同 [CORE_STANDALONE](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md) §5 的 N/A 纪律）;报告里必须显形为"**厂商自报 · 最弱档 · 不可复算**"。
+- 🔴 **`evidence_basis: self_reported` 是硬绑定,不是标签** —— 这一档**绝不能借用"可验证审计 / WAL 指纹"话术**（同 CORE_STANDALONE（上游私有文档，不公开） §5 的 N/A 纪律）;报告里必须显形为"**厂商自报 · 最弱档 · 不可复算**"。
 - **DashScope 独立比较项（§2.4.6）不吃这条** —— 它是**生成端点当判官**（走 logprob,同自建那套）,不是 moderation 分类器,`target_kind` **不是** `moderation_api`。⇒ 即便两家厂商全 washout,§2.4.6 的"至少一个第三方独立比较项"仍由 DashScope 满足,**R1 的价值不依赖厂商是否入场**。
 - **schema 纪律（§8.7）**：两处 schema 同批改 + 升 `schema_version` + 同步 golden fixtures/drift-guard + 对账单**单独一次提交**,不折进代码提交。
 - 🔴 **耦合警告（2026-07-21,对着代码）：`target_kind`/`evidence_basis` 在 Core 一处都没有**

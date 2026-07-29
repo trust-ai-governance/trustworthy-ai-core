@@ -1,6 +1,6 @@
 # EV-AE7 — Adversarial variant generator: Tier-1 rule-robustness + Tier-2 seed
 
-> Dev brief. Self-contained: implement from this file + `PLATFORM_ASK_INJECTION_DETECTION.md`
+> Dev brief. Self-contained: implement from this file + 上游注入检测对接文档（私有）
 > §7.2 + the **EV-AE0–EV-AE6** harness in `treval/active_eval/`. **Prereq: P2-a Tier-1
 > injection ruleset MERGED** (it is — rule robustness is only measurable once a rule
 > exists). Cross-repo origin: Platform's lead suggestion (variant generator) + Core's

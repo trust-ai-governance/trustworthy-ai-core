@@ -1,7 +1,7 @@
 # Postgres Read Contract — what `treval`'s EV-2 reader needs from Platform's audit index
 
 Cross-repo contract, authored by **core** (consumer), implemented by **platform**
-(the closed gateway writes the index, design `A4_audit_index_port.md`). Core builds
+(the closed gateway writes the index, design 上游审计索引端口设计（私有）). Core builds
 EV-2 against this; real-data acceptance waits on platform exposing it.
 
 **Status: RECONCILED + ACKNOWLEDGED — A4 satisfies this contract; Platform formally
@@ -10,7 +10,7 @@ on it and switched to `pg8000` (BSD) — see §0 / §7. §0 records the verdict;
 the consumer view (mostly clarifications A4 already answers).
 
 Pairs with: `docs/EVAL_ARCHITECTURE(WIP).md` §4a, `docs/EVAL_ISSUES(WIP).md` EV-2,
-and Platform's `A4_audit_index_port.md`.
+and Platform's 上游审计索引端口设计（私有）.
 
 ---
 
@@ -125,7 +125,7 @@ flagged that A4 §6 selected **`psycopg` v3 (LGPL-3.0)** — non-compliant for p
 too, and the license CI gate would have failed on it.
 
 **Platform acted on the flag and swapped the driver.** A4 now uses **`pg8000` (BSD)**
-— verified live at `pg8000 1.31.5`; `postgres_sink.py` and `A4_audit_index_port.md`
+— verified live at `pg8000 1.31.5`; `postgres_sink.py` and 上游审计索引端口设计（私有）
 both record the rejection in-line ("psycopg v3 is rejected: LGPL-3.0, banned by §1.2
 — caught in core's POSTGRES_READ_CONTRACT.md").
 

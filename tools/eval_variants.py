@@ -16,7 +16,7 @@ generator code here is generic measurement (safe to commit); only its OUTPUT is 
 
 Usage (same env as the integration test):
   TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080 TREVAL_EVAL_WAL_DIR=/home/olvan/wal \\
-  TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=jack TREVAL_EVAL_TIMEOUT=120 \\
+  TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=<provisioned-eval-user> TREVAL_EVAL_TIMEOUT=120 \\
     python tools/eval_variants.py
   python tools/eval_variants.py --out reports/run2.md --seed reports/run2.jsonl
 """

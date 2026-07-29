@@ -20,7 +20,9 @@ renders insufficient_data, honest missing data, not a crash).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from treval.active_eval import (
     load_corpus,
     run_corpus,
 )
+from treval.active_eval.corpus import CorpusCase
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
     BoundaryBreachRate,
@@ -184,6 +187,35 @@ def collect_passive(
     return scan_passive(wal_dir, tenant, warnings=warnings).measurements
 
 
+def corpus_fingerprint(cases: Iterable[CorpusCase]) -> str:
+    """A sha256 over the case SET that actually ran (EV-PAIR §3.1 / P3) — the proof that two runs
+    used the SAME corpus. Canonical per case: id + normalized content (input + system_prompt +
+    wire messages); sorted by id so probe ORDER is irrelevant, but a changed case_id or one byte of
+    content moves it. Per-INDICATOR (each producer runs its own corpus), so the pairing gate can
+    reject a single indicator whose corpus differs without failing the rest."""
+    h = hashlib.sha256()
+    for c in sorted(cases, key=lambda c: c.id):
+        h.update(c.id.encode("utf-8"))
+        h.update(b"\0")
+        h.update((c.input or "").encode("utf-8"))
+        h.update(b"\0")
+        h.update((c.system_prompt or "").encode("utf-8"))
+        h.update(b"\0")
+        for msg in c.messages or ():
+            h.update(msg.role.encode("utf-8"))
+            h.update(b"\0")
+            if isinstance(msg.content, str):
+                h.update(msg.content.encode("utf-8"))
+            else:
+                for part in msg.content:
+                    h.update(part.type.encode("utf-8"))
+                    h.update(b"\0")
+                    h.update(part.text.encode("utf-8"))
+            h.update(b"\0")
+        h.update(b"\x01")  # case boundary
+    return "sha256:" + h.hexdigest()
+
+
 @dataclass(frozen=True)
 class ActiveScan:
     """The active-collection result: the aggregate measurements PLUS run-level probe stats.
@@ -191,12 +223,16 @@ class ActiveScan:
     `probe_count`/`error_count` are the totals across ALL producers' probes; `first_error` is the
     first probe error seen (verbatim). They power the EV-PAIR-A2 whole-run guard: when every probe
     across the whole run errored, `collect` must SHOUT at the top (not bury `N error(s) excluded`
-    in each indicator's notes) and exit non-zero — a wasted run is not a success."""
+    in each indicator's notes) and exit non-zero — a wasted run is not a success.
+
+    `corpus_sha` maps indicator_id → the fingerprint of the corpus that producer ran (EV-PAIR §2/§3.1),
+    so the delivered bundle records WHICH corpus backed each number."""
 
     measurements: tuple[Measurement, ...]
     probe_count: int
     error_count: int
     first_error: str | None
+    corpus_sha: dict[str, str]
 
 
 def collect_measurements(
@@ -213,9 +249,11 @@ def collect_measurements(
     probe_count = 0
     error_count = 0
     first_error: str | None = None
+    corpus_sha: dict[str, str] = {}
     for prod in CURATION:
         try:
-            corpus = load_corpus(corpus_root / prod.corpus_subdir)
+            corpus = list(load_corpus(corpus_root / prod.corpus_subdir))
+            corpus_sha[prod.indicator_id] = corpus_fingerprint(corpus)
             results = run_corpus(corpus, target)  # type: ignore[arg-type]
             for pr in results:
                 probe_count += 1
@@ -229,7 +267,9 @@ def collect_measurements(
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
             )
-    return ActiveScan(tuple(measurements), probe_count, error_count, first_error)
+    return ActiveScan(
+        tuple(measurements), probe_count, error_count, first_error, corpus_sha
+    )
 
 
 def _resolve_target(args: argparse.Namespace) -> tuple[str, str] | None:
@@ -364,12 +404,22 @@ def run_collect(args: argparse.Namespace) -> int:
             "snapshot — do NOT cite these numbers in external documents (EV-PIN §1.4)"
         )
 
+    # EV-PAIR §2: host:port only — 🔴 never the full URL (path/query), never the api_key.
+    from urllib.parse import urlparse
+
+    parsed = urlparse(target_url)
+    target_url_host = parsed.netloc or target_url
+
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
         window=window,
         mode="active+passive" if passive else "active",
         target_kind=target_kind,  # EV-FWD/R1: records WHAT was evaluated (drives availability)
+        model=model,  # EV-PAIR §2: the config that determined the numbers, recorded WITH them
+        temperature=0.0,  # pinned for the statistical verticals — recorded, not assumed
+        target_url_host=target_url_host,
+        corpus_sha=active.corpus_sha,
         pinned=pinned,
         provenance=build_provenance(
             wal_dir=args.wal,
