@@ -4,7 +4,7 @@
 "active-eval is not time-windowed"），且 collect **没有任何窗口/段参数**。于是任何从这份报告引到对外文档的
 数字，都是对一个**移动窗口**（`__eval__` 的"0-0 最新"）的快照 —— WAL 尾部一前移，同一次引用就**不可复现**。
 这已经现场咬人：白皮书 §5.4 的 `chain_integrity 100% n=463` 就是从移动窗口抓的快照，后来窗口前移读到 n=404，
-**463 再也复现不出来**（见 [CORE_INJECTION_NUMBER_PROVENANCE](../../trustworthy-ai-platform/docs/collab/CORE_INJECTION_NUMBER_PROVENANCE.md)）。
+**463 再也复现不出来**（见 上游数字对账 artifact（私有，不公开））。
 更糟：我手上"替换用"的 n=404 bundle **窗口也是 `[0,0]`** —— 换过去只是把病从 463 搬到 404。
 
 **Value：** 给 Core 一种**冻结一次 run** 的能力：run 绑定**明确窗口 + WAL 段范围 + 日期 + 语料/registry sha**，

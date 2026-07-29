@@ -66,7 +66,7 @@ license CI 扩展到 `treval`。③ `satisfied_when` 是**锁定迷你文法**
 **EV-AE0 — 已实现 + 实测验证（done）**：语料格式 + `Target`/`GatewayTarget` + runner +
 `InjectionCatchRate`（网关拦截，确定性）+ `InjectionSuccessRate`（输出成功，statistical，
 startswith canary 保守下界）；28 例 LLM01 语料（8 例带 marker）；brief 见 `docs/issues/EV-AE0.md`。
-**实测**（live gateway，详见 `MATURITY_ROW_AUDIT.md` §3 + `PLATFORM_ASK_INJECTION_DETECTION.md`）：
+**实测**（live gateway，详见 `MATURITY_ROW_AUDIT.md` §3 + 上游注入检测对接文档（私有））：
 网关注入拦截 ≈ 0（4% 是 pii-block 误命中邮箱，非注入检测）；DeepSeek 输出成功 0/8。
 顺带修复 `_wal_format.list_segments` 支持归档段命名 `START-END-TS.wal`（S3 archive 直读）。
 
@@ -117,7 +117,7 @@ D2 复用 `secret_canary`（仅改 docstring，不改名不破坏）。未来若
 （策略量，env 可配，默认~2000）、D3 token_usage 来源（响应体+WAL校验 vs 纯 WAL）、D4 语料 success_when
 （复用 blocked_or_flagged）。速率/配额限制不在此（per-probe 难建模 burst）。Corpus 适配器为后续。
 
-**检测器质量轨（Platform P2-a 注入规则触发，cross-repo）**——见 `PLATFORM_ASK_INJECTION_DETECTION.md` §7：
+**检测器质量轨（Platform P2-a 注入规则触发，cross-repo）**——见 上游注入检测对接文档（私有） §7：
 - **EV-AE6（双向验收：召回 + 误报）— 已合并**：benign 语料（20 例，含硬负例）+ `allowed` token +
   `false_positive_rate` 指标（确定性），集成测试两侧都断言（召回 ≥τ_recall 且 FPR ≤τ_fpr，已确认
   τ_recall≥0.80/τ_fpr≤0.05）。**实测验证 P2-a Tier-1：召回 4%→43%（39% 纯注入），FPR 0%——精确不过宽。**
@@ -661,7 +661,7 @@ stub 至标签器落地）。
 
 ### PROV — 检测型数字 provenance 对账（🔴 排 EV-FWD 前 · **协作:Core 起头 + Platform 补齐** · 依赖 EV-PIN）
 
-- **设计定稿**:[docs/issues/PROV.md](issues/PROV.md) · **对账 artifact**:[CORE_INJECTION_NUMBER_PROVENANCE.md](../../trustworthy-ai-platform/docs/collab/CORE_INJECTION_NUMBER_PROVENANCE.md)(附可转发的 Platform 待补清单 §6)
+- **设计定稿**:[docs/issues/PROV.md](issues/PROV.md) · **对账 artifact**:上游数字对账 artifact（私有，不公开）(附可转发的 Platform 待补清单 §6)
 - **根因(两位架构师收敛)**:🔴 对外数字取自 LIVE 移动窗口而非 pinned run → 不可复现。**463 与 404 同病**(我手上的 404 bundle 窗口也是 `[0,0]`)。故依赖 EV-PIN。
 - **裁决**:① 作废 n=463(不可复现,pin 不了);② **Core 用 EV-PIN 冻结唯一规范 run**(关键约束:不能又是"404 最新"移动快照);③ **Platform 对 chain_integrity 只做白皮书 463→规范值换字**(文档编辑,非计算 —— 原让 Platform"钉 463"是派错了活,已更正);④ Platform 真正的活 = 注入两版规则集号;⑤ demo 520 标合成(Core)。
 - **硬门(9.2-B)**:白皮书 §5.2/§5.4 在本对账落定前**不分发**。
@@ -705,7 +705,7 @@ stub 至标签器落地）。
 ### EV-FWD — standalone 标的抽象（OpenAITarget + 能力声明 + 报告契约）
 
 - **从**:core `treval/active_eval/`(新 `OpenAITarget`)+ `treval/rubric`(能力声明→N/A 叠加)
-- **设计定稿**:[CORE_STANDALONE_TARGET_ABSTRACTION.md §1–6](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md)
+- **设计定稿**:上游标的抽象设计（私有，不公开）
 - **范围**:
   1. `OpenAITarget` 实现已有 `Target` Protocol(`target.py:93`):裸 OpenAI 信封 `/v1/chat/completions` + 解析响应 + 抽输出;覆盖私有端点(自建 base_url / 自定义 auth / 自签 TLS / DashScope·千帆)。**不是换 base_url**。
   2. **指标能力声明** `evidence_requirement: output_only | needs_decision | needs_wal` —— 🔴 **正确性闸门**:决策/WAL 指标在**跑之前**按 (mode×能力) 排除(`checks.py:41` "无决策→判未拦截→0%",不排除会造出诬告性 0%),报告标 `n/a_needs_gateway`。

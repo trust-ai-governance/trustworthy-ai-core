@@ -8,7 +8,7 @@
 最弱一档（第三方自报）必须显形为"**不可复算**"，不能借用"可验证审计"话术 —— 这是 measured>attested
 叙事在证据分层上的落地。
 
-> Dev brief. **这是实现单,不是设计** —— 设计已在上游 §5.2 ratify（[CORE_STANDALONE_TARGET_ABSTRACTION](../../trustworthy-ai-platform/docs/collab/CORE_STANDALONE_TARGET_ABSTRACTION.md) §5.2，私有）。
+> Dev brief. **这是实现单,不是设计** —— 设计已在上游 §5.2 ratify（上游标的抽象设计（私有，不公开） §5.2，私有）。
 > **只落 schema，不落运行时**（`OpenAITarget` / harness 自抓打分归 EV-FWD 排期）。
 > **规模**：小 —— 序列化字段 + schema + fixtures + 一次升版。**§8.7 单独提交。**
 

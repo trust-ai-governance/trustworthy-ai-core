@@ -11,7 +11,7 @@
 
 > Dev brief. **前置**：[EV-PIN](EV-PIN.md)（冻结 run 的能力 —— 没有它，规范 run 又是移动快照）。
 > **协作**：Core 起头（度量侧 + 冻结规范 run）+ Platform 补齐（规则集/网关配置版本号 + 白皮书换字）。
-> **对账 artifact**：[CORE_INJECTION_NUMBER_PROVENANCE](../../trustworthy-ai-platform/docs/collab/CORE_INJECTION_NUMBER_PROVENANCE.md)。
+> **对账 artifact**：上游数字对账 artifact（私有，不公开）。
 > **规模**：小（Core）/ 跨仓闭环。
 
 ---
@@ -116,7 +116,7 @@
 | `injection_catch_rate` | **89.29%**(25/28) | 28 | `acme` | §5.2 保持 89%，补两版规则集号后解禁 |
 
 > **完整 9 行映射表以对账 artifact
-> [CORE_INJECTION_NUMBER_PROVENANCE §5.0](../../trustworthy-ai-platform/docs/collab/CORE_INJECTION_NUMBER_PROVENANCE.md) 为唯一权威，
+> 上游数字对账 artifact（私有，不公开） 为唯一权威，
 > 本文不复制** —— 同一张表放两处必然漂移，那恰是本 issue 要消灭的失败模式。
 
 **🔴 404 与 463 一并作废。** 404 从来不是"待 pin 的候选"，它和 463 同病（`window=[0,0]` 移动快照），

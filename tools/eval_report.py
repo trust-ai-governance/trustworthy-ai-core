@@ -11,7 +11,7 @@ and must NOT be committed to this (public) repo. This tool is generic measuremen
 
 Usage (same env as the integration test):
   TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080 TREVAL_EVAL_WAL_DIR=/home/olvan/wal \\
-  TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=jack TREVAL_EVAL_TIMEOUT=120 \\
+  TREVAL_EVAL_TENANT=__eval__ TREVAL_EVAL_USER=<provisioned-eval-user> TREVAL_EVAL_TIMEOUT=120 \\
   TREVAL_EVAL_CONTENT_BUDGET=2000 TREVAL_EVAL_LLM10_TIMEOUT=60 \\
   TREVAL_EVAL_GOVERNANCE_TIMEOUT=20 \\
     python tools/eval_report.py            # → reports/eval_report.md
@@ -22,7 +22,7 @@ Environment (GATE-LASTMILE P7):
   TREVAL_EVAL_WAL_DIR      eval WAL bind-mount — REQUIRED for reproducible (WAL-anchored)
                            numbers; unset ⇒ the report declares itself non-reproducible (P3).
   TREVAL_EVAL_TENANT       eval tenant (default __eval__)
-  TREVAL_EVAL_USER         🔴 use a DEDICATED, PROVISIONED eval identity (e.g. `jack`). An
+  TREVAL_EVAL_USER         🔴 use a DEDICATED, PROVISIONED eval identity (a deployment-specific id — NOT hardcoded here). An
                            unregistered user makes every probe unmeasurable — and unless the
                            P4 guard catches it, that silently reads as a fake 0% (this bit us:
                            C2-2). The default `eval-user` is often NOT provisioned.

@@ -22,7 +22,7 @@ Usage:
       python tools/diagnostics/response_block_repro.py <corpus_subdir> <case_id> [N]
 
 Example (the execute.015 FP):
-    TREVAL_EVAL_USER_ID=jack \\
+    TREVAL_EVAL_USER_ID=<provisioned-eval-user> \\
       python tools/diagnostics/response_block_repro.py llm01_benign benign.hard.execute.015 30
 """
 

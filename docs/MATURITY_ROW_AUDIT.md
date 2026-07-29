@@ -337,7 +337,7 @@ scope engine #5a landing.)
 > verified WAL shows, plus a negative control) — the LLM07 run passed both (0 missed,
 > 0% negative), so its 79% is trustworthy by construction. This is a **Platform gap**
 > (no injection detection AND no output DLP), tracked in
-> `PLATFORM_ASK_INJECTION_DETECTION.md` (§7 records the closed loop). Honest current
+> 上游注入检测对接文档（私有） (§7 records the closed loop). Honest current
 > state: **tool-scope/least-privilege (`sec.l3.oauth_scope`) measured-and-passing (0%
 > violation, chain-verified); injection detection
 > (`rob.l2.injection_rule_detection`/`sec.l3.guardrail_blocking`) PARTIALLY met and

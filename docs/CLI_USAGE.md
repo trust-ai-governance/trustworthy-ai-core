@@ -28,7 +28,7 @@ the grade/render logic, and support can re-render a customer's bundle **offline*
 ```bash
 export TREVAL_EVAL_GATEWAY_URL=http://127.0.0.1:8080
 export TREVAL_EVAL_WAL_DIR=/home/olvan/wal
-export TREVAL_EVAL_USER=jack          # MUST be a PROVISIONED user (see ⚠ below)
+export TREVAL_EVAL_USER=<provisioned-eval-user>          # MUST be a PROVISIONED user (see ⚠ below)
 python -m treval.cli run --posture docs/posture.sample.yaml --format human
 ```
 
