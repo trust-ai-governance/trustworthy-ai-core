@@ -258,6 +258,14 @@ def _cmd_pair(args: argparse.Namespace) -> int:
     return run_pair(args)
 
 
+def _cmd_coverage(args: argparse.Namespace) -> int:
+    # EV-COVERAGE §4.3-B: pure corpus read → the four-axis vector. Lazy import keeps the harness out
+    # of the `report` path, same as the other operator commands.
+    from treval.cli.coverage_report import run_coverage
+
+    return run_coverage(args)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from treval.cli.collect import run_collect
 
@@ -305,6 +313,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default=None, help="write the delta JSON here (else stdout)"
     )
     pair.set_defaults(func=_cmd_pair)
+
+    # EV-COVERAGE §4.3-B: `coverage --corpus DIR` — the four-axis vector (①②③④) framed with corpus_sha.
+    cov = sub.add_parser(
+        "coverage",
+        help="corpus coverage vector (category / technique / observable / hold-out; EV-COVERAGE)",
+    )
+    cov.add_argument(
+        "--corpus", default=None, help="corpus root (default: repo corpus/)"
+    )
+    cov.add_argument("--format", choices=("json", "human"), default="human")
+    cov.add_argument("--out", default=None, help="write here (else stdout)")
+    cov.set_defaults(func=_cmd_coverage)
 
     for name, help_text in (
         ("collect", "drive the live gateway → Measurement bundle (operator)"),

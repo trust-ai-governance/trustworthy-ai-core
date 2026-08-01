@@ -837,3 +837,78 @@ def test_messages_content_wrong_type_raises(tmp_path):
 def test_messages_empty_content_list_raises(tmp_path):
     with pytest.raises(CorpusError, match="content must be a non-empty string"):
         load_corpus(_write_case(tmp_path, _msg_doc([{"role": "user", "content": []}])))
+
+
+# --------------------------------------------------------------------------- #
+# EV-COVERAGE E0 — attack_technique: an OPTIONAL field, orthogonal to attack_class.
+# --------------------------------------------------------------------------- #
+
+_INJECTION_DIR = (
+    Path(__file__).resolve().parents[1] / "corpus" / "llm01_prompt_injection"
+)
+
+
+def test_attack_technique_optional_and_defaults_empty(tmp_path):
+    """Like content_class: absent ⇒ "" (i3_run synthetic cases + pre-E0 fixtures still load)."""
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.attack_technique == ""
+
+
+def test_attack_technique_loads_when_set(tmp_path):
+    (case,) = load_corpus(
+        _write_case(tmp_path, _valid_doc(attack_technique="delimiter_break"))
+    )
+    assert case.attack_technique == "delimiter_break"
+
+
+def test_attack_technique_empty_string_raises(tmp_path):
+    with pytest.raises(CorpusError, match="attack_technique, if set"):
+        load_corpus(_write_case(tmp_path, _valid_doc(attack_technique="")))
+
+
+def test_shipped_attack_cases_all_carry_a_technique():
+    """§4.2.5: every ATTACK case (non-benign) has attack_technique; benign cases don't."""
+    for d in sorted((Path(__file__).resolve().parents[1] / "corpus").iterdir()):
+        if not d.is_dir():
+            continue
+        for c in load_corpus(d):
+            if c.attack_class.startswith("benign"):
+                assert c.attack_technique == "", f"{c.id} is benign but has a technique"
+            else:
+                assert c.attack_technique, f"{c.id} is an attack with no technique"
+
+
+def test_llm01_injection_has_28_distinct_techniques():
+    """§0.2: the 28 cases are 28 distinct techniques (1:1, like llm06/llm07) — the whole point
+    of E0 is that this coverage was already there, just undeclared."""
+    cases = load_corpus(_INJECTION_DIR)
+    techniques = {c.attack_technique for c in cases}
+    assert len(cases) == 28 and len(techniques) == 28
+
+
+def test_attack_class_is_unchanged_by_e0():
+    """🔴 the E0 red-line (§4.2.1): attack_class must be byte-for-byte what it was — its three
+    consumers (attribution rate table / benign label / regression) depend on it. llm01 stays the
+    coarse 2-value vector even though technique is now fine-grained."""
+    classes = {c.attack_class for c in load_corpus(_INJECTION_DIR)}
+    assert classes == {"direct_prompt_injection", "indirect_prompt_injection"}
+
+
+# --------------------------------------------------------------------------- #
+# EV-COVERAGE §4.3-D — the hold-out flag (axis ④): optional bool, EXPLICIT not seeded
+# --------------------------------------------------------------------------- #
+
+
+def test_holdout_is_optional_and_defaults_false(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.holdout is False
+
+
+def test_holdout_true_loads(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc(holdout=True)))
+    assert case.holdout is True
+
+
+def test_holdout_non_bool_raises(tmp_path):
+    with pytest.raises(CorpusError, match="holdout"):
+        load_corpus(_write_case(tmp_path, _valid_doc(holdout="yes")))

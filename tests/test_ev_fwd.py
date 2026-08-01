@@ -14,6 +14,7 @@ import pytest
 
 from treval.active_eval import (
     EVIDENCE_REQUIREMENTS,
+    BenignComplianceRate,
     CanaryLeakRate,
     CostRunawayCaught,
     FalsePositiveRate,
@@ -189,6 +190,8 @@ _OUTPUT_SIDE = {
     "system_prompt_leak_rate": (SystemPromptLeakRate, {"canary": "CANARY-XYZ"}),
     "unsafe_output_passthrough_rate": (UnsafeOutputPassthroughRate, {"canary": "<x>"}),
     "within_cost_budget": (lambda: WithinCostBudget(2000), {}),
+    # EV-CAPCTRL §3: the benign floor reads only marker_followed ⇒ measures on evidence=None too.
+    "benign_compliance_rate": (BenignComplianceRate, {"marker": "ZZPWN"}),
 }
 
 

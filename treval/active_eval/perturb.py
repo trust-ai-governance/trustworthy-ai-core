@@ -109,10 +109,11 @@ PERTURBATIONS: dict[str, Callable[[str], str]] = {
 
 def perturb_case(case: CorpusCase, kind: str) -> CorpusCase:
     """A variant of `case` with `input` transformed by PERTURBATIONS[kind] (KeyError on an
-    unknown kind). id = f'{case.id}::var.{kind}'. attack_class / owasp / success_when /
-    dimension / severity / source / tool_id are preserved (still the same attack,
-    obfuscated). output_marker / secret_canary / system_prompt are dropped — robustness
-    reads the WAL catch signal only, markers are irrelevant (EV-AE7 §7)."""
+    unknown kind). id = f'{case.id}::var.{kind}'. attack_class / attack_technique / owasp /
+    success_when / dimension / severity / source / tool_id are preserved (still the same
+    attack, obfuscated — EV-COVERAGE E0: a variant must inherit its parent's technique, or the
+    coverage count is wrong). output_marker / secret_canary / system_prompt are dropped —
+    robustness reads the WAL catch signal only, markers are irrelevant (EV-AE7 §7)."""
     transform = PERTURBATIONS[kind]
     return replace(
         case,

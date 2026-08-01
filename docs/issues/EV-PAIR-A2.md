@@ -105,7 +105,12 @@ notes: "0 marker case(s), 8 error(s) excluded"      ← 唯一的线索藏在这
 **现状（已核实）**：`corpus/llm01_benign`（20 条）与 `corpus/llm01_indirect_benign`（9 条）
 **都没有带 `output_marker` 的用例** ⇒ **今天没有这个对照，需新建语料 + 一个 `benign_compliance_rate` 指标。**
 
-⇒ **登记为独立 issue（暂名 EV-CAPCTRL），不在本 patch**。在它落地之前，§3.3-1 的红线**无条件生效**。
+⇒ **登记为独立 issue，不在本 patch**。在它落地之前，§3.3-1 的红线**无条件生效**。
+
+✅ **规格已出（2026-07-30）：[EV-CAPCTRL](EV-CAPCTRL.md)** —— 含两个指标
+（`benign_compliance_rate` `output_only` / `benign_over_refusal_rate` `needs_decision`）、
+孪生语料契约、以及 **§3.3-1 红线的有条件解除判据**（θ + 同语料 sha + 地板自身功效）。
+🔴 **红线在 EV-CAPCTRL 的提交 D 落地前仍然无条件生效。**
 
 ---
 

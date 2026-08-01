@@ -117,6 +117,20 @@ jobs:
       - name: Disclosure gate (public-repo docs)
         run: python tools/check_doc_disclosure.py
 
+      # Raising injection n without raising COVERAGE (the same technique written N times) makes the
+      # number less trustworthy, not more. This gate refuses it (EV-COVERAGE §2.1). The structural
+      # rules (1/1b/3) always run; the new-coverage rule (2) compares added cases against a baseline
+      # — pass --base origin/main in branch CI to police a whole branch (defaults to HEAD).
+      - name: Corpus coverage gate
+        if: steps.detect.outputs.has_py == 'true'
+        env:
+          # 🔴 REQUIRED: this gate imports `treval` (it reads CorpusCase); CI installs only
+          # requirements, never `pip install -e .`, so without PYTHONPATH it dies at IMPORT — a
+          # gate that reds the build having evaluated NOTHING (the worst gate state: looks wired,
+          # never ran; same family as CI-1's skip-not-fail). Match the pytest step exactly.
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tools/check_corpus_coverage.py
+
       - name: Vulnerability scan with pip-audit
         run: pip-audit || true
 
