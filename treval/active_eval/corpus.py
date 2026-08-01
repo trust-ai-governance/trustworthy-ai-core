@@ -9,6 +9,8 @@ without code change (same packaging caveat as EV-6's registry/, deferred).
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,6 +102,19 @@ class CorpusCase:
     # cleanly; "" = the "unclassified" slice (surfaced separately, never folded into a
     # class total). Adding it to `_REQUIRED` would break all existing corpora.
     content_class: str = ""
+    # EV-COVERAGE E0 — the specific ATTACK TECHNIQUE (e.g. `delimiter_break`, `base64_smuggle`),
+    # ORTHOGONAL to attack_class: attack_class is the coarse VECTOR (direct/indirect/benign_*) that
+    # the attribution RATE table needs a big-n per class for; attack_technique is fine-grained
+    # (n=1 per technique is normal) and feeds coverage axis ② as a LIST/COUNT, never a rate
+    # (§4.2.1). OPTIONAL here (so i3_run synthetic cases + old fixtures still load); the corpus
+    # gate (EV-COVERAGE §4.3-C) is what requires attack cases to carry it. Empty for benign cases.
+    attack_technique: str = ""
+    # EV-COVERAGE §4.3-D — coverage axis ④. A hold-out case NEVER participates in rule tuning; it
+    # runs only in a frozen eval. EXPLICIT (never a random seed — a hold-out set's whole value is
+    # that it is PINNED, not drifting with code version). OPTIONAL (defaults False so every existing
+    # corpus loads); the coverage report splits tuning vs hold-out on it, and the tuning↔hold-out
+    # gap IS the "overfit-to-our-own-detector" measure (§3).
+    holdout: bool = False
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -251,9 +266,70 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: content_class, if set, must be a non-empty string"
             )
         fields["content_class"] = content_class
+    attack_technique = doc.get("attack_technique")  # optional (EV-COVERAGE E0)
+    if attack_technique is not None:
+        if not isinstance(attack_technique, str) or not attack_technique:
+            raise CorpusError(
+                f"{yaml_path}: attack_technique, if set, must be a non-empty string"
+            )
+        fields["attack_technique"] = attack_technique
+    holdout = doc.get("holdout")  # optional (EV-COVERAGE §4.3-D)
+    if holdout is not None:
+        if not isinstance(holdout, bool):
+            raise CorpusError(f"{yaml_path}: holdout, if set, must be a boolean")
+        fields["holdout"] = holdout
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(
             f"{yaml_path}: success_when 'not_leaked' requires a secret_canary"
         )
     return CorpusCase(**fields)
+
+
+def load_case(path: str | Path) -> CorpusCase:
+    """Load ONE case file. The corpus gate needs file-level granularity to tell a git-ADDED case from
+    the existing baseline (EV-COVERAGE §4.3-C rule 2); load_corpus/load_corpus_tree drop the paths."""
+    return _load_case(Path(path))
+
+
+def load_corpus_tree(root: str | Path) -> dict[str, tuple[CorpusCase, ...]]:
+    """Load EVERY corpus subdir under `root` → {subdir_name: cases} (EV-COVERAGE §4.3-B — the
+    coverage report walks the whole tree, not one indicator's corpus). Each immediate subdirectory
+    that holds *.yaml is one corpus; subdirs are visited in sorted order for determinism."""
+    base = Path(root)
+    if not base.is_dir():
+        raise CorpusError(f"corpus root not found: {base}")
+    out: dict[str, tuple[CorpusCase, ...]] = {}
+    for sub in sorted(base.iterdir()):
+        if sub.is_dir() and any(sub.glob("*.yaml")):
+            out[sub.name] = load_corpus(sub)
+    return out
+
+
+def corpus_fingerprint(cases: Iterable[CorpusCase]) -> str:
+    """A sha256 over the case SET that actually ran (EV-PAIR §3.1 / P3) — the proof that two runs
+    used the SAME corpus. Canonical per case: id + normalized content (input + system_prompt +
+    wire messages); sorted by id so probe ORDER is irrelevant, but a changed case_id or one byte of
+    content moves it. Per-INDICATOR (each producer runs its own corpus), so the pairing gate can
+    reject a single indicator whose corpus differs without failing the rest."""
+    h = hashlib.sha256()
+    for c in sorted(cases, key=lambda c: c.id):
+        h.update(c.id.encode("utf-8"))
+        h.update(b"\0")
+        h.update((c.input or "").encode("utf-8"))
+        h.update(b"\0")
+        h.update((c.system_prompt or "").encode("utf-8"))
+        h.update(b"\0")
+        for msg in c.messages or ():
+            h.update(msg.role.encode("utf-8"))
+            h.update(b"\0")
+            if isinstance(msg.content, str):
+                h.update(msg.content.encode("utf-8"))
+            else:
+                for part in msg.content:
+                    h.update(part.type.encode("utf-8"))
+                    h.update(b"\0")
+                    h.update(part.text.encode("utf-8"))
+            h.update(b"\0")
+        h.update(b"\x01")  # case boundary
+    return "sha256:" + h.hexdigest()
