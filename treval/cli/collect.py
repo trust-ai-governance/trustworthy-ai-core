@@ -20,15 +20,17 @@ renders insufficient_data, honest missing data, not a crash).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
-from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from treval.active_eval import (
     CorpusIndicator,
     InjectionCatchRate,
+    InjectionCatchRateObservable,
+    InjectionDeclinedByModelRate,
+    InjectionHardBlockedRate,
+    InjectionSoftFlagDeclinedRate,
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
@@ -37,7 +39,7 @@ from treval.active_eval import (
     load_corpus,
     run_corpus,
 )
-from treval.active_eval.corpus import CorpusCase
+from treval.active_eval.corpus import corpus_fingerprint
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
     BoundaryBreachRate,
@@ -62,11 +64,18 @@ EXIT_IO = 3
 
 @dataclass(frozen=True)
 class Producer:
-    """One curated active producer: bound id ← indicator over its canonical corpus."""
+    """One curated active producer: bound id ← indicator over its canonical corpus.
+
+    `subject` is the EV-0 stratification key the producer emits ("" = the aggregate row that binds
+    to a rubric objective; non-empty = a disclosure/stratified row that never binds). It MUST match
+    what `factory().measure()` stamps — two producers may share an `indicator_id` iff their
+    `subject` differs (EV-ATTRIB §3.1: injection_catch_rate has an aggregate row AND an
+    outcome_observable row)."""
 
     indicator_id: str
     factory: type[CorpusIndicator]
     corpus_subdir: str
+    subject: str = ""
 
 
 # The D3 curation map (§3). Each bound indicator_id ← exactly ONE canonical corpus (so the
@@ -85,6 +94,34 @@ class Producer:
 CURATION: tuple[Producer, ...] = (
     # decision-side
     Producer("injection_catch_rate", InjectionCatchRate, "llm01_prompt_injection"),
+    # EV-ATTRIB §3.1 — the SAME catch metric re-denominated to the marker-bearing subset, so catch
+    # and success read on ONE denominator. Shares the injection_catch_rate id, differentiated by
+    # subject="outcome_observable" (a disclosure row — never binds, never trips DuplicateIndicatorError).
+    Producer(
+        "injection_catch_rate",
+        InjectionCatchRateObservable,
+        "llm01_prompt_injection",
+        subject="outcome_observable",
+    ),
+    # EV-ATTRIB §1 (+ F1) — the other THREE (decision×output) cells: WHO earned a "0% succeeded"
+    # (governance vs the model). needs_decision ⇒ n/a on a bare model; the four cells sum to 1 (§4).
+    # 🔴 hard_blocked is the ONLY one that alone backs a governance claim; soft_flag_declined is the
+    # ambiguous 'attribution undetermined' cell, disclosed separately, never folded in.
+    Producer(
+        "injection_hard_blocked_rate",
+        InjectionHardBlockedRate,
+        "llm01_prompt_injection",
+    ),
+    Producer(
+        "injection_soft_flag_declined_rate",
+        InjectionSoftFlagDeclinedRate,
+        "llm01_prompt_injection",
+    ),
+    Producer(
+        "injection_declined_by_model_rate",
+        InjectionDeclinedByModelRate,
+        "llm01_prompt_injection",
+    ),
     Producer("tool_scope_violation_rate", ToolScopeViolationRate, "llm06_tool_scope"),
     # output-side (measurable on a bare model)
     Producer("injection_success_rate", InjectionSuccessRate, "llm01_prompt_injection"),
@@ -185,35 +222,6 @@ def collect_passive(
     """Measurements only — the pre-EV-PIN shape, kept for callers that don't need the
     window. New code should prefer `scan_passive` (it also reports the covered window)."""
     return scan_passive(wal_dir, tenant, warnings=warnings).measurements
-
-
-def corpus_fingerprint(cases: Iterable[CorpusCase]) -> str:
-    """A sha256 over the case SET that actually ran (EV-PAIR §3.1 / P3) — the proof that two runs
-    used the SAME corpus. Canonical per case: id + normalized content (input + system_prompt +
-    wire messages); sorted by id so probe ORDER is irrelevant, but a changed case_id or one byte of
-    content moves it. Per-INDICATOR (each producer runs its own corpus), so the pairing gate can
-    reject a single indicator whose corpus differs without failing the rest."""
-    h = hashlib.sha256()
-    for c in sorted(cases, key=lambda c: c.id):
-        h.update(c.id.encode("utf-8"))
-        h.update(b"\0")
-        h.update((c.input or "").encode("utf-8"))
-        h.update(b"\0")
-        h.update((c.system_prompt or "").encode("utf-8"))
-        h.update(b"\0")
-        for msg in c.messages or ():
-            h.update(msg.role.encode("utf-8"))
-            h.update(b"\0")
-            if isinstance(msg.content, str):
-                h.update(msg.content.encode("utf-8"))
-            else:
-                for part in msg.content:
-                    h.update(part.type.encode("utf-8"))
-                    h.update(b"\0")
-                    h.update(part.text.encode("utf-8"))
-            h.update(b"\0")
-        h.update(b"\x01")  # case boundary
-    return "sha256:" + h.hexdigest()
 
 
 @dataclass(frozen=True)

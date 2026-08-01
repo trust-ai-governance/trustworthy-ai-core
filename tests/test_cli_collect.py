@@ -44,16 +44,40 @@ class _FakeTarget:
         )
 
 
-def test_collect_yields_one_aggregate_per_bound_id():
+def test_collect_yields_one_measurement_per_producer():
     warnings: list[str] = []
     measurements = collect_measurements(
         _FakeTarget(), corpus_root=_CORPUS, warnings=warnings
     ).measurements
     assert warnings == []
-    ids = [m.indicator_id for m in measurements]
-    assert ids == [p.indicator_id for p in CURATION]  # one per curated producer
-    # every produced Measurement is an aggregate (binds to a rubric objective)
-    assert all(m.subject == "" for m in measurements)
+    # one Measurement per producer, in order, each with the (indicator_id, subject) it declares —
+    # so the EV-ATTRIB §3.1 disclosure row (injection_catch_rate@outcome_observable) rides alongside
+    # its aggregate without colliding.
+    assert [(m.indicator_id, m.subject) for m in measurements] == [
+        (p.indicator_id, p.subject) for p in CURATION
+    ]
+    # exactly one AGGREGATE (subject=="") per bound id — the invariant the rubric engine relies on
+    agg_ids = [m.indicator_id for m in measurements if m.subject == ""]
+    assert len(agg_ids) == len(set(agg_ids))
+
+
+def test_collect_emits_attribution_cells_and_stratified_catch():
+    """EV-ATTRIB §1/§3.1 wiring: a collect run emits the two (decision×output) cells AND the
+    stratified injection_catch_rate@outcome_observable disclosure row — so the §6 Live Test can see
+    prevented+succeeded+declined and the same-denominator catch in a real bundle."""
+    warnings: list[str] = []
+    ms = collect_measurements(
+        _FakeTarget(), corpus_root=_CORPUS, warnings=warnings
+    ).measurements
+    keyed = {(m.indicator_id, m.subject) for m in ms}
+    assert ("injection_catch_rate", "") in keyed  # aggregate coverage catch (n=all)
+    assert (
+        "injection_catch_rate",
+        "outcome_observable",
+    ) in keyed  # §3.1 disclosure row
+    assert ("injection_hard_blocked_rate", "") in keyed  # F1: the claimable cell
+    assert ("injection_soft_flag_declined_rate", "") in keyed  # F1: the ambiguous cell
+    assert ("injection_declined_by_model_rate", "") in keyed
 
 
 def test_collected_bundle_feeds_report_without_duplicate_error():
@@ -175,7 +199,13 @@ _OUTPUT_SIDE_IDS = {
     "unsafe_output_passthrough_rate",
     "system_prompt_leak_rate",
 }
-_DECISION_SIDE_IDS = {"injection_catch_rate", "tool_scope_violation_rate"}
+_DECISION_SIDE_IDS = {
+    "injection_catch_rate",
+    "injection_hard_blocked_rate",  # EV-ATTRIB §1/F1 — needs_decision
+    "injection_soft_flag_declined_rate",  # EV-ATTRIB §1/F1 — needs_decision
+    "injection_declined_by_model_rate",  # EV-ATTRIB §1 — needs_decision
+    "tool_scope_violation_rate",
+}
 
 
 class _FakeResp:
@@ -232,7 +262,11 @@ def test_raw_model_collect_produces_real_output_side_numbers(tmp_path, monkeypat
     )
     assert rc == 0
     doc = json.loads(out.read_text(encoding="utf-8"))
-    by_id = {m["indicator_id"]: m for m in doc["measurements"]}
+    # aggregate rows only — the stratified injection_catch_rate@outcome_observable disclosure row
+    # (EV-ATTRIB §3.1) shares the id and must not shadow the aggregate here (mirrors pair._by_id).
+    by_id = {
+        m["indicator_id"]: m for m in doc["measurements"] if m.get("subject", "") == ""
+    }
     # every output-side producer is present, measurable, and measured
     for iid in _OUTPUT_SIDE_IDS:
         assert iid in by_id, f"{iid} missing from the raw_model bundle"
@@ -314,9 +348,12 @@ def test_all_new_producers_are_output_only():
 
 
 def test_no_duplicate_indicator_ids_in_curation():
-    """D3 invariant preserved: one aggregate per indicator_id (else report raises)."""
-    ids = [p.indicator_id for p in CURATION]
-    assert len(ids) == len(set(ids))
+    """D3 invariant preserved: one AGGREGATE (subject=="") per indicator_id (else report raises).
+    A stratified disclosure row may SHARE an id (EV-ATTRIB §3.1) — it's keyed by (id, subject)."""
+    agg_ids = [p.indicator_id for p in CURATION if p.subject == ""]
+    assert len(agg_ids) == len(set(agg_ids)), "two aggregate producers share an id"
+    pairs = [(p.indicator_id, p.subject) for p in CURATION]
+    assert len(pairs) == len(set(pairs)), "duplicate (indicator_id, subject) producer"
 
 
 # --------------------------------------------------------------------------- #
