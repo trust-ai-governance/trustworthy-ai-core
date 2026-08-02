@@ -26,7 +26,11 @@ from treval.models import (
     PostureEvidence,
 )
 from treval.registry import ControlObjective, Dimension, DimensionRegistry
-from treval.registry.satisfied_when import compile_satisfied_when, satisfied_when_field
+from treval.registry.satisfied_when import (
+    SatisfiedWhenError,
+    compile_satisfied_when,
+    satisfied_when_field,
+)
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _LEVEL_INDEX = {level: i for i, level in enumerate(_LEVELS, start=1)}  # L1→1 … L5→5
@@ -59,6 +63,14 @@ class DuplicateIndicatorError(ValueError):
             f"aggregate Measurements share it [{detail}] — the rubric requires a curated "
             "one-per-id input (the EV-8 driver curates or namespaces; EV-7 D3)"
         )
+
+
+class RubricError(ValueError):
+    """The registry asks a Measurement for data it cannot provide — chiefly a `ci_low`/`ci_high`
+    gate (EV-CIGATE) on an indicator that carries no interval (a non-rate / deterministic-census
+    indicator). Fail LOUD, NAMING the indicator, never a silent pass/fail: a gate that silently did
+    not apply looks exactly like a gate that applied and passed — the worst outcome for a control that
+    exists to be trustworthy (§7-B)."""
 
 
 def evaluate(
@@ -182,7 +194,14 @@ def _evaluate_objective(
             return ObjectiveResult(
                 obj.id, "measured", "unverified_evidence", m.evidence_refs
             )
-        if compile_satisfied_when(ev.satisfied_when)(m):
+        try:
+            passed = compile_satisfied_when(ev.satisfied_when)(m)
+        except SatisfiedWhenError as e:
+            # 🔴 EV-CIGATE §7-B: the objective references ci_low/ci_high but this indicator has no
+            # interval. NAME the indicator and fail loud — a silently-skipped gate looks like a passed
+            # one. (This is a registry-authoring error: a CI gate was written on a non-rate indicator.)
+            raise RubricError(f"{ev.indicator_id}: {e}") from e
+        if passed:
             status = "met"
         elif satisfied_when_field(ev.satisfied_when) == "sample_size":
             # A failed `sample_size >= N` gate = NOT ENOUGH DATA yet, not a quality failure.

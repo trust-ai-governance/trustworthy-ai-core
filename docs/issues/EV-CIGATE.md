@@ -54,7 +54,37 @@
 本仓已有 Wilson 落点（[`treval/stats.py`](../../treval/stats.py)），**沿用，不新造**。
 
 **方向**：越大越好的指标比**下界**；🔴 **越小越好的指标（失败率、误报率）必须比【上界】** ——
-否则同一条判据在两类指标上一严一松。实现时按 registry 的 `higher_is_better` 分派。
+否则同一条判据在两类指标上一严一松。
+
+🔴 **方向由 registry 作者【显式写】，引擎不推断**（写 `ci_low >= X` 或 `ci_high <= X`）。
+（本条订正本单初稿的"按 `higher_is_better` 分派"——**与本仓 `target_kind` 永不推断同一条纪律：
+能被写错的东西，不要让机器猜。** 推断一旦猜反，方向错了还一路绿。）
+
+---
+
+## 1.5 🔴 哪些指标该有区间 —— 判据（2026-08-02 定，承 Platform G2 裁定）
+
+实现时曾用"主动语料抽样率就填 CI"分类，**那个判据不对**。正确的判据是**机制形态**：
+
+| 机制形态 | 例 | 适用 CI？ | 为什么 |
+|---|---|---|---|
+| **开放空间上的【部分检测器】** —— 默认放行，靠规则命中才拦；漏掉没写过的攻击是**常态**，不是 bug | `injection_catch_rate` · `false_positive_rate` · `benign_flag_rate` · 输出侧失败率 | ✅ **适用** | 语料是"攻击空间"的**样本**，我们**确实要外推**；区间量的就是这个外推的不确定性 |
+| 🔴 **默认拒绝的【全函数】** —— 未显式允许即拒；放行只发生在允许表命中 | `tool_scope_violation_rate`（scope∩ 授权） | ❌ **不适用** | 失效不是"某个比率"，是**允许表上有没有洞**。二项区间的隐含模型（i.i.d. 伯努利、固定 p）**与机制不符** —— 报"上界 24.2%"等于说"24% 的越权请求会漏过"，那需要允许表**大面积**坏掉，而不是边缘有个别名漏洞 |
+| **普查** —— 窗口内每条都验 | `chain_integrity` · `unclosed_loop_rate` | ❌ **不适用** | **没有抽样不确定性**（不是"区间很窄"） |
+
+🔴 **判据一句话：区间量的是【外推到未见样本】的不确定性。**
+默认拒绝的全函数没有这种外推 —— 它的不确定性在**覆盖面**（允许表/探针没覆到的模式）与**部署前提**（引擎有没有被装配），
+**两者都不是二项区间能表达的**。
+
+**⇒ 两条执行后果：**
+
+1. 🔴 **回退**：`ToolScopeViolationRate` 上新加的 `_ci` **要撤** ——
+   给一个确定性机制填 Wilson 区间，**是把概率模型套在非概率机制上**，
+   比"没有仪器"更糟（它会让人以为那个 24.2% 是可读的）。
+   `FalsePositiveRate` / `BenignFlagRate` **保留 CI**（它们量的是检测器，属第一类）。
+2. **`tool_scope_violation_rate` 的门维持 `value <= 0`，不迁** —— 但**不是**因为"边界阈值不可满足"，
+   而是因为**区间对它没有意义**。原来登记的"零容忍门二选一"随之作废：
+   🔴 **它的残余风险要靠【覆盖面清单 + 部署前提】表达，不是靠容差。**
 
 ---
 
@@ -115,3 +145,107 @@
 - 🔴 **带牙的一条**：用今天的真 bundle 判级 ⇒ `injection_catch_rate` **从达标翻为未达标**，
   且报告 `notes` 指明**原因是 n 不足**；
 - `chain_integrity` **不翻**（证明这条判据不是无差别收紧）。
+
+
+---
+
+## 7. 施工单（可下发 · 四个提交，严格按序）
+
+### 提交 A — `Measurement` 带区间（EV-0 冻结契约的**加法式**变更）
+
+**范围**
+- [`treval/models.py`](../../treval/models.py) `Measurement` 加两个字段：
+  `ci_low: float | None = None` · `ci_high: float | None = None`；
+- [`treval/stats.py`](../../treval/stats.py) 加 `binomial_ci(value: float, n: int) -> tuple[float, float]`
+  （内部即 `wilson_interval`，只是给指标一个"我这个值是 k/n"的入口）；
+- **率型指标自己调它填上**；非率型（`duration_p99` / 计数）**不调，保持 `None`**；
+- [`treval/rubric/serialize.py`](../../treval/rubric/serialize.py)：区间进 report JSON，
+  `SCHEMA_VERSION` **3 → 4**；[`docs/report.schema.json`](../report.schema.json) 同步。
+
+🔴 **两条不能违反的：**
+
+1. **`None` 表示"没有区间"，不是 `0` / `1`。** 一个默认成 `(0.0, 1.0)` 的字段会让
+   `ci_low >= 0.80` 静默判否、`ci_high <= 0.05` 静默判否 —— **默认值不得参与判级。**
+2. 🔴 **不由引擎按 `unit == "ratio"` 集中推算区间。** 有些"比值"不是 k/n（比如比率的均值），
+   集中推算会给它一个**看起来合理、其实错的**区间 —— 静默错，最难查。
+   **"这个值是不是二项比例"只有指标自己知道，所以由指标声明。**
+
+**验收**：`Measurement` 新字段默认 `None`；率型指标产出的 measurement 带区间且
+`ci_low <= value <= ci_high`；`duration_p99` 的区间是 `None`；report JSON schema 版本已升。
+
+---
+
+### 提交 B — registry 表达式支持 `ci_low` / `ci_high`
+
+**范围**
+- 表达式求值层认这两个名字；
+- 🔴 **方向显式，不推断**（§1）；
+- 🔴 **引用了 `ci_low` 但该 measurement `ci_low is None` ⇒ 报错**（`RubricError` 之类），
+  **不得静默通过、也不得静默判否** —— 两种静默都会让"判据没生效"看起来像"判据生效了"。
+
+**验收**：`ci_low >= 0.80` 与 `ci_high <= 0.05` 都能求值；对 `None` 区间的引用**抛错并指名指标**；
+`sample_size == 0` ⇒ 仍走 `insufficient_data`（**不造区间、不判达标**）。
+
+---
+
+### 提交 C — 迁移 registry + 报告措辞（🔴 **判级会翻转的那一个提交**）
+
+**范围**
+- `registry/dimensions/*.yaml` 里**所有率型目标**从 `value >=/<=` 改成 `ci_low >=` / `ci_high <=`
+  （**门槛数值一个不动**）；
+- 报告 `notes`：`unmet` 时必须说清**是因为 n 不足，还是因为值本身低** ——
+  🔴 点估计 89.3% 与"未达标"**同时为真**，读者不该被迫二选一。
+
+🔴 **本提交的 PR 描述里必须附一张【翻转表】**：每一条判级发生变化的目标，`before → after` + 原因。
+**没有翻转表就不许合** —— 一次静默的批量重新判级，比这条判据要解决的问题更糟。
+
+**已知会翻的（实测）**：`rob.l2.injection_rule_detection` **met → unmet**
+（`injection_catch_rate` 0.893，下界 0.728 < 0.80）⇒ 连带 `robustness` 的 **awarded L3 会掉**。
+**已知不翻**：`chain_integrity`（100% n=400，下界 99.0%）。
+
+**验收**：翻转表齐全；每条 `unmet` 的 notes 含原因；门槛数值 diff 为空。
+
+---
+
+### 提交 D — 带牙回归
+
+| 回归 | 断言 |
+|---|---|
+| 🔴 **主牙** | 用真 bundle 判级 ⇒ `rob.l2.injection_rule_detection` **unmet**，且 notes 指明**原因是 n 不足** |
+| 🔴 **反向牙** | `chain_integrity` **仍 met** —— 证明这条判据**不是无差别收紧** |
+| 边界 | `0/n` 与 `n/n` 的区间宽度 **> 0**（Wald 实现会让这条红） |
+| 空样本 | `sample_size == 0` ⇒ `insufficient_data`，**无区间、不判达标** |
+| 非率型 | `duration_p99` 无区间；registry 若对它写 `ci_low` ⇒ **抛错** |
+| 方向 | 一条"越小越好"的目标用 `ci_high <=` 判，**且用 `ci_low` 会判错**（证明方向没被推断掉） |
+
+---
+
+## 8. 开工前必裁
+
+| # | 决策 | 建议 | 归属 |
+|---|---|---|---|
+| **P1** | 置信水平固定 95%，还是可配？ | 🔴 **固定 95%，不给旋钮。** 可配的置信度会被调低到刚好通过（把 95% 降到 80% 就"达标"了）—— **门的参数不能是被判方能拧的旋钮。** | 架构师定 |
+| **P2** | 迁移范围：全部率型目标，还是只 injection？ | **全部率型，一次迁完 + 翻转表。** 只迁一条 = 同一份报告里两套判据，比现状更难解释 | 架构师定 |
+| **P3** | "因 n 不足而 unmet" 要不要新增第四个状态？ | 🔴 **不加。** `met`/`unmet`/`insufficient_data` 已冻结在 report schema，加状态要动每个消费者。**而且信息已经在数据里了** —— measurement 带着 `ci_low`/`ci_high`，消费者自己就能看出"点估计过线、下界没过"。**不必为已经能推出来的事再造一个枚举值。** | 架构师定 |
+| **P4** | 🔴 迁移当天 `robustness` 的 awarded 会从 L3 掉 —— 对外材料怎么讲？ | **不是 Core 的裁定。** 事实：等级下降的原因是**判据变严，不是能力变差**；同一份报告里点估计一字未变。**措辞归 PM。** | **PM** |
+
+---
+
+## 9. Live Test（一次，前后对照）
+
+```bash
+export PYTHONPATH=$PWD
+python -m treval.cli report --measurement-bundle <gateway-bundle>.json --format human
+```
+
+**迁移前（今天实测）**：
+
+```
+robustness — awarded L3 (measured L3 / attested None)
+  L2 rob.l2.injection_rule_detection    measured  met    injection_catch_rate=0.89 [verified]
+```
+
+**迁移后必须看到**：同一行变成 **`unmet`**，notes 指明 **n=28 不足以让 95% 下界过 0.80**，
+且 `chain_integrity` 那条**不变**。
+
+🔴 **这一跑就是整个单的意义**：产品今天在打 `met`，而那个 `met` 我们已经同意站不住。

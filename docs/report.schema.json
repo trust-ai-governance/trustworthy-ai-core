@@ -350,6 +350,14 @@
             "n/a_self_reported"
           ]
         },
+        "ci_low": {
+          "description": "EV-CIGATE §7-A: Wilson 95% lower bound WHEN this value is a binomial proportion; null for a non-rate/deterministic-census indicator. A `ci_low >= τ` objective over null raises (never silently grades).",
+          "type": ["number", "null"]
+        },
+        "ci_high": {
+          "description": "EV-CIGATE §7-A: Wilson 95% upper bound (paired with ci_low). null when the indicator is not a binomial proportion.",
+          "type": ["number", "null"]
+        },
         "evidence_refs": {
           "type": "array",
           "items": {

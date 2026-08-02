@@ -15,6 +15,7 @@ import io
 
 from treval.models import DimensionReport, MaturityReport, Measurement
 from treval.registry import ControlObjective, DimensionRegistry
+from treval.registry.satisfied_when import SatisfiedWhenError, parse_satisfied_when
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _LEVEL_INDEX = {level: i for i, level in enumerate(_LEVELS, start=1)}
@@ -72,6 +73,29 @@ def _level_of(reg: DimensionRegistry, dim_id: str, obj_id: str) -> str:
         if any(o.id == obj_id for o in dim.levels[level]):
             return level
     return "?"
+
+
+def _ci_detail(satisfied_when: str | None, m: Measurement, status: str) -> str:
+    """The CI annotation for a measured objective line (EV-CIGATE §C). Shows the Wilson interval when
+    the objective gates on it, and — 🔴 on an `unmet` — says WHY: `n-insufficient` (the point estimate
+    meets τ but the 95% CI does not — grow n) vs `value-low` (the value itself misses τ), so a reader
+    is never forced to choose between "89% is true" and "unmet" — both are (P3). Empty for a non-CI
+    gate or a measurement without an interval."""
+    if not satisfied_when:
+        return ""
+    try:
+        field, _op, tau = parse_satisfied_when(satisfied_when)
+    except SatisfiedWhenError:
+        return ""
+    if field not in ("ci_low", "ci_high") or m.ci_low is None or m.ci_high is None:
+        return ""
+    ci = f" CI[{m.ci_low:.2f},{m.ci_high:.2f}]"
+    if status != "unmet":
+        return ci
+    point_meets = m.value >= tau if field == "ci_low" else m.value <= tau
+    if point_meets:
+        return f"{ci} 🔴 n-insufficient (point {m.value:.2f} meets {tau:g}; 95% CI does not — grow n)"
+    return f"{ci} 🔴 value {m.value:.2f} itself misses {tau:g}"
 
 
 def render_human(
@@ -151,6 +175,7 @@ def render_human(
                 m = agg.get(ind) if ind else None
                 if m is not None:
                     detail = f"  {ind}={m.value:.2f} [{m.integrity.value}]"
+                    detail += _ci_detail(spec.evidence.satisfied_when, m, res.status)
                 else:
                     detail = f"  {ind}=—"
             out.append(
