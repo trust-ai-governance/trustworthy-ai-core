@@ -27,7 +27,9 @@ from treval.models import (
 )
 from treval.registry import DimensionRegistry, serialize_registry
 
-SCHEMA_VERSION = 3  # EV-FWD: each measurement gains a derived `availability`
+SCHEMA_VERSION = (
+    4  # EV-CIGATE: each measurement gains a Wilson ci_low/ci_high (nullable)
+)
 
 # --- R1 — target_kind (report-level) + evidence_basis (DERIVED, single source of truth) ---
 # target_kind names WHAT was evaluated; evidence_basis is its evidence strength and is NEVER
@@ -211,6 +213,11 @@ def serialize_measurement(
         "notes": m.notes,
         "integrity": m.integrity.value,
         "availability": availability,
+        # EV-CIGATE §7-A — the Wilson interval rides WITH the value so a consumer can see "point
+        # estimate crossed the line, lower bound did not". 🔴 null (not 0/1) when the indicator is
+        # not a binomial proportion — a `ci_low >= τ` gate over null RAISES, never silently grades.
+        "ci_low": m.ci_low,
+        "ci_high": m.ci_high,
         "evidence_refs": _serialize_refs(m.evidence_refs),
     }
 

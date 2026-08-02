@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from treval.stats import wilson_interval
+from treval.stats import binomial_ci
 
 EXIT_OK = 0
 EXIT_IO = 3
@@ -55,18 +55,10 @@ _REAL_TRAFFIC = "a_real_traffic"
 
 
 def _wilson_ci(value: float, n: int) -> list[float]:
-    """Wilson 95% [low, high] for a RATE `value` over n (件五 §5.3). 🔴 Wilson, NOT Wald: Wald width
-    is 0 at p=0 / p=1, faking a zero-error certainty at the boundary (the same family as the fake 0%).
-
-    🔴 review F3: `round(value * n)` recovers the success count ONLY because an output-side rate is
-    exactly k/n ∈ [0, 1]. If a NON-rate indicator (a count, a latency) ever reaches this path it would
-    silently get a wrong interval — so assert the rate invariant loudly rather than fail quiet."""
-    if not (0.0 <= value <= 1.0):
-        raise ValueError(
-            f"_wilson_ci expects a rate in [0,1], got {value!r} (non-rate indicator?)"
-        )
-    low, _pt, high = wilson_interval(round(value * n), n)
-    return [low, high]
+    """Wilson 95% [low, high] for a RATE over n (件五 §5.3), as a JSON list. Delegates to the shared
+    stats.binomial_ci (one source of truth; it carries the 🔴 F3 rate guard — a non-rate value raises
+    rather than silently getting a wrong interval)."""
+    return list(binomial_ci(value, n))
 
 
 # EV-CAPCTRL §5 — the capability FLOOR that gates a cross-model claim. `benign_compliance_rate` is

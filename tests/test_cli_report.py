@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from treval.cli.main import EXIT_GRADING, EXIT_IO, EXIT_OK, main, run_report
+from treval.stats import binomial_ci
 
 _ROOT = Path(__file__).resolve().parents[1]
 _POSTURE_SAMPLE = _ROOT / "docs" / "posture.sample.yaml"
@@ -14,7 +15,7 @@ _POSTURE_SAMPLE = _ROOT / "docs" / "posture.sample.yaml"
 
 def _bundle_doc(measurements, *, tenant_id="__eval__", window=(1000, 2000)):
     return {
-        "schema_version": 4,  # EV-PAIR: current collect-bundle version
+        "schema_version": 5,  # EV-CIGATE: current collect-bundle version
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": "active",
@@ -23,8 +24,11 @@ def _bundle_doc(measurements, *, tenant_id="__eval__", window=(1000, 2000)):
 
 
 def _measurement(
-    indicator_id, dimension, value, *, sample_size=10, integrity="verified"
+    indicator_id, dimension, value, *, sample_size=10, integrity="verified", ci=False
 ):
+    # ci=True fills the Wilson interval — the shipped registry gates injection_catch_rate on ci_low
+    # (EV-CIGATE), so its measurement must carry one (else grading raises RubricError, §7-B).
+    ci_low, ci_high = binomial_ci(value, sample_size) if ci else (None, None)
     return {
         "indicator_id": indicator_id,
         "dimension": dimension,
@@ -34,6 +38,8 @@ def _measurement(
         "subject": "",
         "notes": "",
         "integrity": integrity,
+        "ci_low": ci_low,
+        "ci_high": ci_high,
         "evidence_refs": [],
     }
 
@@ -45,8 +51,13 @@ def _write(tmp_path, doc, name="bundle.json"):
 
 
 def _injection_met_bundle(tmp_path):
+    # n=200 so the 95% Wilson lower bound of 0.90 clears 0.80 (EV-CIGATE) — a genuinely MET injection.
     doc = _bundle_doc(
-        [_measurement("injection_catch_rate", "robustness", 0.9, sample_size=34)]
+        [
+            _measurement(
+                "injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True
+            )
+        ]
     )
     return _write(tmp_path, doc)
 
@@ -60,7 +71,7 @@ def test_report_json_is_valid_and_min_gated(tmp_path):
     bundle = _injection_met_bundle(tmp_path)
     text, _ = run_report(bundle, _POSTURE_SAMPLE, "json")
     doc = json.loads(text)
-    assert doc["schema_version"] == 3  # report bundle (EV-FWD)
+    assert doc["schema_version"] == 4  # report bundle (EV-CIGATE)
     rob = next(d for d in doc["report"]["dimensions"] if d["dimension"] == "robustness")
     # injection met → measured L2; posture sample attests robustness L3 → gap at L3, awarded L2.
     assert rob["measured_ceiling"] == "L2"
@@ -157,7 +168,7 @@ def test_main_report_ok(tmp_path, capsys):
     rc = main(["report", "--measurement-bundle", str(bundle), "--format", "json"])
     assert rc == EXIT_OK
     out = capsys.readouterr().out
-    assert json.loads(out)["schema_version"] == 3
+    assert json.loads(out)["schema_version"] == 4
 
 
 def test_main_bad_bundle_path_is_io_error(capsys):
@@ -196,4 +207,4 @@ def test_main_writes_out_file(tmp_path, capsys):
         ]
     )
     assert rc == EXIT_OK
-    assert json.loads(out.read_text())["schema_version"] == 3
+    assert json.loads(out.read_text())["schema_version"] == 4

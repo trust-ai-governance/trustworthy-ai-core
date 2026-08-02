@@ -16,7 +16,13 @@ from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = 4  # EV-PAIR: bundle gains model/temperature/target_url_host/traffic_tier + per-measurement corpus_sha
+SCHEMA_VERSION = (
+    5  # EV-CIGATE: each measurement gains ci_low/ci_high (nullable Wilson interval)
+)
+# The bundle version that INTRODUCED the ci_low/ci_high fields. A bundle below this predates them —
+# so an injection_catch_rate with no interval means "produced before the fields existed" (re-collect),
+# NOT "a non-rate indicator" (EV-CIGATE F1: without the bump both looked identical and mis-diagnosed).
+CI_INTRODUCED_IN = 5
 _VALID_INTEGRITY = {s.value for s in IntegrityStatus}
 
 
@@ -103,6 +109,15 @@ def parse_measurement(raw: object, where: str) -> Measurement:
         raise BundleError(f"{where}: evidence_refs must be an array")
     refs = tuple(_parse_ref(r, where) for r in refs_raw)
 
+    # EV-CIGATE §7-A — the Wilson interval MUST survive the round-trip: a collect bundle carries it,
+    # and a `ci_low >= τ` objective grading the loaded bundle needs it (else it raises). 🔴 F2: in a
+    # v≥CI_INTRODUCED_IN bundle the key is ALWAYS PRESENT — a rate carries a number, a non-rate an
+    # EXPLICIT null; "absent" happens ONLY in a pre-CI bundle, and THAT is caught by the schema_version
+    # fork (F1), not by treating absent as null here. Both absent and explicit-null map to None; the
+    # version tells them apart. Never coerced to 0/1.
+    ci_low = _parse_ci(raw.get("ci_low"), "ci_low", where)
+    ci_high = _parse_ci(raw.get("ci_high"), "ci_high", where)
+
     return Measurement(
         indicator_id=indicator_id,
         dimension=dimension,
@@ -113,7 +128,19 @@ def parse_measurement(raw: object, where: str) -> Measurement:
         subject=subject,
         notes=notes,
         integrity=IntegrityStatus(integrity),
+        ci_low=ci_low,
+        ci_high=ci_high,
     )
+
+
+def _parse_ci(v: object, name: str, where: str) -> float | None:
+    """A nullable Wilson bound from a bundle (EV-CIGATE §7-A). None (absent/null) stays None — a
+    non-rate indicator carries no interval; a bad type is fail-closed, never silently dropped."""
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise BundleError(f"{where}: {name} must be a number or null")
+    return float(v)
 
 
 def load_bundle(path: str | Path) -> LoadedBundle:

@@ -28,6 +28,7 @@ from treval.models import (
     PostureEvidence,
 )
 from treval.registry import load_registry
+from treval.stats import binomial_ci
 from treval.report_store import write_bundle
 from treval.rubric import evaluate, self_contained_bundle_to_json
 
@@ -55,8 +56,13 @@ PROVENANCE = {
 }
 
 
-def _m(indicator: str, dimension: str, value: float, unit: str, n: int) -> Measurement:
-    """One synthetic aggregate measurement. All VERIFIED (a clean demo); refs are synthetic."""
+def _m(
+    indicator: str, dimension: str, value: float, unit: str, n: int, *, ci: bool = False
+) -> Measurement:
+    """One synthetic aggregate measurement. All VERIFIED (a clean demo); refs are synthetic.
+    `ci=True` fills the Wilson interval — set it for a binomial-proportion indicator whose objective
+    now gates on `ci_low`/`ci_high` (EV-CIGATE), so the engine has an interval to compare."""
+    ci_low, ci_high = binomial_ci(value, n) if ci else (None, None)
     return Measurement(
         indicator_id=indicator,
         dimension=dimension,
@@ -66,13 +72,17 @@ def _m(indicator: str, dimension: str, value: float, unit: str, n: int) -> Measu
         evidence_refs=tuple(_REF for _ in range(n)),
         subject="",
         integrity=IntegrityStatus.VERIFIED,
+        ci_low=ci_low,
+        ci_high=ci_high,
     )
 
 
 # --- synthetic measurements (auditably fake) ---------------------------------------------
 MEASUREMENTS = (
     # robustness: injection backs L2; NO boundary_breach_rate → L3 measured stays unearned.
-    _m("injection_catch_rate", "robustness", 0.91, "ratio", 240),
+    # ci=True: rob.l2.injection_rule_detection now gates on ci_low (EV-CIGATE); at 0.91/n=240 the
+    # lower bound clears 0.80, so the demo shows it MET (contrast the real n=28 bundle, which does not).
+    _m("injection_catch_rate", "robustness", 0.91, "ratio", 240, ci=True),
     # efficient_reliability: a HEALTHY latency baseline — 780 ms, not 60 s (good demo optics).
     _m("duration_p99", "efficient_reliability", 780.0, "ms", 240),
     _m("terminal_error_ratio", "efficient_reliability", 0.008, "ratio", 240),

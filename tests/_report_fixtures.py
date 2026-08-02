@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from treval import evaluate, load_registry, self_contained_bundle_to_json
 from treval.models import EvidenceRef, IntegrityStatus, Measurement, PostureEvidence
+from treval.stats import binomial_ci
 
 _WINDOW = (1782000000000000000, 1782000600000000000)
 _TENANT = "dogfood"
@@ -28,7 +29,11 @@ def _m(
     subject="",
     integrity=_V,
     unit="ratio",
+    ci=False,
 ):
+    # ci=True fills the Wilson interval — set it for injection_catch_rate, which the shipped registry
+    # now gates on ci_low (EV-CIGATE); its scenarios use enough n for the lower bound to clear 0.80.
+    ci_low, ci_high = binomial_ci(value, sample_size) if ci else (None, None)
     return Measurement(
         indicator_id=indicator_id,
         dimension=dimension,
@@ -39,6 +44,8 @@ def _m(
         integrity=integrity,
         evidence_refs=_REF,
         notes="",
+        ci_low=ci_low,
+        ci_high=ci_high,
     )
 
 
@@ -85,7 +92,9 @@ def _inputs():
         # 1. rich — measured + attested mix across dimensions, non-empty gaps.
         "rich": (
             [
-                _m("injection_catch_rate", "robustness", 0.92, sample_size=34),
+                _m(
+                    "injection_catch_rate", "robustness", 0.92, sample_size=200, ci=True
+                ),
                 _m(
                     "chain_integrity",
                     "transparency_accountability",
@@ -106,7 +115,7 @@ def _inputs():
         "all_not_measured": ([], []),
         # 3. over_claim_gaps — attested L3 but measurement backs only L2 → gaps[].
         "over_claim_gaps": (
-            [_m("injection_catch_rate", "robustness", 0.9, sample_size=34)],
+            [_m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True)],
             _ROBUSTNESS_L3,
         ),
         # 4. insufficient_data — sample_size 0 → insufficient_data (not unmet).
@@ -121,8 +130,9 @@ def _inputs():
                     "injection_catch_rate",
                     "robustness",
                     0.9,
-                    sample_size=34,
+                    sample_size=200,
                     integrity=_V,
+                    ci=True,
                 ),
                 _m(
                     "chain_integrity",
@@ -144,7 +154,7 @@ def _inputs():
         # 6. per_subject — measurements with subject != "" (per-entity breakdown).
         "per_subject": (
             [
-                _m("injection_catch_rate", "robustness", 0.9, sample_size=34),
+                _m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True),
                 _m(
                     "token_cost_per_agent",
                     "efficient_reliability",

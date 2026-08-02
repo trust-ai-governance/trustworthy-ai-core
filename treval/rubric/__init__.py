@@ -7,7 +7,7 @@ report bundle the UI consumes (docs/REPORT_JSON_SCHEMA.md).
 
 from __future__ import annotations
 
-from treval.rubric.engine import DuplicateIndicatorError, evaluate
+from treval.rubric.engine import DuplicateIndicatorError, RubricError, evaluate
 from treval.rubric.serialize import (
     bundle_to_json,
     registry_fingerprint,
@@ -21,6 +21,7 @@ from treval.rubric.serialize import (
 __all__ = [
     "evaluate",
     "DuplicateIndicatorError",
+    "RubricError",
     "serialize_report",
     "serialize_measurement",
     "serialize_bundle",

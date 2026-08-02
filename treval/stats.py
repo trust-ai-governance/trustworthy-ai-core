@@ -40,3 +40,18 @@ def wilson_half_width(successes: int, n: int, *, z: float = Z_95) -> float:
     (PROV-CLOSEOUT §5.3). > 0 even at p=0/p=1 (that is the whole point of Wilson)."""
     low, _point, high = wilson_interval(successes, n, z=z)
     return (high - low) / 2.0
+
+
+def binomial_ci(value: float, n: int, *, z: float = Z_95) -> tuple[float, float]:
+    """`(low, high)` Wilson interval for a BINOMIAL PROPORTION whose point estimate is `value` over
+    `n` trials (EV-CIGATE §7-A) — the entry an INDICATOR calls to say "my value is k/n" so its
+    Measurement can carry an interval. 🔴 Only valid for a proportion in [0,1]: `round(value*n)`
+    recovers k, so a NON-rate value would get a plausible-but-wrong interval — the indicator, not the
+    engine, must decide it is a proportion (§7-A invariant 2). Raises on value∉[0,1] and on n<=0
+    (n=0 is insufficient_data, which has NO interval — the caller passes None, never (0,1))."""
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(
+            f"binomial_ci expects a proportion in [0,1], got {value!r} (non-rate indicator?)"
+        )
+    low, _point, high = wilson_interval(round(value * n), n, z=z)
+    return (low, high)

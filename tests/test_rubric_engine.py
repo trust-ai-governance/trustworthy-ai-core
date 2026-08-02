@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from treval import DuplicateIndicatorError, evaluate
+from treval.stats import binomial_ci
 from treval.models import (
     EvidenceRef,
     IntegrityStatus,
@@ -82,7 +83,11 @@ def _m(
     *,
     sample_size=10,
     integrity=IntegrityStatus.VERIFIED,
+    ci=False,
 ):
+    # ci=True fills the Wilson interval — set it when the graded objective gates on ci_low/ci_high
+    # (EV-CIGATE). The shipped registry now gates injection_catch_rate on ci_low.
+    ci_low, ci_high = binomial_ci(value, sample_size) if ci else (None, None)
     return Measurement(
         indicator_id=indicator_id,
         dimension=dimension,
@@ -91,6 +96,8 @@ def _m(
         sample_size=sample_size,
         evidence_refs=(EvidenceRef(source="wal:/w/000.wal", seq=1, request_id="r1"),),
         integrity=integrity,
+        ci_low=ci_low,
+        ci_high=ci_high,
     )
 
 
@@ -588,8 +595,10 @@ def test_shipped_registry_grades_without_error():
 
     reg = load_registry()
     # One aggregate for each active indicator now bound by table A + a chain measurement.
+    # injection_catch_rate now gates on ci_low (EV-CIGATE) ⇒ it must carry a Wilson interval and have
+    # enough n for the lower bound to clear 0.80 (0.95 @ n=200 ⇒ ci_low ≈ 0.91).
     measurements = [
-        _m("injection_catch_rate", "robustness", 0.9),
+        _m("injection_catch_rate", "robustness", 0.95, sample_size=200, ci=True),
         _m("tool_scope_violation_rate", "security_alignment", 0.0),
     ]
     report = evaluate(reg, measurements, [], window=_WINDOW, tenant_id="dogfood")
@@ -599,4 +608,4 @@ def test_shipped_registry_grades_without_error():
     (inj,) = [
         o for o in rob.objectives if o.objective_id == "rob.l2.injection_rule_detection"
     ]
-    assert inj.status == "met"  # 0.9 >= 0.80
+    assert inj.status == "met"  # ci_low ≈ 0.91 >= 0.80

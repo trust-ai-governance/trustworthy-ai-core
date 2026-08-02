@@ -23,7 +23,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from treval.cli.bundle import BundleError, load_bundle
+from treval.cli.bundle import CI_INTRODUCED_IN, BundleError, load_bundle
 from treval.cli.render import render_csv, render_human
 from treval.models import MaturityReport, Measurement
 from treval.posture import PostureFileError, PostureFileReader
@@ -31,6 +31,7 @@ from treval.registry import DimensionRegistry, RegistryError, load_registry
 from treval.report_store import ReportEntry, ReportStoreError, write_bundle
 from treval.rubric import (
     DuplicateIndicatorError,
+    RubricError,
     bundle_to_json,
     evaluate,
     self_contained_bundle_to_json,
@@ -76,13 +77,25 @@ def _grade(
     else:
         warnings.append("no --posture file: attested objectives are all unmet")
 
-    report = evaluate(
-        reg,
-        bundle.measurements,
-        posture,
-        window=bundle.window,
-        tenant_id=bundle.tenant_id,
-    )
+    try:
+        report = evaluate(
+            reg,
+            bundle.measurements,
+            posture,
+            window=bundle.window,
+            tenant_id=bundle.tenant_id,
+        )
+    except RubricError as e:
+        # 🔴 EV-CIGATE F1: a missing interval on a PRE-CI bundle is "produced before the fields
+        # existed", NOT "a non-rate indicator". Only the CLI knows the bundle's schema_version, so it
+        # forks the diagnosis here — the engine stays bundle-agnostic.
+        if bundle.schema_version < CI_INTRODUCED_IN:
+            raise RubricError(
+                f"bundle predates the EV-CIGATE interval fields (schema_version "
+                f"{bundle.schema_version} < {CI_INTRODUCED_IN}) — re-collect it so measurements carry "
+                f"ci_low/ci_high; the point estimate alone can no longer be graded. (raw: {e})"
+            ) from e
+        raise
     return (
         reg,
         report,
@@ -202,8 +215,8 @@ def _cmd_report(args: argparse.Namespace) -> int:
             entry, warnings = run_self_contained(
                 args.measurement_bundle, args.posture, args.out_dir
             )
-        except DuplicateIndicatorError as e:
-            print(f"error: ambiguous bundle — {e}", file=sys.stderr)
+        except (DuplicateIndicatorError, RubricError) as e:
+            print(f"error: cannot grade bundle — {e}", file=sys.stderr)
             return EXIT_GRADING
         except (
             BundleError,
@@ -231,6 +244,10 @@ def _cmd_report(args: argparse.Namespace) -> int:
         )
     except DuplicateIndicatorError as e:
         print(f"error: ambiguous bundle — {e}", file=sys.stderr)
+        return EXIT_GRADING
+    except RubricError as e:
+        # EV-CIGATE §7-B: a CI gate written on a non-rate indicator (or the interval is missing).
+        print(f"error: registry/measurement mismatch — {e}", file=sys.stderr)
         return EXIT_GRADING
     except (BundleError, RegistryError, PostureFileError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)

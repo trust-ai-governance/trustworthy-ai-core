@@ -445,7 +445,7 @@ def test_collect_raw_model_bundle_marks_decision_indicators_not_measured(
     )
     assert rc == 0
     doc = json.loads(out.read_text(encoding="utf-8"))
-    assert doc["schema_version"] == 4  # collect bundle v4 (EV-PAIR §2)
+    assert doc["schema_version"] == 5  # collect bundle v5 (EV-CIGATE: +ci_low/ci_high)
     assert doc["target_kind"] == "raw_model"
     assert doc["evidence_basis"] == "harness_observed"
     # the CURATION producers are decision-side ⇒ every one must be n/a on a bare model,

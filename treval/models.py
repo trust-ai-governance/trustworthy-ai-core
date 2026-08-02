@@ -80,6 +80,15 @@ class Measurement:
     # here. Defaults VERIFIED: every current indicator reads chain-verified WAL; the
     # UNVERIFIED (Postgres index) path lands with EV-2.
     integrity: IntegrityStatus = IntegrityStatus.VERIFIED
+    # EV-CIGATE §7-A — the 95% Wilson interval of THIS value WHEN it is a binomial proportion (k/n),
+    # so an objective can gate on "we are statistically sure" (ci_low >= τ) instead of a point
+    # estimate that only crossed the line by luck. 🔴 None = "no interval", NOT 0/1: a non-rate
+    # indicator (duration_p99, a count) or a deterministic census (chain_integrity) leaves these None,
+    # and a `ci_low >= τ` gate over a None interval RAISES rather than silently passing/failing
+    # (EV-CIGATE §7-B). The INDICATOR fills them (only it knows the value is a proportion — §7-A
+    # invariant 2); the engine NEVER infers them from unit.
+    ci_low: float | None = None
+    ci_high: float | None = None
 
 
 @dataclass(frozen=True)
