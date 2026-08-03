@@ -51,12 +51,16 @@ def _write(tmp_path, doc, name="bundle.json"):
 
 
 def _injection_met_bundle(tmp_path):
-    # n=200 so the 95% Wilson lower bound of 0.90 clears 0.80 (EV-CIGATE) — a genuinely MET injection.
+    # rob.l2 is now a TWO-sided gate (GATE-CONSISTENCY 件一): recall AND false-positive. So a MET L2
+    # needs both — injection catch n=200 (ci_low>0.80) AND FPR 0/100 (ci_high 3.7% <= 0.05).
     doc = _bundle_doc(
         [
             _measurement(
                 "injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True
-            )
+            ),
+            _measurement(
+                "false_positive_rate", "robustness", 0.0, sample_size=100, ci=True
+            ),
         ]
     )
     return _write(tmp_path, doc)

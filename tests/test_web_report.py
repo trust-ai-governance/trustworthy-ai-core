@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 from _pytest.outcomes import Failed, Skipped
 
-from treval.report_store import ReportStore, window_key, write_bundle
+from treval.report_store import ReportStore, selector_key, write_bundle
 
 _ROOT = Path(__file__).resolve().parents[1]
 _FIXTURES = _ROOT / "tests" / "fixtures" / "report" / "valid"
@@ -70,7 +70,7 @@ def test_report_json_returns_stored_bytes_verbatim(client, store_dir):
     file_bytes = (store_dir / entry.file).read_bytes()
     resp = client.get(
         "/report.json",
-        params={"tenant": entry.tenant_id, "window": window_key(entry.window)},
+        params={"tenant": entry.tenant_id, "window": selector_key(entry)},
     )
     assert resp.status_code == 200
     assert resp.content == file_bytes  # byte-for-byte, not a re-serialization

@@ -228,12 +228,12 @@ for (const fx of fixtures) {
   const P = fx + " detail: ";
 
   check(P + "no js errors", errors.length === 0, errors.join(" | "));
-  check(P + "71 objectives listed once each", $$("#sigt tbody tr[data-kind]").length === 71 &&
-        new Set($$("#sigt .sid").map((e) => e.textContent)).size === 71,
+  check(P + "72 objectives listed once each", $$("#sigt tbody tr[data-kind]").length === 72 &&
+        new Set($$("#sigt .sid").map((e) => e.textContent)).size === 72,
         "rows=" + $$("#sigt tbody tr[data-kind]").length);
   check(P + "table carries 本次结果 column",
         $$("#sigt thead th").map((t) => t.textContent.trim()).includes("本次结果"));
-  check(P + "every objective shows its rule", $$("#sigt tbody tr[data-kind] .rule").length === 71);
+  check(P + "every objective shows its rule", $$("#sigt tbody tr[data-kind] .rule").length === 72);
   check(P + "read-only badge", txt(".sighead .ro").includes("只读"));
   check(P + "explains why rules are not editable", txt(".signote").includes("registry_fingerprint"));
   check(P + "states the WAF difference (corpus text) + sha256",
@@ -264,7 +264,7 @@ for (const fx of fixtures) {
 
   check("rich: over-claim rows tinted", $$("#sigt tr.gaprow").length === 2,
         "gaprow=" + $$("#sigt tr.gaprow").length);
-  check("rich: all 71 matched, first page shown", matched() === 71 && shown() === PER_PAGE,
+  check("rich: all 72 matched, first page shown", matched() === 72 && shown() === PER_PAGE,
         "matched=" + matched() + " shown=" + shown());
   check("rich: pager visible when paging is needed", !$("#sigpager").hidden);
   check("rich: prev disabled on page 1", $("#sigprev").disabled && !$("#signext").disabled);
@@ -276,23 +276,23 @@ for (const fx of fixtures) {
   const nMeas = matched();
   $('#sigchips button[data-k="attested"]').click();
   const nAtt = matched();
-  check("measured + attested = 71", nMeas + nAtt === 71, nMeas + "+" + nAtt);
+  check("measured + attested = 72", nMeas + nAtt === 72, nMeas + "+" + nAtt);
 
   $('#sigchips button[data-k="all"]').click();
   const sel = $("#sigdim");
   sel.value = "robustness";
   sel.dispatchEvent(new dom.window.Event("change"));
   const nRob = matched();
-  check("dimension filter works", nRob > 0 && nRob < 71, "robustness=" + nRob);
+  check("dimension filter works", nRob > 0 && nRob < 72, "robustness=" + nRob);
   sel.value = "all";
   sel.dispatchEvent(new dom.window.Event("change"));
-  check("dimension filter resets", matched() === 71);
+  check("dimension filter resets", matched() === 72);
 
   const q = $("#sigq");
   q.value = "injection";
   q.dispatchEvent(new dom.window.Event("input"));
-  check("search works", matched() > 0 && matched() < 71, "injection=" + matched());
-  check("count reflects the filter", $("#sigcnt").textContent.includes("共 71"),
+  check("search works", matched() > 0 && matched() < 72, "injection=" + matched());
+  check("count reflects the filter", $("#sigcnt").textContent.includes("共 72"),
         $("#sigcnt").textContent);
 
   q.value = "zzzz-no-such-rule";
@@ -303,7 +303,7 @@ for (const fx of fixtures) {
 
   q.value = "";
   q.dispatchEvent(new dom.window.Event("input"));
-  check("clearing search restores all 71 matches", matched() === 71 && shown() === PER_PAGE,
+  check("clearing search restores all 72 matches", matched() === 72 && shown() === PER_PAGE,
         "matched=" + matched() + " shown=" + shown());
   // Paging must not leak across a filter change. NOTE: filtering to a SMALL set proves
   // nothing — apply() clamps `page` to the last page, so the reset is invisible there. Use a
@@ -324,7 +324,7 @@ for (const fx of fixtures) {
 {
   const a = loadWithScript(path.join(dir, "all_not_measured.detail.html")).doc;
   check("all_not_measured: rules still all listed (rules are report-independent)",
-        a.querySelectorAll("#sigt tbody tr[data-kind]").length === 71);
+        a.querySelectorAll("#sigt tbody tr[data-kind]").length === 72);
   // A numeric value (.n:not(.dash)) means an actual measurement; the "—" placeholder (.n.dash)
   // shown for insufficient_data is NOT a value and must not count.
   check("all_not_measured: no measured values in the outcome column",

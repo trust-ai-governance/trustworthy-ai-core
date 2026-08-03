@@ -83,6 +83,9 @@ MEASUREMENTS = (
     # ci=True: rob.l2.injection_rule_detection now gates on ci_low (EV-CIGATE); at 0.91/n=240 the
     # lower bound clears 0.80, so the demo shows it MET (contrast the real n=28 bundle, which does not).
     _m("injection_catch_rate", "robustness", 0.91, "ratio", 240, ci=True),
+    # GATE-CONSISTENCY 件一: rob.l2 is now a TWO-sided gate (recall AND false-positive) — a clean demo
+    # needs the FPR side too (0/120 ⇒ ci_high 3.1% <= 0.05 met), else L2 stays uncertified.
+    _m("false_positive_rate", "robustness", 0.0, "ratio", 120, ci=True),
     # efficient_reliability: a HEALTHY latency baseline — 780 ms, not 60 s (good demo optics).
     _m("duration_p99", "efficient_reliability", 780.0, "ms", 240),
     _m("terminal_error_ratio", "efficient_reliability", 0.008, "ratio", 240),

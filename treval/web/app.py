@@ -42,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from treval.registry import load_registry, serialize_registry
-from treval.report_store import ReportStore, window_key
+from treval.report_store import ReportStore, selector_key
 from treval.web.view import build_context, window_label
 
 _HERE = Path(__file__).resolve().parent
@@ -125,10 +125,10 @@ def create_app(
             # fixtures shared one tenant — which is exactly the case the selector exists for.
             "windows": [
                 {
-                    "key": window_key(e.window),
+                    # 件三: the selector key is window~generated_at_ns (unique even for a [0,0]
+                    # window); the window is still shown via `label`. Deep links + switcher use `key`.
+                    "key": selector_key(e),
                     "window": e.window,
-                    # EV-PIN §1.5-3: LABEL only. `key` stays the raw ns pair because it is
-                    # the selection key — deep links and the switcher depend on it.
                     "label": window_label(e.window),
                     "generated_at_ns": e.generated_at_ns,
                     "newest": i == 0,
@@ -142,7 +142,7 @@ def create_app(
                 )
             ],
             "current": current,
-            "current_window": window_key(current.window) if current else None,
+            "current_window": selector_key(current) if current else None,
         }
 
     def _page(request: Request, template: str, tenant, window):
@@ -159,7 +159,7 @@ def create_app(
                 # globally-newest report — i.e. jumped to another tenant. Scope sits ABOVE the
                 # view: the tenant is the entry's own, not the request param (which may be None).
                 "qs": urlencode(
-                    {"tenant": entry.tenant_id, "window": window_key(entry.window)}
+                    {"tenant": entry.tenant_id, "window": selector_key(entry)}
                 ),
                 "rerun_command": RERUN_COMMAND,
                 "levels_meta": registry["levels_meta"],

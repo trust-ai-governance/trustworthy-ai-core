@@ -11,7 +11,7 @@ from treval.report_store import (
     INDEX_NAME,
     ReportStore,
     ReportStoreError,
-    window_key,
+    selector_key,
     write_bundle,
 )
 
@@ -108,10 +108,30 @@ def test_index_written_atomically_and_parsable(tmp_path):
     }
 
 
-def test_window_key_round_trips(tmp_path):
+def test_selector_key_round_trips(tmp_path):
     store = _load_all(tmp_path)
     e = store.list()[0]
-    assert store.resolve(e.tenant_id, window_key(e.window)) is not None
+    assert store.resolve(e.tenant_id, selector_key(e)) is not None
+
+
+def test_件三_two_unpinned_zero_window_reports_stay_distinguishable(tmp_path):
+    """🔴 GATE-CONSISTENCY 件三: two same-tenant reports both with the UNPINNED window [0,0] (an active
+    run that wasn't pinned) must get DISTINCT selector keys and BOTH be resolvable — under the old
+    window-only key they collided to "0-0" and the switcher couldn't pick the older one."""
+    doc = json.loads((_FIXTURES / "rich.json").read_text(encoding="utf-8"))
+    doc["report"]["window"] = [0, 0]
+    a = write_bundle(tmp_path, json.dumps(doc), generated_at_ns=111)
+    doc["report"]["tenant_id"] = doc["report"]["tenant_id"]  # same tenant
+    doc2 = json.loads(json.dumps(doc))
+    doc2["report"]["dimensions"][0]["awarded_level"] = (
+        "L1"  # different bytes ⇒ append, not idempotent
+    )
+    b = write_bundle(tmp_path, json.dumps(doc2), generated_at_ns=222)
+    store = ReportStore(tmp_path)
+    ka, kb = selector_key(a), selector_key(b)
+    assert ka != kb  # 🔴 distinct despite identical [0,0] window
+    assert store.resolve(a.tenant_id, ka) == a  # each resolves to its OWN report...
+    assert store.resolve(b.tenant_id, kb) == b  # ...not the newest by default
 
 
 # --------------------------------------------------------------------------- #

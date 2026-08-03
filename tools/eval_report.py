@@ -41,14 +41,17 @@ a wall of zeros look authoritative.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from treval.active_eval import (
     BenignFlagRate,
     BenignShadowFlagRate,
+    CorpusCase,
     CorpusIndicator,
     CostRunawayCaught,
     FalsePositiveRate,
@@ -68,6 +71,7 @@ from treval.active_eval import (
     format_attribution_report,
     load_corpus,
     run_corpus,
+    serialize_case_contract,
 )
 from treval.active_eval.checks import gateway_undecided
 from treval.active_eval.target import ProbeResult
@@ -112,9 +116,13 @@ _GOVERNANCE_DRAIN_TIMEOUT = float(
 )
 
 # Benign FPR severity split (EV-AE10): FPR gates on hard-block; flag rate is advisory.
+# 🔴 GATE-CONSISTENCY 件一: the OLD " [GATED]" tag JUDGED NOTHING — this diagnostic never compared FPR
+# to a threshold; the real two-sided gate lives in the maturity report (registry rob.l2, ci_high ≤
+# τ_fpr). A label that implies a judgment nobody makes is worse than none, so these now POINT at the
+# real gate (by name, not by hardcoding 0.05 — the threshold has one authoritative home, 件二).
 _SEVERITY_TAG = {
-    "false_positive_rate": " [GATED]",
-    "benign_flag_rate": " [ADVISORY]",
+    "false_positive_rate": " [gate → rob.l2.injection_false_positive (ci_high ≤ τ_fpr)]",
+    "benign_flag_rate": " [advisory — not gated (EV-AE10: a soft flag did not deny the user)]",
 }
 
 # (label, corpus subdir, indicators, render full LLM01 attribution block)
@@ -364,6 +372,20 @@ def _target(timeout: float, admin_url: str | None) -> GatewayTarget:
 def main() -> None:
     parser = argparse.ArgumentParser(description="active-eval consolidated report")
     parser.add_argument("--out", default=str(_ROOT / "reports" / "eval_report.md"))
+    parser.add_argument(
+        "--cases-out",
+        default=None,
+        help="also write the EV-R2 Tier-0 case contract (LLM01 injection) here — the per-case "
+        "verdict + the two recompute signals, POINTERS ONLY (no response content). "
+        "disclosure_class=operator_only: a tenant-internal bypass map; do NOT publish.",
+    )
+    parser.add_argument(
+        "--include-response-content",
+        action="store_true",
+        help="Tier 1: also embed the full response body + raw output in --cases-out. Sets "
+        "disclosure_class=internal_handoff — an INTERNAL handoff artifact (gitignored + WAL-read "
+        "gated) the report store REFUSES. Default OFF.",
+    )
     args = parser.parse_args()
 
     model = os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash")
@@ -377,6 +399,9 @@ def main() -> None:
     ]
     body: list[str] = []
     attributions: list[tuple[str, str]] = []
+    # EV-R2: the LLM01 injection corpus + its probes, captured for the case contract (--cases-out).
+    injection_corpus: tuple[CorpusCase, ...] | None = None
+    injection_results: list[ProbeResult] | None = None
     total_probes = 0
     wal_anchored = 0
     unverified_total = 0
@@ -394,6 +419,11 @@ def main() -> None:
             results = target.drain_governance(
                 results, timeout=_GOVERNANCE_DRAIN_TIMEOUT
             )
+        if subdir == "llm01_prompt_injection":
+            # EV-R2: the corpus whose injection_catch_rate / injection_success_rate / four cells the
+            # case contract must re-add bit-for-bit (§3.1). Captured AFTER the Tier-2 drain so the
+            # rows match the aggregate measurements this same run produced.
+            injection_corpus, injection_results = corpus, results
         total_probes += len(results)
         verified, unverified, broken = _evidence_coverage(results)
         wal_anchored += verified
@@ -406,6 +436,10 @@ def main() -> None:
         for ind in indicators:
             (m,) = ind.measure(results)
             tag = _SEVERITY_TAG.get(m.indicator_id, "")
+            # 件一: show FPR's actual 95% upper bound inline — the number the registry gate compares
+            # (EV-CIGATE: a low point estimate over few benign cases can still have ci_high > τ_fpr).
+            if m.indicator_id == "false_positive_rate" and m.ci_high is not None:
+                tag += f" ci_high={m.ci_high:.1%}"
             body.append(_indicator_line(m.indicator_id, m.value, m.sample_size, tag))
             body.append(f"  - {m.notes}")
         if render_attrib:
@@ -451,6 +485,44 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nwrote {out}")
+
+    if args.cases_out:
+        _write_case_contract(
+            injection_corpus,
+            injection_results,
+            args.cases_out,
+            include_response_content=args.include_response_content,
+        )
+
+
+def _write_case_contract(
+    corpus: Sequence[CorpusCase] | None,
+    results: Sequence[ProbeResult] | None,
+    path: str,
+    *,
+    include_response_content: bool,
+) -> None:
+    """EV-R2 — serialize + write the LLM01 injection case contract (§2, §8). serialize_case_contract
+    runs the §3.1 recompute guard, so a run whose cases can't re-add their own aggregates errors
+    here rather than writing a contract that lies."""
+    if not results:
+        sys.exit("--cases-out: no llm01_prompt_injection results to serialize")
+    contract = serialize_case_contract(
+        corpus or (),
+        results,
+        target_kind=_TARGET_KIND,
+        generated_at_ns=time.time_ns(),
+        include_response_content=include_response_content,
+    )
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(contract, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"wrote {dest}  (EV-R2 case contract: disclosure_class={contract['disclosure_class']}, "
+        f"{len(contract['cases'])} cases — do NOT publish)"
+    )
 
 
 if __name__ == "__main__":

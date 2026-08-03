@@ -42,6 +42,8 @@ KNOWN_INDICATOR_IDS = {
     # EV-7 表 A: active indicators now bound in the shipped registry.
     "injection_catch_rate",
     "tool_scope_violation_rate",
+    # GATE-CONSISTENCY 件一: the false-positive side of the two-sided detector gate (rob.l2).
+    "false_positive_rate",
 }
 
 _EXPECTED = {
