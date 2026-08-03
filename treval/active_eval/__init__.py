@@ -22,6 +22,16 @@ from treval.active_eval.checks import (
     scope_enforced,
     sensitive_disclosed,
 )
+from treval.active_eval.cases import (
+    CaseContractError,
+    assert_recomputes,
+    build_cases,
+    case_verdict,
+    observable_via,
+    recompute_from_cases,
+    serialize_case_contract,
+    validate_case_contract,
+)
 from treval.active_eval.corpus import (
     ContentPart,
     CorpusCase,
@@ -162,6 +172,15 @@ __all__ = [
     "Tier2ShadowRecallLift",
     "BenignShadowFlagRate",
     "attack_class_breakdown",
+    # EV-R2 — case-level result contract (Tier 0 pointers / Tier 1 opt-in; recompute-guarded)
+    "serialize_case_contract",
+    "build_cases",
+    "recompute_from_cases",
+    "assert_recomputes",
+    "validate_case_contract",
+    "case_verdict",
+    "observable_via",
+    "CaseContractError",
     # P3C-harness C3-2 — per-content_class FPR slice (honest-absence 3-tuple)
     "false_positive_by_content_class",
     "format_attribution_report",
