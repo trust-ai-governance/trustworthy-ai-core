@@ -283,6 +283,14 @@ def _cmd_coverage(args: argparse.Namespace) -> int:
     return run_coverage(args)
 
 
+def _cmd_cases_verify(args: argparse.Namespace) -> int:
+    # EV-R2 §9.3: pure re-add of ONE case contract against its own aggregates. Lazy import keeps
+    # the harness out of the `report` path, like the other operator commands.
+    from treval.cli.cases_verify import run_cases_verify
+
+    return run_cases_verify(args)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from treval.cli.collect import run_collect
 
@@ -342,6 +350,20 @@ def build_parser() -> argparse.ArgumentParser:
     cov.add_argument("--format", choices=("json", "human"), default="human")
     cov.add_argument("--out", default=None, help="write here (else stdout)")
     cov.set_defaults(func=_cmd_coverage)
+
+    # EV-R2 §9.3: `cases verify <file>` — re-add ONE case contract's rows to its own aggregates
+    # (self-consistency + tamper check; 🔴 NOT a proof the numbers are true — §9.4).
+    cases = sub.add_parser("cases", help="EV-R2 case-level contract tools")
+    cases_sub = cases.add_subparsers(dest="cases_command", required=True)
+    verify = cases_sub.add_parser(
+        "verify",
+        help="re-add a case contract's rows to its own aggregates (self-consistency + tamper "
+        "check; does NOT prove the numbers are true)",
+    )
+    verify.add_argument(
+        "cases_file", help="a Tier-0 case contract JSON (from --cases-out)"
+    )
+    verify.set_defaults(func=_cmd_cases_verify)
 
     for name, help_text in (
         ("collect", "drive the live gateway → Measurement bundle (operator)"),

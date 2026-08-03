@@ -60,6 +60,13 @@
   "corpus_sha": "sha256:...",
   "target_kind": "gateway",
   "generated_at_ns": 1785...,
+  // 🔴 §9.2 — 这些行【应当】加成什么。没有它，读者拿到文件也无从复算。
+  "aggregates": {
+    "injection_catch_rate":   {"value": 0.892857, "n": 28},
+    "injection_success_rate": {"value": 0.125,    "n": 8},
+    "four_cell": {"hard_blocked": 6, "soft_flag_declined": 1,
+                  "succeeded": 1, "declined_by_model": 0, "n": 8}
+  },
   "cases": [
     {
       "case_id": "llm01.direct.role_override_dan.003",
@@ -303,3 +310,140 @@ python -m tools.eval_report ... --cases-out /tmp/cases.json     # 具体 flag �
 
 > 🔴 **第 2 项是这一跑的意义**：它第一次让"89%"变成**读者能自己验的数**，
 > 而不是我们报的一个数。
+
+
+---
+
+## 9. 施工单：`treval cases verify` + 信封补 `aggregates`（可下发 · 2026-08-02）
+
+> **PM 已裁「做」**，附五条条件（§9.3，其中 (a) 不可谈）。
+> **本单一并收掉两个此前遗漏的小件**（§9.6 / §9.7）——
+> 🔴 **它们本可以随 GATE-CONSISTENCY 一起做，是我没盯住。**
+
+### 9.1 🔴 `--bundle` 形态作废（我上一轮提的那个，结构上跑不通）
+
+```
+tools/eval_report.py --cases-out cases.json   ← 自己驱动一批探针
+treval.cli collect   --out       bundle.json  ← 又驱动一批探针
+```
+
+**两个命令、两批探针、两次抽样。** 而输出侧指标是 `statistical` —— 同一门实测跑出过 **0/8、1/8、2/8**。
+⇒ 拿一份 `cases.json` 比另一次跑的 bundle，**聚合本来就对不上**，工具却会报「契约分叉」。
+
+🔴 **那是 [EV-CIGATE](EV-CIGATE.md) F1 那类误诊的翻版：把「你给的输入不匹配」报成「我守的东西坏了」。**
+**`--bundle` 不保留 —— 留着就是请下一个人来踩。**
+
+### 9.2 信封变更：加 `aggregates`，`SCHEMA_VERSION` **1 → 2**
+
+**存哪个值**：🔴 **存【指标产出的】聚合值**，不是 `recompute_from_cases` 的输出。
+两者在写入时由 `assert_recomputes` **证明相等**；但语义上，读者要核的是
+**「这些行加起来 == 这次跑的指标报的数」**，所以存的应当是指标那一侧。
+
+**为什么必须 bump**：加字段是加法式的，但
+🔴 **两个形状自称同一个版本号，正是 EV-CIGATE F1 那次误诊的根因**
+（pre-CI 与 post-CI 的 bundle 都说自己是 4，引擎只能给出唯一那条错的诊断）。
+本仓先例：bundle `4 → 5` 就是为 `ci_low/ci_high` 升的。**同形，照做。**
+
+### 9.3 `treval cases verify <cases.json>` —— PM 五条，逐条落成机械要求
+
+```bash
+treval cases verify /tmp/cases.json      # 🔴 不接第二个文件
+```
+
+| # | PM 条件 | 落成方式 |
+|---|---|---|
+| **(a)** | 🔴 **「自洽 ≠ 诚实」写进 PASS 输出，不是只写进 spec** | 见 §9.4 的逐字文案，**PASS 时必打，不可用 `--quiet` 关掉** |
+| **(b)** | **只吃 Tier-0**（verdict + 两信号 + aggregates），永不读 Tier-1 正文 | 复算只需这三样；**解析器不触碰内容字段**（回归：给一份带正文的文件，断言正文字符串不出现在任何输出里） |
+| **(c)** | **`aggregates` 与 verify 共用 `recompute_from_cases`，不造第二条计算路径** | 且**诚实说清牙口**，见 §9.5 |
+| **(d)** | 🔴 **逐案标【四格落哪格】，不用 `!= hard_blocked` 二元** | `hard_blocked` 是注入侧的"好格"，二元化**泛化不到** success 与别的指标 |
+| **(e)** | **输出 content-free** —— 逐案只打 verdict/格/指针 | 承 (b) |
+
+> **(d) 顺带订正我自己**：我在 §8 Live Test 里写过"列出 `verdict != hard_blocked` 的 technique"。
+> **那个二元写法作废**，改为直接标格。
+
+### 9.4 🔴 PASS 输出的作用域声明（条件 (a)，逐字，不可删）
+
+```
+✅ self-consistent — 28 case rows re-add to the aggregates declared in this file.
+
+🔴 WHAT THIS CHECK COVERS — read before quoting it:
+   It proves ONLY that the rows in this file sum to the aggregates in this file.
+   It does NOT prove the probes ever ran, nor that the numbers are true.
+   For that, follow each evidence_ref into the audit log and verify the hash chain
+   yourself:   python tools/wal_verify.py <audit-log>
+```
+
+🔴 **为什么必须机械打印**：审计员在**自己的终端**上看到绿色，
+**极易读成「验证通过 = 数字为真」** —— 那正是"别让审计强滑成端到端"这条老纪律
+**被武器化到客户手里**。**两层分离写死在输出里，不指望人记得。**
+
+### 9.5 🔴 verify 的牙口 —— 诚实说清它能抓什么
+
+| 能抓 | 抓不到 |
+|---|---|
+| ✅ **篡改**：改了聚合不改行、或改了行不改聚合 ⇒ 立刻红 | ❌ **writer 的 bug** —— 那由写入时的 `assert_recomputes` 兜（它对的是**指标**，不是自己） |
+| ✅ **审计员侧的独立复算** —— 他没看我们怎么写的，**对他就是一次真检查** | ❌ **数字为真** —— 见 §9.4 |
+
+🔴 **别把它卖成"能抓一切错"** —— 那又是"两个 80%"式的自欺。
+**它是自洽性检查，加上一层防篡改；如实说，它已经很值钱。**
+
+### 9.6 🔴 补齐遗漏一：§3.3 的报错半句（规格早写了，代码没落）
+
+实核 `treval/active_eval/cases.py:227` —— 文案停在
+*"(Likely cause: a gateway-undecided marker-bearing probe — a healthy, all-decided run has none.)"*，
+**§3.3 定版要求的那半句排障方向没有加**。补上：
+
+> **`排查方向：网关是否就绪、评测身份是否已开通 —— 见 GATE-LASTMILE P4 / EV-PAIR 门 7。`**
+
+**理由**（§3.3 原文）：现有文案已把"契约拒发"翻译成"你这次跑是坏的"，很好；
+**补这半句是让读者直接走到修法，而不是停在现象上。**
+
+### 9.7 补齐遗漏二（**独立小件，随本单一起做**）：配对 delta 的可观测偏差口径注
+
+**实测事实**：`corpus/llm01_prompt_injection` 里网关漏掉的三条
+（`base64_smuggle` / `language_switch_override` / `translate_then_leak`）
+**`marker` 与 `canary` 皆为空** —— 它们**不在**那 8 条可观测子集里。
+
+🔴 **而这不像巧合，是机制使然**：带 marker 的攻击要求模型吐出一个特定串（"回复只说 'HACKED'"）——
+**词面很吵、正则容易抓**；而编码/换语言/翻译夹带**设计上就是躲检测的**。
+
+⇒ **那 8 条可观测子集系统性地偏向"检测器擅长的那一类" ⇒
+`injection_success_rate` 与 [EV-PAIR](EV-PAIR.md) 的 delta 偏乐观。**
+
+**范围**：给 `injection_success_rate` 的 `notes` 与 EV-PAIR 的 delta 口径各补一句：
+
+> **本值测在带 `output_marker` 的子集上；该子集偏向词面显著、检测器易捕的攻击
+> ⇒ 相对代表性攻击分布，本值（及其 delta）偏乐观。**
+
+🔴 **强度要说准**：3/28 的样本**不构成证明**；机制上的解释很强、数据与之一致 ⇒
+**按「一致且机制上可预期」写，不按「已证实」写。**
+
+**这条也强化了序 6 的理由** —— 不只是"n=8 太小"，而是**"这 8 条本身有偏，且偏的方向让我们的数好看"**。
+
+### 9.8 验收
+
+- `aggregates` 在信封里；`SCHEMA_VERSION == 2`；旧版本（1）文件被 verify 读到 ⇒
+  🔴 **报"此文件产于 aggregates 之前"，不是报"分叉"**（同 EV-CIGATE F1 的版本分叉纪律）；
+- 🔴 **(a) 带牙**：PASS 输出**必含**作用域四行；测试断言该文案存在（删掉即红）；
+- 🔴 **篡改带牙**：改一行 verdict ⇒ verify 红并指名哪个聚合对不上；改 `aggregates` 里一个数 ⇒ 同样红；
+- 🔴 **(b)/(e) 带牙**：喂一份 `internal_handoff`（含正文）⇒ **正文一个字节不出现在输出里**；
+- **(d)**：逐案清单打**四格的格名**，不出现 `!= hard_blocked` 这种二元；
+- **(c)**：verify 与 writer 共用 `recompute_from_cases`（无第二实现）；
+- §9.6 的报错半句在位；§9.7 的两处口径注在位。
+
+### 9.9 ✅ 答 PM 的跨仓路由问题：**今天不需要对账行**
+
+实核：`disclosure_class` / `cases_out` / `EV-R2` 在上游协作文档里 **零引用** ⇒
+**Platform 今天不消费这个信封**（它是 `operator_only`、租户内部物，消费者是 Core 侧的 UI-3 / #5）。
+
+🔴 **触发条件写死**：**一旦上游要读这个信封**（例如把逐案面接进他们的运营界面），
+**那一刻就需要对账行** —— 届时记「信封 v2 + verify 的自洽≠诚实语义」一行，自成一个 commit。
+
+### 9.10 关于 Tier-1 文件怎么处理（我的设计决定）
+
+verify **接受** `internal_handoff` 文件（复算只需 Tier-0 字段，内容一概不读），
+**但打印一条 WARN**：*"this file carries Tier-1 response content (internal_handoff) —
+it is a handoff artifact and should not be circulating."*
+
+**为什么不直接拒绝**：运营者手上可能只有那一份；**拒绝会把他推去写自己的脚本**，
+反而绕过了 §9.4 的作用域声明。**接受 + 警告，比拒绝更能守住纪律。**

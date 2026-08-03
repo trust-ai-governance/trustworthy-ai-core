@@ -33,7 +33,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from treval.active_eval.checks import attribution_cell, evaluate, gateway_undecided
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import (
-    CorpusIndicator,
     InjectionCatchRate,
     InjectionDeclinedByModelRate,
     InjectionHardBlockedRate,
@@ -41,9 +40,14 @@ from treval.active_eval.indicators import (
     InjectionSuccessRate,
 )
 from treval.active_eval.target import ProbeResult
+from treval.models import Measurement
 from treval.rubric.serialize import derive_availability
 
-SCHEMA_VERSION = 1
+# §9.2 — 1→2 adds the `aggregates` block (the numbers the rows must re-add to). 🔴 The bump is not
+# cosmetic: two shapes self-reporting one version is the EV-CIGATE F1 mis-diagnosis root (a v1 file
+# read by `cases verify` must say "predates aggregates", NOT "fork"). Precedent: bundle 4→5 for ci.
+SCHEMA_VERSION = 2
+AGGREGATES_INTRODUCED_IN = 2
 
 # §3 — the verdict vocabulary is CLOSED: the EV-ATTRIB four cells + two measurability words.
 # 🔴 no NEW verdict word may be minted (a second source of truth diverges from the rates).
@@ -185,48 +189,98 @@ def recompute_from_cases(cases: Sequence[Mapping]) -> dict:
     }
 
 
-def assert_recomputes(cases: Sequence[Mapping], results: Iterable[ProbeResult]) -> None:
-    """§3.1 guard — the case rows must re-add the aggregate measurements BIT-FOR-BIT, or the
-    contract has forked from the indicators and is not trustworthy (raise CaseContractError). This
-    is the runtime form of "加不回来 = 不可信": a divergence (a tampered row, or an undecided-marker
-    case) fails CLOSED here instead of shipping a lying contract."""
+def _cell_count(m: Measurement) -> int:
+    """The integer count behind a cell rate — round(value·n) recovers the hits the indicator
+    counted (value is exactly hits/n, so the product is the integer for any realistic n)."""
+    return round(m.value * m.sample_size)
+
+
+def aggregates_from_results(results: Iterable[ProbeResult]) -> dict:
+    """§9.2 — the aggregate block the case contract embeds: 🔴 the values the INDICATORS produced
+    this run (NOT recompute_from_cases' output). The rows must re-add to THIS at write time
+    (assert_recomputes proves it against the indicators, §9.5 "它对的是指标，不是自己"), and the
+    reader (`cases verify`) re-adds the rows to this stored block."""
     results = list(results)
+    (catch,) = InjectionCatchRate().measure(results)
+    (succ,) = InjectionSuccessRate().measure(results)
+    (hard,) = InjectionHardBlockedRate().measure(results)
+    (soft,) = InjectionSoftFlagDeclinedRate().measure(results)
+    (declined,) = InjectionDeclinedByModelRate().measure(results)
+    return {
+        "injection_catch_rate": {"value": catch.value, "n": catch.sample_size},
+        "injection_success_rate": {"value": succ.value, "n": succ.sample_size},
+        "four_cell": {
+            "hard_blocked": _cell_count(hard),
+            "soft_flag_declined": _cell_count(soft),
+            "succeeded": _cell_count(succ),
+            "declined_by_model": _cell_count(declined),
+            "n": succ.sample_size,  # the four cells share the marker denominator
+        },
+    }
+
+
+def compare_cases_to_aggregates(
+    cases: Sequence[Mapping], aggregates: Mapping
+) -> list[str]:
+    """🔴 The SINGLE re-adder (§9.3-c) shared by the write-time guard and `treval cases verify`: it
+    re-adds the case rows via recompute_from_cases and returns the mismatch lines against an
+    `aggregates` block (empty list = the rows re-add exactly). No second summation path exists."""
     rc = recompute_from_cases(cases)
-    marker_den = rc["marker_denominator"]
-    checks: list[tuple[str, tuple[int, int], CorpusIndicator]] = [
-        ("injection_catch_rate", rc["injection_catch_rate"], InjectionCatchRate()),
-        (
-            "injection_success_rate",
-            rc["injection_success_rate"],
-            InjectionSuccessRate(),
-        ),
-        (
-            "hard_blocked",
-            (rc["four_cell"]["hard_blocked"], marker_den),
-            InjectionHardBlockedRate(),
-        ),
-        (
-            "soft_flag_declined",
-            (rc["four_cell"]["soft_flag_declined"], marker_den),
-            InjectionSoftFlagDeclinedRate(),
-        ),
-        (
-            "declined_by_model",
-            (rc["four_cell"]["declined_by_model"], marker_den),
-            InjectionDeclinedByModelRate(),
-        ),
-    ]
-    for name, (num, den), indicator in checks:
-        (m,) = indicator.measure(results)
+    out: list[str] = []
+
+    def _rate(name: str, num: int, den: int) -> None:
+        block = aggregates.get(name)
         value = num / den if den else 0.0
-        if den != m.sample_size or value != m.value:
-            raise CaseContractError(
-                f"§3.1 recompute FORK on {name}: the cases give {num}/{den} (value={value!r}), "
-                f"but the aggregate measurement is value={m.value!r} over n={m.sample_size}. The "
-                "case contract and the indicator have diverged ⇒ the contract cannot be re-added "
-                "and is not trustworthy. (Likely cause: a gateway-undecided marker-bearing probe — "
-                "a healthy, all-decided run has none.)"
+        if (
+            not isinstance(block, Mapping)
+            or block.get("n") != den
+            or block.get("value") != value
+        ):
+            declared = (
+                f"value={block.get('value')!r} n={block.get('n')!r}"
+                if isinstance(block, Mapping)
+                else "absent"
             )
+            out.append(
+                f"{name}: rows re-add to {num}/{den} (value={value!r}); file declares {declared}"
+            )
+
+    _rate("injection_catch_rate", *rc["injection_catch_rate"])
+    _rate("injection_success_rate", *rc["injection_success_rate"])
+    fc = aggregates.get("four_cell")
+    fc = fc if isinstance(fc, Mapping) else {}
+    for cell in _FOUR_CELL:
+        if rc["four_cell"][cell] != fc.get(cell):
+            out.append(
+                f"four_cell.{cell}: rows re-add to {rc['four_cell'][cell]}; file declares {fc.get(cell)!r}"
+            )
+    if rc["marker_denominator"] != fc.get("n"):
+        out.append(
+            f"four_cell.n: rows give {rc['marker_denominator']}; file declares {fc.get('n')!r}"
+        )
+    return out
+
+
+def _fork_message(mismatches: list[str]) -> str:
+    """The write-time fork message (§3.1) + the §9.6 troubleshooting half-sentence — so a refusal
+    points the reader at the FIX (gateway/identity readiness), not just at the symptom."""
+    return (
+        "§3.1 recompute FORK — the case rows do not re-add to the aggregate measurements ⇒ the "
+        "contract cannot be re-added and is not trustworthy: "
+        + "; ".join(mismatches)
+        + ". (Likely cause: a gateway-undecided marker-bearing probe — a healthy, all-decided run "
+        "has none. 排查方向：网关是否就绪、评测身份是否已开通 —— 见 GATE-LASTMILE P4 / EV-PAIR 门 7。)"
+    )
+
+
+def assert_recomputes(cases: Sequence[Mapping], results: Iterable[ProbeResult]) -> None:
+    """§3.1 guard — the case rows must re-add the INDICATOR aggregates BIT-FOR-BIT, or the contract
+    has forked and is not trustworthy (raise CaseContractError). The runtime form of "加不回来 =
+    不可信": a divergence (a tampered row, or an undecided-marker case) fails CLOSED here instead of
+    shipping a lying contract. Compares against the indicators (§9.5 — not against itself)."""
+    mismatches = compare_cases_to_aggregates(cases, aggregates_from_results(results))
+    if mismatches:
+        raise CaseContractError(_fork_message(mismatches))
 
 
 def serialize_case_contract(
@@ -249,7 +303,11 @@ def serialize_case_contract(
         target_kind=target_kind,
         include_response_content=include_response_content,
     )
-    assert_recomputes(built, results)
+    # §9.2 — embed the INDICATOR aggregates, then prove the rows re-add to them (fail-closed).
+    aggregates = aggregates_from_results(results)
+    mismatches = compare_cases_to_aggregates(built, aggregates)
+    if mismatches:
+        raise CaseContractError(_fork_message(mismatches))
     return {
         "schema_version": SCHEMA_VERSION,
         "disclosure_class": "internal_handoff"
@@ -258,6 +316,7 @@ def serialize_case_contract(
         "corpus_sha": corpus_fingerprint(cases),
         "target_kind": target_kind,
         "generated_at_ns": generated_at_ns,
+        "aggregates": aggregates,
         "cases": built,
     }
 

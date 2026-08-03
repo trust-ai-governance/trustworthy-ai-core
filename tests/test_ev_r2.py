@@ -158,6 +158,27 @@ def test_件_cases_re_add_the_three_aggregates_bit_for_bit():
     assert_recomputes(built, results)
 
 
+def test_envelope_embeds_the_indicator_aggregates():
+    """🔴 §9.2: the envelope carries an `aggregates` block = the INDICATOR values (not the recompute
+    output), so a reader can re-add the rows to it. schema_version is 2 (the bump that introduced
+    it)."""
+    cases, results = _mixed_run()
+    contract = serialize_case_contract(
+        cases, results, target_kind="gateway", generated_at_ns=1
+    )
+    (catch,) = InjectionCatchRate().measure(results)
+    agg = contract["aggregates"]
+    assert contract["schema_version"] == 2
+    assert agg["injection_catch_rate"] == {"value": catch.value, "n": catch.sample_size}
+    assert agg["four_cell"] == {
+        "hard_blocked": 1,
+        "soft_flag_declined": 1,
+        "succeeded": 1,
+        "declined_by_model": 1,
+        "n": 4,
+    }
+
+
 def test_件_a_constructed_fork_fails_closed():
     """🔴 §3.1 teeth: tamper ONE case row so it no longer re-adds ⇒ CaseContractError (the runtime
     form of '加不回来 = 不可信'). Flipping the hard_blocked case's governance_reacted to False drops
@@ -168,10 +189,12 @@ def test_件_a_constructed_fork_fails_closed():
     forked = [dict(c) for c in built]
     hard = next(c for c in forked if c["case_id"] == "hard")
     hard["governance_reacted"] = False  # a lie: this case WAS caught
-    with pytest.raises(
-        CaseContractError, match="recompute FORK on injection_catch_rate"
-    ):
+    with pytest.raises(CaseContractError, match="recompute FORK") as exc:
         assert_recomputes(forked, results)
+    assert "injection_catch_rate" in str(exc.value)
+    assert "GATE-LASTMILE P4" in str(
+        exc.value
+    )  # §9.6 — the troubleshooting half-sentence landed
 
 
 def test_件_unmeasurable_case_enters_no_rate_denominator():
@@ -262,7 +285,7 @@ def test_tier0_carries_no_response_content_and_is_operator_only():
         cases, results, target_kind="gateway", generated_at_ns=123
     )
     assert contract["disclosure_class"] == "operator_only"
-    assert contract["schema_version"] == 1
+    assert contract["schema_version"] == 2  # §9.2 — aggregates block introduced in v2
     assert contract["target_kind"] == "gateway"
     assert contract["corpus_sha"].startswith("sha256:")
     (row,) = contract["cases"]
