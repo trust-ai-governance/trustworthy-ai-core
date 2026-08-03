@@ -24,9 +24,11 @@ from treval.active_eval.checks import (
 )
 from treval.active_eval.cases import (
     CaseContractError,
+    aggregates_from_results,
     assert_recomputes,
     build_cases,
     case_verdict,
+    compare_cases_to_aggregates,
     observable_via,
     recompute_from_cases,
     serialize_case_contract,
@@ -176,6 +178,8 @@ __all__ = [
     "serialize_case_contract",
     "build_cases",
     "recompute_from_cases",
+    "aggregates_from_results",
+    "compare_cases_to_aggregates",
     "assert_recomputes",
     "validate_case_contract",
     "case_verdict",
