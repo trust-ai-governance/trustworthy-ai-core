@@ -91,6 +91,17 @@ def write_bundle(
         doc = json.loads(bundle_json)
     except json.JSONDecodeError as e:
         raise ReportStoreError(f"bundle is not valid JSON: {e}") from e
+    # EV-R2 §6.1-1 — the case-level store is SEPARATE from the report store. A case contract
+    # (marked by `disclosure_class`) must never land here: its Tier-1 `internal_handoff` content
+    # would leak, and even Tier-0 `operator_only` case rows are a tenant-scoped bypass map that
+    # belongs in the case store (UI-3), not the EV-R1 report bundles this store serves. Reject on
+    # the presence of the field so the separation is a GATE, not a convention.
+    if isinstance(doc, dict) and "disclosure_class" in doc:
+        raise ReportStoreError(
+            "refusing an EV-R2 case-level contract (carries 'disclosure_class'): the case store is "
+            "SEPARATE from the report store (§6.1-1) and Tier-1 'internal_handoff' content never "
+            "enters it — the report store holds EV-R1 report bundles only"
+        )
     if not isinstance(doc, dict) or "report" not in doc:
         raise ReportStoreError("bundle is not an EV-R1 envelope (no 'report')")
     report = doc["report"]
@@ -183,16 +194,16 @@ class ReportStore:
         return entries
 
     def resolve(
-        self, tenant: str | None = None, window: str | None = None
+        self, tenant: str | None = None, key: str | None = None
     ) -> ReportEntry | None:
-        """The entry for `(tenant, window)`; the newest report when both are None. `window`
-        is the string form "<start_ns>-<end_ns>" (what the URL carries). Returns None when
+        """The entry for `(tenant, key)`; the newest report when both are None. `key` is the
+        `selector_key` form the URL carries (window~generated_at_ns — 件三). Returns None when
         nothing matches — the caller renders a 404, never another tenant's report."""
         entries = self.list()
         if tenant is not None:
             entries = [e for e in entries if e.tenant_id == tenant]
-        if window is not None:
-            entries = [e for e in entries if window_key(e.window) == window]
+        if key is not None:
+            entries = [e for e in entries if selector_key(e) == key]
         return entries[0] if entries else None
 
     def read_bytes(self, entry: ReportEntry) -> bytes:
@@ -210,5 +221,14 @@ class ReportStore:
 
 
 def window_key(window: tuple[int, int]) -> str:
-    """The URL/selector form of a window: "<start_ns>-<end_ns>"."""
+    """The window's口径 string "<start_ns>-<end_ns>" — for DISPLAY (a label), NOT the selector key."""
     return f"{window[0]}-{window[1]}"
+
+
+def selector_key(entry: ReportEntry) -> str:
+    """GATE-CONSISTENCY 件三 — the URL/selector key for ONE report. 🔴 It composes the window with
+    `generated_at_ns` because the window alone is NOT unique: an UNPINNED active run has window
+    `[0,0]`, so N same-tenant reports would all key to "0-0" and the switcher could not tell them
+    apart (two identical options, none selectable). generated_at_ns disambiguates; the window is
+    still shown separately (window_label), never hidden just because it is a poor key."""
+    return f"{window_key(entry.window)}~{entry.generated_at_ns}"

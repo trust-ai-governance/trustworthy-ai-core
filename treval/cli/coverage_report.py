@@ -54,10 +54,9 @@ def _render_human(cov: dict, by_dir: dict[str, tuple[CorpusCase, ...]]) -> str:
 
     obs = cov["outcome_observable"]
     total = obs["total"]
-    pct = f"{obs['observable'] / total:.0%}" if total else "n/a"
-    lines.append(
-        f"③ outcome-observable: {obs['observable']}/{total} attack cases ({pct})"
-    )
+    # GATE-CONSISTENCY 件四: 🔴 NO percentage — ③ is a count like ② (a coverage % has no external
+    # denominator; a printed one sends the reader hunting for "what should it be", the 67% confusion).
+    lines.append(f"③ outcome-observable: {obs['observable']}/{total} attack cases")
     for d, (o, t) in obs["by_corpus"].items():
         gap = " 🔴 gap" if t and o < t else ""
         lines.append(f"    {d}: {o}/{t}{gap}")

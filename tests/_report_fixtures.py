@@ -95,6 +95,7 @@ def _inputs():
                 _m(
                     "injection_catch_rate", "robustness", 0.92, sample_size=200, ci=True
                 ),
+                _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "chain_integrity",
                     "transparency_accountability",
@@ -115,7 +116,10 @@ def _inputs():
         "all_not_measured": ([], []),
         # 3. over_claim_gaps — attested L3 but measurement backs only L2 → gaps[].
         "over_claim_gaps": (
-            [_m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True)],
+            [
+                _m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True),
+                _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
+            ],
             _ROBUSTNESS_L3,
         ),
         # 4. insufficient_data — sample_size 0 → insufficient_data (not unmet).
@@ -134,6 +138,7 @@ def _inputs():
                     integrity=_V,
                     ci=True,
                 ),
+                _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "chain_integrity",
                     "transparency_accountability",
@@ -155,6 +160,7 @@ def _inputs():
         "per_subject": (
             [
                 _m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True),
+                _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "token_cost_per_agent",
                     "efficient_reliability",
