@@ -1,0 +1,69 @@
+{% extends "cases_base.html" %}
+{% block title %}复算 · {{ entry.tenant_id }} · {{ key[:12] }}{% endblock %}
+
+{% macro case_rows(rows) %}
+  {% if not rows %}<p class="case-empty">（无）</p>
+  {% else %}
+  <table class="case-table">
+    <thead><tr><th>case_id</th><th>attack_technique</th><th>verdict</th><th>observable_via</th>
+      <th>governance_reacted</th><th>request_id</th><th>evidence_ref</th></tr></thead>
+    <tbody>
+    {% for c in rows %}
+      <tr>
+        <td class="mono">{{ c.case_id }}</td>
+        <td>{{ c.attack_technique }}</td>
+        <td>{{ c.verdict }}</td>
+        <td>{{ c.observable_via if c.observable_via is not none else '—' }}</td>
+        <td>{{ 'yes' if c.governance_reacted else 'no' }}</td>
+        <td class="mono">{{ c.request_id or '—' }}</td>
+        {# 🔴 §7/§6.3: evidence_ref is TEXT, never a link back to us — the only way to content is the
+           reader's own wal_verify.py against a WAL they can already read. #}
+        <td class="mono">{% if c.evidence_ref %}{{ c.evidence_ref.source }}#{{ c.evidence_ref.seq }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<p class="case-crossrun">📌 本页来自<strong>另一次评测运行</strong> · {{ run_time }} · corpus_sha={{ corpus_sha8 }}
+  —— 🔴 与成熟度报告<strong>不是同一次跑</strong>；同名指标是<strong>两次抽样</strong>，<strong>不可直接相减</strong>（EV-CIGATE F1 / §9.1）。</p>
+
+<pre class="case-scope">{{ scope_declaration }}</pre>
+
+<h2>③ 声明的 aggregates ‖ 从行再加出来的</h2>
+{% if mismatches %}
+  <p class="case-fork">🔴 分叉：这些行加不回本文件声明的数 —— 不要相信这份契约：</p>
+  <ul class="case-forklist">{% for m in mismatches %}<li class="mono">{{ m }}</li>{% endfor %}</ul>
+{% else %}
+  <p class="case-ok">✅ 相符：下面两栏逐位相等。🔴 这是<strong>便利，不是证据</strong> —— 见上方作用域声明；真正的验证是你在自己终端里再加一遍（⑤）。</p>
+{% endif %}
+<table class="case-table">
+  <thead><tr><th>aggregate</th><th>declared</th><th>re-added from the rows</th></tr></thead>
+  <tbody>
+    <tr><td>injection_catch_rate</td>
+      <td class="mono">{{ '%.4f'|format(aggregates.injection_catch_rate.value) }} (n={{ aggregates.injection_catch_rate.n }})</td>
+      <td class="mono">{{ recomputed.injection_catch_rate[0] }}/{{ recomputed.injection_catch_rate[1] }}</td></tr>
+    <tr><td>injection_success_rate</td>
+      <td class="mono">{{ '%.4f'|format(aggregates.injection_success_rate.value) }} (n={{ aggregates.injection_success_rate.n }})</td>
+      <td class="mono">{{ recomputed.injection_success_rate[0] }}/{{ recomputed.injection_success_rate[1] }}</td></tr>
+    <tr><td>four_cell (n={{ aggregates.four_cell.n }})</td>
+      <td class="mono">hard_blocked={{ aggregates.four_cell.hard_blocked }} soft_flag_declined={{ aggregates.four_cell.soft_flag_declined }} succeeded={{ aggregates.four_cell.succeeded }} declined_by_model={{ aggregates.four_cell.declined_by_model }}</td>
+      <td class="mono">hard_blocked={{ recomputed.four_cell.hard_blocked }} soft_flag_declined={{ recomputed.four_cell.soft_flag_declined }} succeeded={{ recomputed.four_cell.succeeded }} declined_by_model={{ recomputed.four_cell.declined_by_model }}</td></tr>
+  </tbody>
+</table>
+
+<h2>④ 逐案清单（🔴 按分母拆两块，§6.3）</h2>
+<h3>块 A — 进四格（observable_via ∈ output_marker / secret_canary，有结果信号）</h3>
+{{ case_rows(block_a) }}
+<h3>块 B — 只进检测分母（observable_via = null）—— 🔴 INVISIBLE to the four cells</h3>
+<p class="case-note">网关漏检里那几条不可观测的攻击（编码夹带 / 换语言覆盖 / 翻译夹带）就落在这里 —— 可观测子集偏差的现场，不只写在 caveat 里。</p>
+{{ case_rows(block_b) }}
+
+<h2>⑤ 自己验（🔴 承重物 —— 验证的终点是你自己的命令行，不是我们的页面）</h2>
+<ul class="case-verify">
+  <li><a href="{{ base }}/cases.json?key={{ key }}" download>下载 cases.json（存储字节，逐字，绝不重序列化）</a></li>
+  <li>在你自己的终端里再加一遍：<br><code class="case-cmd">{{ verify_command }}</code></li>
+</ul>
+{% endblock %}

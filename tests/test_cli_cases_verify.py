@@ -48,6 +48,7 @@ def _write_contract(tmp_path, *, include_response_content=False, response=""):
         cases,
         results,
         target_kind="gateway",
+        tenant_id="acme",
         generated_at_ns=1,
         include_response_content=include_response_content,
     )
@@ -112,7 +113,7 @@ def test_per_case_list_is_split_by_denominator(tmp_path):
         _probe("translate", decision=_ALLOW, marker=""),
     ]
     contract = serialize_case_contract(
-        cases, results, target_kind="gateway", generated_at_ns=1
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=1
     )
     # 🔴 the aggregate the reader would otherwise think contradicts the list:
     assert contract["aggregates"]["four_cell"]["declined_by_model"] == 0
@@ -177,6 +178,39 @@ def test_v1_file_reports_predates_aggregates_not_fork(tmp_path):
     assert (
         "fork" not in out.lower() or "NOT a fork" in out
     )  # never mis-diagnosed as a fork
+
+
+def test_v2_file_verifies_but_notes_it_predates_tenant_scoping(tmp_path):
+    """🔴 UI-3 §5.2 / acceptance 6 (verify side): a v2 contract (aggregates, no tenant_id) still
+    VERIFIES here — it re-adds fine — but prints that it predates tenant scoping, so the reader
+    knows a tenant-scoped case store will refuse it (the store side is tested in test_case_store)."""
+    path, _ = _write_contract(tmp_path)
+    doc = json.loads(path.read_text())
+    doc["schema_version"] = 2
+    doc.pop("tenant_id")  # a genuine pre-tenant contract
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    rc, out = _run(path)
+    assert rc == 0  # still re-adds → PASS
+    assert "predates tenant scoping" in out
+    assert "✅ self-consistent" in out
+
+
+def test_empty_contract_verifies_but_prints_no_check(tmp_path):
+    """🔴 acceptance 15 (verify side): an all-errored (empty) contract is ACCEPTED — it IS
+    self-consistent (0 = 0) — but must NOT print ✅; it prints ⚠️ EMPTY so 'empty' is never read as
+    'passed' (the second form of the disease the scope declaration guards, §5.4)."""
+    cases = [_case(f"c{i}", technique="t") for i in range(3)]
+    results = [_probe(f"c{i}", decision=None, error="ReadTimeout") for i in range(3)]
+    doc = serialize_case_contract(
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=1
+    )
+    path = tmp_path / "empty.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    rc, out = _run(path)
+    assert rc == 0  # accepted (it re-adds), NOT rejected
+    assert "✅ self-consistent" not in out  # 🔴 no green check on an empty run
+    assert "EMPTY" in out and "0 measurable cases" in out
+    assert "GATE-LASTMILE P4" in out  # points at the fix (gateway/identity readiness)
 
 
 def test_tier1_file_is_accepted_with_a_warning_and_stays_content_free(tmp_path):

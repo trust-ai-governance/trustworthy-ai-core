@@ -90,6 +90,31 @@ def test_dashboard_and_detail_render(client):
     assert "判定规则与本次结果" in client.get("/detail").text
 
 
+def test_cases_nav_item_only_when_cases_url_is_set(store_dir):
+    """🔴 P2: the 「用例明细」 sidenav item (subtitle 「逐条用例的判定 · 可自行复算聚合数」) links to the
+    case service and appears ONLY when create_app is given cases_url — i.e. when __main__ actually
+    mounts it. No cases_url ⇒ the item is absent (the case service is a separate, self-authed app)."""
+    pytest.importorskip("fastapi", reason="optional treval[web] extra not installed")
+    from fastapi.testclient import TestClient
+
+    from treval.web import create_app
+
+    with_cases = (
+        TestClient(create_app(store_dir=store_dir, cases_url="/cases")).get("/").text
+    )
+    assert "用例明细" in with_cases and 'href="/cases/"' in with_cases
+    assert "逐条用例的判定 · 可自行复算聚合数" in with_cases
+    without = TestClient(create_app(store_dir=store_dir)).get("/").text
+    assert "用例明细" not in without
+
+
+def test_no_drilldown_wording_anywhere(client):
+    """🔴 P2: the word 「下钻」 must not appear on the report pages — the case service is a peer view
+    ('用例明细'), not a drill-down of the report."""
+    for path in ("/", "/detail"):
+        assert "下钻" not in client.get(path).text
+
+
 def test_static_assets_are_cache_busted(client, tmp_path, monkeypatch):
     """Static links must carry a ?v=<hash> that changes with content — else browsers cache a
     stale style.css/*.js and a CSS change silently doesn't take (a ? renders as a square, a
@@ -342,7 +367,14 @@ def test_api_registry_still_served(client):
 
 
 def test_no_mutating_routes_anywhere(client):
-    for path in ("/", "/detail", "/reports", "/report.json", "/api/registry"):
+    for path in (
+        "/",
+        "/detail",
+        "/registry",
+        "/reports",
+        "/report.json",
+        "/api/registry",
+    ):
         for method in ("post", "put", "delete", "patch"):
             resp = getattr(client, method)(path)
             assert resp.status_code in (404, 405), (

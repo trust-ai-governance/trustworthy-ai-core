@@ -30,6 +30,9 @@
      window and 404'd (`?tenant=__eval__&window=1784252968666568040-…`). Changing tenant is a
      new scope: it must submit tenant ALONE and let the server pick that tenant's newest.
      Two forms get this right with no JS, so the <noscript> path behaves identically. #}
+  {# No reports in the store ⇒ nothing to select: the tenant/window switchers are omitted rather
+     than rendered empty (P3 — the empty state is a dashboard skeleton, not a different page). #}
+  {% if scope and scope.windows %}
   <div class="scope">
     <form class="ctl" method="get" action="{{ '/detail' if view == 'detail' else '/' }}">
       <label for="sel-tenant">被测租户</label>
@@ -59,6 +62,7 @@
       <noscript><button type="submit">切换</button></noscript>
     </form>
   </div>
+  {% endif %}
 </header>
 
 <div class="shell">
@@ -68,6 +72,15 @@
          href="/?{{ qs }}" {% if view == 'dash' %}aria-current="page"{% endif %}>Dashboard</a>
       <a class="navitem {% if view == 'detail' %}on{% endif %}"
          href="/detail?{{ qs }}" {% if view == 'detail' %}aria-current="page"{% endif %}>报告详情</a>
+      {# 成熟度标准 (EV-W0): the rating standard itself, report-INDEPENDENT — always available,
+         so an empty store still has somewhere to go. #}
+      <a class="navitem {% if view == 'registry' %}on{% endif %}"
+         href="/registry" {% if view == 'registry' %}aria-current="page"{% endif %}>成熟度标准</a>
+      {# 案级服务是独立的 app（自带鉴权 §4.2.1）——挂载时才出现；这里只是一个外链，不是 drill-down。 #}
+      {% if cases_url %}
+      <a class="navitem navitem-cases" href="{{ cases_url }}">用例明细
+        <span class="navsub">逐条用例的判定 · 可自行复算聚合数</span></a>
+      {% endif %}
     </nav>
   </aside>
 

@@ -76,9 +76,16 @@ def create_app(
     registry_path: str | Path | None = None,
     store_dir: str | Path | None = None,
     token: str | None = None,
+    cases_url: str | None = None,
 ) -> FastAPI:
     """Build the read-only viewer. `store_dir` defaults to `$TREVAL_REPORT_STORE`;
-    `token`, when set (or `$TREVAL_WEB_TOKEN`), is required on every route."""
+    `token`, when set (or `$TREVAL_WEB_TOKEN`), is required on every route.
+
+    `cases_url` — when the case service is mounted, the URL of its root, so the sidenav can show a
+    「用例明细」 item. It is passed ONLY by `__main__` at the moment it actually mounts (§4.3): NOT
+    read from the env here, so a direct caller never grows a nav link to a service that isn't there.
+    Unset ⇒ the item does NOT appear (§4.2.1: the case service is a separate app with its own auth;
+    the report app only *links* to it)."""
     registry = serialize_registry(load_registry(registry_path))
     objective_count = sum(
         len(objs) for dim in registry["dimensions"] for objs in dim["levels"].values()
@@ -87,6 +94,8 @@ def create_app(
     store = ReportStore(store_path)
     required_token = token if token is not None else os.environ.get("TREVAL_WEB_TOKEN")
     static_v = _static_version(_STATIC)  # cache-bust token for /static links
+    # Normalize to the case service's ROOT (its access page lives at "<mount>/"); None ⇒ no nav item.
+    resolved_cases_url = (cases_url.rstrip("/") + "/") if cases_url else None
 
     def auth(request: Request) -> None:
         if not required_token:
@@ -163,6 +172,7 @@ def create_app(
                 ),
                 "rerun_command": RERUN_COMMAND,
                 "levels_meta": registry["levels_meta"],
+                "cases_url": resolved_cases_url,
                 "static_v": static_v,
             }
         )
@@ -193,13 +203,17 @@ def create_app(
         request: Request, tenant: str | None = None, window: str | None = None
     ) -> Any:
         if not store.list():
+            # P3: an empty store keeps the Dashboard skeleton with an empty state — it does NOT
+            # silently swap to a different page. (The maturity-model standard view now has its own
+            # /registry route + sidebar item, so it is still reachable — including from here.)
             return templates.TemplateResponse(
                 request,
-                "registry.html",
+                "dashboard_empty.html",
                 {
-                    "levels_meta": registry["levels_meta"],
-                    "dimensions": registry["dimensions"],
-                    "objective_count": objective_count,
+                    "rerun_command": RERUN_COMMAND,
+                    "cases_url": resolved_cases_url,
+                    "qs": "",
+                    "scope": None,
                     "static_v": static_v,
                 },
             )
@@ -210,5 +224,26 @@ def create_app(
         request: Request, tenant: str | None = None, window: str | None = None
     ) -> Any:
         return _page(request, "detail.html", tenant, window)
+
+    @app.get("/registry", response_class=HTMLResponse)
+    def registry_view(request: Request) -> Any:
+        """EV-W0 maturity-model STANDARD view (5×5 grid, 72 controls) — the human face of the
+        registry contract. A sidebar peer of Dashboard/详情/用例明细, and report-INDEPENDENT: it does
+        not read the report store, so it is available even when the store is empty (the empty-state
+        page's onward destination). Split out from the old empty-store fallback so an empty store
+        keeps the Dashboard skeleton while this view has its own stable URL."""
+        return templates.TemplateResponse(
+            request,
+            "registry.html",
+            {
+                "levels_meta": registry["levels_meta"],
+                "dimensions": registry["dimensions"],
+                "objective_count": objective_count,
+                "cases_url": resolved_cases_url,
+                "qs": "",
+                "scope": None,
+                "static_v": static_v,
+            },
+        )
 
     return app

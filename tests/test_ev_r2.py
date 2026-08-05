@@ -164,11 +164,11 @@ def test_envelope_embeds_the_indicator_aggregates():
     it)."""
     cases, results = _mixed_run()
     contract = serialize_case_contract(
-        cases, results, target_kind="gateway", generated_at_ns=1
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=1
     )
     (catch,) = InjectionCatchRate().measure(results)
     agg = contract["aggregates"]
-    assert contract["schema_version"] == 2
+    assert contract["schema_version"] == 3
     assert agg["injection_catch_rate"] == {"value": catch.value, "n": catch.sample_size}
     assert agg["four_cell"] == {
         "hard_blocked": 1,
@@ -282,11 +282,12 @@ def test_tier0_carries_no_response_content_and_is_operator_only():
     cases = [_case("x", technique="t1")]
     results = [_probe("x", decision=_ALLOW, response_text=secret, raw_response=secret)]
     contract = serialize_case_contract(
-        cases, results, target_kind="gateway", generated_at_ns=123
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=123
     )
     assert contract["disclosure_class"] == "operator_only"
-    assert contract["schema_version"] == 2  # §9.2 — aggregates block introduced in v2
+    assert contract["schema_version"] == 3  # UI-3 §5.2 — v3 adds tenant_id
     assert contract["target_kind"] == "gateway"
+    assert contract["tenant_id"] == "acme"  # v3: the tenant the probes ran as
     assert contract["corpus_sha"].startswith("sha256:")
     (row,) = contract["cases"]
     assert "response_text" not in row and "raw_response" not in row
@@ -312,6 +313,7 @@ def test_tier1_opt_in_embeds_content_and_is_internal_handoff():
         cases,
         results,
         target_kind="gateway",
+        tenant_id="acme",
         generated_at_ns=1,
         include_response_content=True,
     )
@@ -325,12 +327,13 @@ def test_report_store_refuses_a_case_contract(tmp_path):
     cases = [_case("x", technique="t1")]
     results = [_probe("x", decision=_ALLOW)]
     tier0 = serialize_case_contract(
-        cases, results, target_kind="gateway", generated_at_ns=1
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=1
     )
     tier1 = serialize_case_contract(
         cases,
         results,
         target_kind="gateway",
+        tenant_id="acme",
         generated_at_ns=1,
         include_response_content=True,
     )

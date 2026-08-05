@@ -63,6 +63,12 @@ code { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
 
 /* ---- grid ------------------------------------------------------------- */
 .grid-wrap { padding: 20px; overflow: auto; }
+/* 成熟度标准 now renders inside the shared .wrap (sidebar shell); the grid keeps its min-width and
+   scrolls horizontally here rather than in its own full-bleed <main>. */
+.std-head .std-lead { margin: 0 0 8px; }
+.std-gridwrap { overflow-x: auto; margin: 4px 0 12px; }
+.std-source { font-size: 11px; color: var(--muted); margin: 8px 2px 0; }
+.std-source code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
 .grid {
   display: grid;
   grid-template-columns: minmax(150px, 0.85fr) repeat(var(--cols), minmax(220px, 1fr));
@@ -220,6 +226,10 @@ code { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
 .navitem:hover { background: rgba(255, 255, 255, .08); color: #fff; }
 .navitem.on { color: #fff; background: rgba(255, 198, 43, .14); font-weight: 600;
   border-left-color: var(--logo); }
+/* 用例明细 links out to the (separately-authed) case service — a subtitle, not a badge. */
+.navitem-cases { display: block; }
+.navitem-cases .navsub { display: block; margin-top: 2px; font-size: 11px;
+  font-weight: 400; color: rgba(255, 255, 255, .5); }
 .navitem:focus-visible, .chips button:focus-visible, select:focus-visible,
 input:focus-visible { outline: 2px solid var(--measured); outline-offset: 2px; }
 @media (max-width: 860px) {
@@ -318,6 +328,10 @@ input:focus-visible { outline: 2px solid var(--measured); outline-offset: 2px; }
 /* --- 判定规则表 (WAF-signature posture: inspectable, categorically not editable) --- */
 .acts { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 14px; margin-bottom: 14px; font-size: 13px; }
+.acts.empty-state { padding: 28px; text-align: center; }
+.acts.empty-state h2 { margin: 0 0 8px; }
+.acts.empty-state #actlead { max-width: 46rem; margin: 0 auto; text-align: left; }
+.acts.empty-state .cmd { text-align: left; }
 .cmd { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
   padding: 10px 12px; overflow-x: auto; font-family: var(--mono); font-size: 12px; margin: 8px 0 0; }
 .sig { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
@@ -422,3 +436,47 @@ th .pop { left: auto; right: 0; }
 .pin.synthetic { background: var(--risk); border-radius: 4px; padding: 2px 8px; }
 .pin.synthetic b, .pin.synthetic .help { color: #fff; }
 .pin.synthetic::before { content: "◆ "; color: #fff; }
+
+/* ── UI-3a case service — shares the MAIN app chrome (topbar / logo / palette / tables) per PM
+   2026-08-05. It reuses .topbar/.brand/.titles/.logo/.subtitle above; only case-specific pieces are
+   added here, all in the main app's variables (--panel/--line/--ink/--headbg/--logo/--radius). The
+   disclosure discipline rides the loud operator_only warning line, not a different colour scheme. */
+.case-warn {                          /* the operator_only line, below the title, kept LOUD on navy */
+  display: inline-block; margin-top: 6px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(180, 22, 42, .38); border: 1px solid rgba(255, 120, 120, .5);
+  color: #ffe1e1; font-weight: 600; font-size: 12.5px; }
+.case-wrap { max-width: 1180px; margin: 0 auto; padding: 20px; }
+.case-wrap h2 { margin-top: 1.7rem; border-bottom: 1px solid var(--line);
+  padding-bottom: .25rem; color: var(--ink); font-size: 18px; }
+.case-wrap h3 { margin-top: 1rem; color: var(--muted); font-size: 14px; }
+.case-scope {                         /* terminal-style declaration — a dark code block, main headbg */
+  background: var(--headbg); color: #e5e7eb; padding: 12px 14px; border-radius: var(--radius);
+  border: 1px solid var(--line); white-space: pre-wrap; font-size: 12.5px; line-height: 1.5; }
+.case-table {                         /* matches the report app: white panel, --line grid, dark head */
+  border-collapse: collapse; width: 100%; margin: .6rem 0; font-size: 13px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.case-table th { background: var(--headbg); color: #fff; text-align: left; padding: 8px 10px; font-weight: 600; }
+.case-table td { border-top: 1px solid var(--line); padding: 6px 10px; color: var(--ink); vertical-align: top; }
+.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+.case-ok { color: var(--awarded); }
+.case-fork { color: #b91c1c; font-weight: 600; }
+.case-forklist li { color: #b91c1c; }
+.case-note { color: var(--muted); font-size: 13px; }
+.case-empty { color: var(--muted); }
+.case-cmd { display: inline-block; background: var(--headbg); color: #e5e7eb; padding: 6px 10px;
+  border-radius: 4px; margin-top: 4px; }
+.case-verify li { margin: .4rem 0; }
+.case-foot { color: var(--muted); }
+.case-logout { color: var(--muted); text-decoration: underline; }
+/* §3.4 access page */
+.case-access { max-width: 560px; }
+.case-access-en { color: var(--muted); font-weight: 400; font-size: 14px; }
+.case-loginform { display: flex; gap: 8px; margin: 14px 0; }
+.case-key { flex: 1; padding: 9px 12px; font-size: 15px; border: 1px solid var(--line);
+  border-radius: var(--radius); background: var(--panel); color: var(--ink); }
+.case-btn { padding: 9px 18px; font-size: 15px; font-weight: 600; color: #fff; cursor: pointer;
+  background: var(--banner-1); border: 1px solid var(--banner-2); border-radius: var(--radius); }
+.case-btn:hover { background: var(--banner-2); }
+/* §4.2.1 cross-run self-report — a case run is NOT the report run; its metrics can't be subtracted */
+.case-crossrun { background: #fff7ed; border: 1px solid #fed7aa; color: #7c2d12;
+  padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin: 4px 0 8px; }

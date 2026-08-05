@@ -348,7 +348,7 @@ def _resolve_admin_url() -> tuple[str | None, str]:
     return derived, f"admin_url={derived} (derived from gateway data plane +1)"
 
 
-def _target(timeout: float, admin_url: str | None) -> GatewayTarget:
+def _target(timeout: float, admin_url: str | None, tenant: str) -> GatewayTarget:
     url = os.environ.get("TREVAL_EVAL_GATEWAY_URL")
     if not url:
         sys.exit(
@@ -357,7 +357,9 @@ def _target(timeout: float, admin_url: str | None) -> GatewayTarget:
     return GatewayTarget(
         url,
         wal_dir=os.environ.get("TREVAL_EVAL_WAL_DIR"),
-        tenant_id=os.environ.get("TREVAL_EVAL_TENANT", "__eval__"),
+        # UI-3 §5.2: ONE tenant read (main's), threaded in — not a second env read here that could
+        # drift from the tenant stamped on the case contract (which reads target.tenant_id).
+        tenant_id=tenant,
         user_id=os.environ.get("TREVAL_EVAL_USER", "eval-user"),
         model=os.environ.get("TREVAL_EVAL_MODEL", "deepseek-v4-flash"),
         temperature=0.0,  # pin for the statistical (leak/disclosure/passthrough) verticals
@@ -402,6 +404,9 @@ def main() -> None:
     # EV-R2: the LLM01 injection corpus + its probes, captured for the case contract (--cases-out).
     injection_corpus: tuple[CorpusCase, ...] | None = None
     injection_results: list[ProbeResult] | None = None
+    injection_target: GatewayTarget | None = (
+        None  # UI-3 §5.2: its tenant stamps the contract
+    )
     total_probes = 0
     wal_anchored = 0
     unverified_total = 0
@@ -410,7 +415,7 @@ def main() -> None:
     undecided_total = 0
     for label, subdir, indicators, render_attrib in _VERTICALS:
         timeout = _LLM10_TIMEOUT if subdir in _SLOW_VERTICALS else _DEFAULT_TIMEOUT
-        target = _target(timeout, admin_url)
+        target = _target(timeout, admin_url, tenant)
         corpus = load_corpus(_CORPUS / subdir)
         results = list(run_corpus(corpus, target))
         if subdir in _TIER2_VERTICALS:
@@ -423,7 +428,11 @@ def main() -> None:
             # EV-R2: the corpus whose injection_catch_rate / injection_success_rate / four cells the
             # case contract must re-add bit-for-bit (§3.1). Captured AFTER the Tier-2 drain so the
             # rows match the aggregate measurements this same run produced.
-            injection_corpus, injection_results = corpus, results
+            injection_corpus, injection_results, injection_target = (
+                corpus,
+                results,
+                target,
+            )
         total_probes += len(results)
         verified, unverified, broken = _evidence_coverage(results)
         wal_anchored += verified
@@ -490,6 +499,7 @@ def main() -> None:
         _write_case_contract(
             injection_corpus,
             injection_results,
+            injection_target,
             args.cases_out,
             include_response_content=args.include_response_content,
         )
@@ -498,19 +508,22 @@ def main() -> None:
 def _write_case_contract(
     corpus: Sequence[CorpusCase] | None,
     results: Sequence[ProbeResult] | None,
+    target: GatewayTarget | None,
     path: str,
     *,
     include_response_content: bool,
 ) -> None:
     """EV-R2 — serialize + write the LLM01 injection case contract (§2, §8). serialize_case_contract
     runs the §3.1 recompute guard, so a run whose cases can't re-add their own aggregates errors
-    here rather than writing a contract that lies."""
-    if not results:
+    here rather than writing a contract that lies. 🔴 UI-3 §5.2: the contract's tenant is
+    `target.tenant_id` — the tenant the probes actually ran as — never a second env read."""
+    if not results or target is None:
         sys.exit("--cases-out: no llm01_prompt_injection results to serialize")
     contract = serialize_case_contract(
         corpus or (),
         results,
         target_kind=_TARGET_KIND,
+        tenant_id=target.tenant_id,
         generated_at_ns=time.time_ns(),
         include_response_content=include_response_content,
     )

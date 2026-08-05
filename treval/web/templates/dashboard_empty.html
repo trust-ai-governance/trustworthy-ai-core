@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% set view = 'dash' %}
+{% block title %}成熟度报告 — 空库{% endblock %}
+{% block content %}
+
+{# P3: the store is empty. Stay on the Dashboard skeleton (same banner + nav) and show an empty
+   state — do NOT silently swap to a different page (the maturity-model standard view). The banner's
+   tenant/window switchers are omitted upstream (base.html) because there is nothing to select. #}
+<section class="acts empty-state">
+  <h2>库里还没有报告 <span class="en">No reports yet</span></h2>
+  <p id="actlead">这是<b>成熟度报告</b>面板的空状态：报告库（<code>reports/store</code>）里还没有任何存档。
+    本视图<b>只读</b>——不评分、不重算；先在命令行跑一次评测，产物入库后这里就会显示。</p>
+  <pre id="rerun" class="cmd"><code>{{ rerun_command }}</code></pre>
+</section>
+{% endblock %}

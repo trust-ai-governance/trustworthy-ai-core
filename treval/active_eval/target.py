@@ -269,12 +269,20 @@ class GatewayTarget:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
         self._wal_dir = Path(wal_dir) if wal_dir is not None else None
+        # UI-3 §5.2: the case contract's tenant MUST equal the tenant the probes ran as (the WAL
+        # `evidence_ref` points at). Expose it read-only so the producer reads it from HERE, never
+        # a second `TREVAL_EVAL_TENANT` env read that could drift from what actually ran.
         self._user_id = user_id
         self._model = model
         self._invoke_path = invoke_path
         self._temperature = temperature
         self._timeout = timeout
         self._admin_url = admin_url.rstrip("/") if admin_url is not None else None
+
+    @property
+    def tenant_id(self) -> str:
+        """The tenant these probes run as (UI-3 §5.2) — read-only; the case contract's tenant."""
+        return self._tenant_id
 
     def probe(self, case: CorpusCase) -> ProbeResult:
         import httpx  # lazy: only needed to drive a live gateway

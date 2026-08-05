@@ -1,0 +1,18 @@
+{% extends "cases_base.html" %}
+{% block title %}访问 · 案级 Tier-0 复算{% endblock %}
+{% block content %}
+<div class="case-access">
+  <h2>访问密钥 <span class="case-access-en">Access key</span></h2>
+  <p>这是<strong>案级 Tier-0 复算服务</strong>（<code>operator_only</code>）—— 逐条用例的判定，用来
+     <strong>当场把聚合数（如 89.3%）从逐案行加回来</strong>，无需有人把文件发给你。</p>
+  {% if error %}<p class="case-fork">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ base }}/session" class="case-loginform">
+    <input type="hidden" name="next" value="{{ next }}">
+    <input type="password" name="key" class="case-key" placeholder="访问密钥 · access key"
+           autofocus autocomplete="current-password" aria-label="访问密钥">
+    <button type="submit" class="case-btn">进入</button>
+  </form>
+  <p class="case-note">🔒 租户内部物；<strong>密钥即身份</strong>（无用户名、无注册页、无会话表）。脚本 / CI
+     可用 <code>curl -u :&lt;访问密钥&gt; http://127.0.0.1:8091/</code>。</p>
+</div>
+{% endblock %}

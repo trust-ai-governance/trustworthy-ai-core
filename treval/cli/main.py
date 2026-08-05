@@ -291,6 +291,13 @@ def _cmd_cases_verify(args: argparse.Namespace) -> int:
     return run_cases_verify(args)
 
 
+def _cmd_cases_store(args: argparse.Namespace) -> int:
+    # UI-3 §5.3: the fail-closed ingest gate into the tenant-scoped case store (pure — no engine).
+    from treval.cli.cases_store import run_cases_store
+
+    return run_cases_store(args)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     from treval.cli.collect import run_collect
 
@@ -364,6 +371,19 @@ def build_parser() -> argparse.ArgumentParser:
         "cases_file", help="a Tier-0 case contract JSON (from --cases-out)"
     )
     verify.set_defaults(func=_cmd_cases_verify)
+
+    # UI-3 §5.3: `cases store <file> --store DIR` — fail-closed ingest into the tenant-scoped store.
+    store_cases = cases_sub.add_parser(
+        "store",
+        help="ingest a v3 case contract into a tenant-scoped case store (fail-closed gate)",
+    )
+    store_cases.add_argument("cases_file", help="a v3 case contract JSON")
+    store_cases.add_argument(
+        "--store",
+        default=None,
+        help="case store dir (default $TREVAL_CASE_STORE). 🔴 NEVER the report store — no fallback.",
+    )
+    store_cases.set_defaults(func=_cmd_cases_store)
 
     for name, help_text in (
         ("collect", "drive the live gateway → Measurement bundle (operator)"),

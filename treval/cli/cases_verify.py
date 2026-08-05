@@ -15,6 +15,17 @@ import argparse
 import json
 from pathlib import Path
 
+# UI-3 §5.1 — read the pure contract module, NOT active_eval.cases: `cases verify` re-adds rows and
+# never runs a probe, so it must not pull the harness (module-level import, no longer lazy).
+from treval.case_contract import (
+    AGGREGATES_INTRODUCED_IN,
+    TENANT_INTRODUCED_IN,
+    CaseContractError,
+    compare_cases_to_aggregates,
+    contract_is_empty,
+    validate_case_contract,
+)
+
 EXIT_OK = 0
 EXIT_MISMATCH = 2  # tamper / fork / un-verifiable file — a refusal, never a silent pass
 EXIT_IO = 3
@@ -43,8 +54,6 @@ _CELL_ORDER = (
 
 
 def _load(path: str) -> dict:
-    from treval.active_eval.cases import CaseContractError, validate_case_contract
-
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError as e:
@@ -134,12 +143,6 @@ def _fmt_cases(cases: list[dict], aggregates: dict) -> list[str]:
 
 
 def run_cases_verify(args: argparse.Namespace) -> int:
-    from treval.active_eval.cases import (
-        AGGREGATES_INTRODUCED_IN,
-        CaseContractError,
-        compare_cases_to_aggregates,
-    )
-
     try:
         doc = _load(args.cases_file)
     except CaseContractError as e:
@@ -163,6 +166,16 @@ def run_cases_verify(args: argparse.Namespace) -> int:
             flush=True,
         )
         return EXIT_MISMATCH
+
+    # §5.2 — a v2 file (aggregates but no tenant_id) still VERIFIES here; note that it predates
+    # tenant scoping so the reader knows a tenant-scoped case store will refuse it (re-run for v3).
+    if version < TENANT_INTRODUCED_IN:
+        print(
+            f"ℹ note: schema_version {version} predates tenant scoping (v{TENANT_INTRODUCED_IN}) — "
+            "this file verifies, but a tenant-scoped case store will refuse it; re-run the eval to "
+            "produce a v3 contract.",
+            flush=True,
+        )
 
     # §9.10 — accept a Tier-1 (internal_handoff) file (re-adding reads only Tier-0 fields, never the
     # content), but WARN: rejecting would push the operator to write their own script and bypass the
@@ -189,6 +202,22 @@ def run_cases_verify(args: argparse.Namespace) -> int:
             flush=True,
         )
         return EXIT_MISMATCH
+
+    # 🔴 §5.4 — an EMPTY contract (all aggregates n=0, e.g. an all-errored / gateway-unreachable run)
+    # re-adds trivially (0 = 0). Accepting it is correct (this IS a file self-consistency check), but
+    # it must NOT print ✅: an empty read as a pass is the same disease the scope declaration guards
+    # (a self-check read as verified) — the second form is "empty read as measured".
+    if contract_is_empty(doc):
+        errored = sum(1 for c in cases if c.get("verdict") == "errored")
+        print(
+            f"⚠️ self-consistent but EMPTY — 0 measurable cases ({errored} of {len(cases)} errored).\n"
+            '   本次跑没有可测样本；"自洽"在这里只是 0 = 0。网关不可达或评测身份未开通会产生这种契约 ——\n'
+            "   见 GATE-LASTMILE P4 / EV-PAIR 门 7（确认网关就绪、身份已开通后重跑）。\n"
+        )
+        print(_SCOPE_DECLARATION + "\n")
+        for line in _fmt_aggregates(doc["aggregates"]):
+            print(line)
+        return EXIT_OK
 
     # PASS — the scope declaration (§9.4) is MANDATORY and always printed.
     print(
