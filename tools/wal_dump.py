@@ -22,6 +22,18 @@ response.response_body_preview readably. --join groups the pair (and flags a
 DECISION_MADE that allowed a forward but has no matching RESPONSE_OBSERVED — a
 detectable incomplete-request signal).
 
+🔴 DISCLOSURE (GATE-EGRESS 件二) — `--decode` / `--join` emit a clean, paste-ready JSON that LOOKS
+like harmless diagnostic data but is not. Before that output, a three-line header is printed to
+STDERR (never stdout, so the dump stays pipeable/diffable):
+  • This output contains UN-REDACTED request content (every message content, verbatim).
+  • Per the EV-R2 vocabulary it is `internal_handoff` — do NOT paste it into a ticket, group chat,
+    vendor support, or any external material.
+  • If this is a PRODUCTION WAL, one segment file interleaves MULTIPLE tenants — what you see may
+    include more than the tenant you are investigating.
+The level follows the CONTENT, not the tool: the default (undecoded) dump prints only a byte preview
++ hash and gets no header. 🔴 No `--tenant` filter exists — on a tool that reads a LOCAL file a filter
+is not a boundary (omit it and it's gone); it would look like containment while adding none (§2.4).
+
 Usage:
     python wal_dump.py <wal_dir> [--from N] [--to M]
                        [--hex | --decode | --join] [--strict] [--summary]
@@ -43,6 +55,19 @@ from tools._wal_format import (
     iter_records,
     list_segments,
     read_segment_header,
+)
+
+# GATE-EGRESS 件二 §2.3 — the self-declaration printed to STDERR before any decoded/joined content,
+# and shown in --help (epilog). 🔴 The level follows the CONTENT (--decode/--join), not the tool: a
+# plain byte-preview dump is a different kind of thing and gets no header (§2.3). stderr, not stdout,
+# so the JSON on stdout stays pipeable and diffable (§2.5).
+_DISCLOSURE_HEADER = (
+    "🔴 wal_dump --decode/--join OUTPUT — read before sharing:\n"
+    "   • This output contains UN-REDACTED request content (every message content, verbatim).\n"
+    "   • Per the EV-R2 vocabulary it is `internal_handoff` — do NOT paste it into a ticket, group\n"
+    "     chat, vendor support, or any external material.\n"
+    "   • If this is a PRODUCTION WAL, one segment file interleaves MULTIPLE tenants — what you see\n"
+    "     may include more than the tenant you are investigating."
 )
 
 
@@ -296,7 +321,10 @@ def _run_join(records: list, decode) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="wal_dump", description="Dump WAL segment files in human-readable form."
+        prog="wal_dump",
+        description="Dump WAL segment files in human-readable form.",
+        epilog=_DISCLOSURE_HEADER,  # §2.5: --help carries the same three sentences
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument(
         "wal_dir", type=Path, help="Directory containing .wal files (or one .wal file)"
@@ -358,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
             args.join = False
+
+    # §2.3 — the disclosure header rides ON THE CONTENT: print it only when we will actually emit
+    # decoded/joined content (decoder available). A plain preview dump, or a --decode/--join that fell
+    # back to previews because the proto is missing, emits no readable content ⇒ no header.
+    if (args.decode or args.join) and _get_decoder():
+        print(_DISCLOSURE_HEADER, file=sys.stderr)
 
     total = 0
     corruption = False

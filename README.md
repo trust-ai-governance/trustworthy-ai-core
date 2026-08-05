@@ -172,7 +172,9 @@ break, CRC failure, sequence gap or truncation.
 | `treval/` | Evaluation engine: evidence readers, indicator SDK, maturity rubric, CLI |
 | `registry/dimensions/` | The 5×5 maturity model as YAML — each objective bound to a *measured* indicator or an *attested* posture key |
 | `tools/wal_verify.py` | Independent audit-chain verifier (stdlib only) |
-| `tools/check_*.py` | CI gates run against ourselves: public-repo disclosure · corpus growth (technique coverage, not just `n`) · threshold registry |
+| `tools/check_*.py` | CI gates run against ourselves: public-repo disclosure · corpus growth (technique coverage, not just `n`) · threshold registry · content egress (no response body ever reaches an auto-produced artifact) |
+| `treval/case_contract.py` · `treval/case_store.py` | The per-case result contract (pure): re-add the aggregates from the rows yourself, so a headline number is one anyone can check — plus a tenant-scoped, fail-closed store for it |
+| `treval/web/cases_app.py` | Optional read-only service to re-add those aggregates in the browser (credential-scoped, opens no audit log) |
 | `docs/THRESHOLDS.md` | Every judgment threshold with its value, machine-resolvable home, scope and owner |
 | `docs/` | Architecture, CLI guide, report JSON schema, cross-repo contracts |
 

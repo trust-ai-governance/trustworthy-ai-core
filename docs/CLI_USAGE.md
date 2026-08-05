@@ -121,3 +121,47 @@ rows with **zero CLI change**. Note security certifies no level yet because its 
 ```
 `subject`/`notes`/`integrity`/`evidence_refs` default, so a minimal entry loads. `tenant_id` must match
 the `--posture` file's `tenant_id` for attestations to apply.
+
+## Case-level results — re-add the number yourself (UI-3a)
+
+A maturity report says "injection catch rate 89.3%". The **case contract** (`--cases-out`, produced by
+the active-eval run) makes that a number anyone can re-add: one row per test case (a *pointer* into the
+audit log, never response content), plus the aggregates the rows must sum to.
+
+```bash
+# 1) verify a contract re-adds to its own aggregates (self-consistency + tamper check — NOT a proof
+#    the numbers are true; it prints, on PASS, exactly what it does and does not cover):
+python -m treval.cli cases verify /path/to/cases.json
+
+# 2) ingest it into a tenant-scoped case store (fail-closed: refuses Tier-1 content, a pre-tenant
+#    contract, or one whose rows do not re-add). The store is SEPARATE from the report store:
+TREVAL_CASE_STORE=~/casestore python -m treval.cli cases store /path/to/cases.json
+```
+
+**Browse + re-add in a browser (optional, off by default).** A read-only service (`:8091`) lists a
+credential's contracts and re-adds the aggregates on a page — its point is the byte-for-byte download +
+the `cases verify` command to re-run in *your* terminal, not the green check on our page.
+
+```bash
+# credential → tenant map is a JSON FILE and is REQUIRED (no map ⇒ refuse to start). "*" = admin.
+cat > ~/cases-tokens.json <<'EOF'
+{"tok-operator": "<your-tenant>", "tok-admin": "*"}
+EOF
+TREVAL_CASES_TOKENS=~/cases-tokens.json TREVAL_CASE_STORE=~/casestore \
+  python -m treval.web.cases        # :8091
+```
+
+**Three ways to pass the credential** (never a URL param):
+- **a browser** — open `http://127.0.0.1:8091/`; with no credential you get an **access page**, enter the
+  token in the 「访问密钥」 field, and a HttpOnly/SameSite=Strict cookie holds it (the 「退出」 link clears it).
+  The token is the identity — there is no user, registration or session table;
+- `x-treval-token: <token>` — or `Authorization: Bearer <token>` (scripts/API);
+- **HTTP Basic** — for a terminal/CI: `curl -u :tok-a http://127.0.0.1:8091/` (username blank, password = the token).
+
+🔴 Do **not** use `?token=` — it lands in browser history, access logs and the `Referer` header, so it is
+refused. The tenant is decided by the **credential**, not a `?tenant=` param (a scoped token asking for
+another tenant is a 403, never a silent fall-back). **Single-entry is opt-in:** set `TREVAL_CASES_MOUNT=/cases`
+when launching the report service (`python -m treval.web`) to mount the case service under it — the
+report token never opens `/cases/*` (a mount is a separate app with its own auth). Default: unmounted.
+
+🔴 Case data is a bypass map — tenant-internal, never in outward materials, including screenshots.
