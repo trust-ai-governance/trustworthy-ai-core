@@ -185,22 +185,71 @@ def test_api_registry_is_deterministic(client):
     assert client.get("/api/registry").json() == client.get("/api/registry").json()
 
 
-def test_index_renders_grid(client):
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
+def test_index_empty_store_shows_dashboard_skeleton(tmp_path):
+    """🔴 P3: an EMPTY report store keeps the Dashboard SKELETON with an empty state (库里还没有报告 +
+    the rerun command) — it does NOT silently swap to the maturity-model grid. Uses an explicitly
+    empty store so the assertion never depends on a polluted default `reports/store`."""
+    pytest.importorskip("fastapi", reason="optional treval[web] extra not installed")
+    from fastapi.testclient import TestClient
+
+    from treval.web import create_app
+    from treval.web.app import RERUN_COMMAND
+
+    resp = TestClient(create_app(store_dir=tmp_path)).get("/")  # tmp_path = empty store
+    assert resp.status_code == 200 and "text/html" in resp.headers["content-type"]
     body = resp.text
-    # a measured objective + its drill-down fields are present in the SSR output
-    assert "rob.l2.injection_rule_detection" in body
-    assert "injection_catch_rate" in body
-    assert "measured" in body and "attested" in body
-    assert "N/A" in body  # L1 baseline cells
+    assert "库里还没有报告" in body  # the empty state…
+    assert (
+        "可信 AI 治理" in body
+    )  # …ON the dashboard skeleton (shared banner/brand present)
+    assert RERUN_COMMAND in body  # the command to fill the store is offered
+    assert "rob.l2.injection_rule_detection" not in body  # NOT the maturity-grid swap
+
+
+def test_registry_view_renders_the_standard_grid_even_on_an_empty_store(tmp_path):
+    """🔴 /registry: the maturity-model STANDARD view (72 controls) is report-INDEPENDENT — it
+    renders the 5×5 grid even with an empty store, and carries the shared sidebar with 成熟度标准
+    marked current (a peer of Dashboard/详情, navigable back)."""
+    pytest.importorskip("fastapi", reason="optional treval[web] extra not installed")
+    from fastapi.testclient import TestClient
+
+    from treval.web import create_app
+
+    body = (
+        TestClient(create_app(store_dir=tmp_path)).get("/registry").text
+    )  # empty store
+    assert "rob.l2.injection_rule_detection" in body  # the grid renders…
+    assert (
+        "measured" in body and "attested" in body and "N/A" in body
+    )  # …with its cells + legend
+    assert "可信 AI 治理" in body  # shared banner/skeleton (extends base.html)
+    assert (
+        'aria-current="page"' in body and "成熟度标准" in body
+    )  # sidebar item, marked current
+
+
+def test_maturity_standard_is_a_sidebar_peer_available_on_an_empty_store(tmp_path):
+    """🔴 the 成熟度标准 sidebar item sits alongside Dashboard/报告详情 and — because it is
+    report-independent — is present even on the empty-store dashboard skeleton (its onward
+    destination), always linking to /registry."""
+    pytest.importorskip("fastapi", reason="optional treval[web] extra not installed")
+    from fastapi.testclient import TestClient
+
+    from treval.web import create_app
+
+    body = (
+        TestClient(create_app(store_dir=tmp_path)).get("/").text
+    )  # empty store ⇒ skeleton
+    assert "库里还没有报告" in body  # the empty state…
+    assert (
+        "成熟度标准" in body and 'href="/registry"' in body
+    )  # …still offers 成熟度标准
 
 
 def test_read_only_no_mutating_routes(client):
     """No route mutates: POST/PUT/DELETE/PATCH on the known paths are rejected."""
     for method in ("post", "put", "delete", "patch"):
-        for path in ("/", "/api/registry"):
+        for path in ("/", "/api/registry", "/registry"):
             resp = getattr(client, method)(path)
             assert resp.status_code in (404, 405), (
                 f"{method} {path} -> {resp.status_code}"

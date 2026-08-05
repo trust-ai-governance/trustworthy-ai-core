@@ -113,8 +113,12 @@ for (const fx of fixtures) {
   check(P + "subtitle present", txt("header.topbar .subtitle").includes("Core UI"));
   check(P + "scope lives IN the banner", $("header.topbar .scope") !== null);
   check(P + "scope is NOT inside a view", $(".shell .scope") === null);
-  check(P + "left nav rail with both views",
-        $("aside.sidenav") !== null && $$("aside.sidenav .navitem").length === 2);
+  // three in-app views (Dashboard / 报告详情 / 成熟度标准); 用例明细 is an extra, mount-only item not
+  // present in these (unmounted) render fixtures.
+  check(P + "left nav rail with the three in-app views",
+        $("aside.sidenav") !== null && $$("aside.sidenav .navitem").length === 3
+        && ["Dashboard", "报告详情", "成熟度标准"].every(
+             (t) => $$("aside.sidenav .navitem").some((a) => a.textContent.includes(t))));
   check(P + "exactly one nav item is current", $$('[aria-current="page"]').length === 1);
   check(P + "verdict present", $("#verdict") !== null && txt("#verdict").length > 8, txt("#verdict"));
   check(P + "5 risk cards", $$("#risks .rk").length === 5);
