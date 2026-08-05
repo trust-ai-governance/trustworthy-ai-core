@@ -1,0 +1,31 @@
+{# UI-3 §4 (revised per PM 2026-08-05): the case service now shares the MAIN app's chrome — same
+   banner colour + company logo + table style — for brand consistency. The disclosure discipline is
+   carried by the loud `operator_only` warning line (below the title) + the always-present banner
+   text, which travel with any screenshot. Self-contained (does NOT extend the report base.html). #}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}案级 Tier-0 复算 · CASE-LEVEL{% endblock %}</title>
+  <link rel="stylesheet" href="{{ base }}/static/style.css?v={{ static_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    {% include "_logo.html" %}
+    <div class="titles">
+      <h1>案级 Tier-0 复算服务 <span class="en">Case-level recompute · bypass map — DO NOT DISTRIBUTE</span></h1>
+      <p class="subtitle case-warn">🔒 operator_only · tenant={{ banner_tenant }} · 租户内部物，勿贴入工单、群聊、厂商支持或任何对外材料</p>
+    </div>
+  </div>
+</header>
+<main class="wrap case-wrap">
+  {% block content %}{% endblock %}
+  <footer class="foot case-foot">
+    {% if show_logout %}<a href="{{ base }}/logout" class="case-logout">退出</a> · {% endif %}只读 READ-ONLY · 本服务从不打开 WAL、从不发探针；证据指针只作坐标文本显示，不解引用（§7）。
+  </footer>
+</main>
+</body>
+</html>

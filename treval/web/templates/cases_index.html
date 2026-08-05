@@ -1,0 +1,27 @@
+{% extends "cases_base.html" %}
+{% block title %}案级契约列表 · {{ banner_tenant }}{% endblock %}
+{% block content %}
+<h2>案级契约 —— {% if scope == '*' %}admin（可见全部租户）{% else %}tenant <code>{{ scope }}</code>{% endif %}</h2>
+
+{% if not entries %}
+<p class="case-empty">（此凭据作用域内没有契约。）</p>
+{% else %}
+  {% if scope == '*' and tenants|length > 1 %}
+  <p class="case-note">可见租户：{% for t in tenants %}<code>{{ t }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+    —— 加 <code>?tenant=&lt;租户&gt;</code> 过滤。</p>
+  {% endif %}
+  <table class="case-table">
+    <thead><tr><th>tenant</th><th>corpus_sha</th><th>key</th><th>复算</th></tr></thead>
+    <tbody>
+    {% for e in entries %}
+      <tr>
+        <td>{{ e.tenant_id }}</td>
+        <td class="mono">{{ e.corpus_sha[:23] }}…</td>
+        <td class="mono">{{ e.key }}</td>
+        <td><a href="{{ base }}/run?key={{ e.key }}">当场把数加回来 →</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}
