@@ -24,7 +24,13 @@ from collections.abc import Iterable
 
 from treval.indicators._integrity import min_integrity
 from treval.indicators.correlate import join_ab
-from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus, Measurement
+from treval.models import (
+    INTERVAL_CENSUS,
+    AuditEvidence,
+    EvidenceRef,
+    IntegrityStatus,
+    Measurement,
+)
 
 _PII_KEY = "pii_types"
 
@@ -62,6 +68,9 @@ def _requests_with_pii(
 class RedactionHitRatio:
     indicator_id = "redaction_hit_ratio"
     dimension = "privacy_data_protection"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # every PII-bearing request in the window checked — a census
+    )
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         groups = _requests_with_pii(tuple(evidence))
@@ -92,6 +101,7 @@ class RedactionHitRatio:
                 subject="",
                 notes=notes,
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )
 

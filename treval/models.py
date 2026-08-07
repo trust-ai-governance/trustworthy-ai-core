@@ -29,6 +29,21 @@ class IntegrityStatus(enum.Enum):
     BROKEN = "broken"  # tamper/corruption detected
 
 
+# EV-CIGATE §1.5 — the mechanism class that decides whether a value gets an interval, and (when it
+# does not) WHY. 🔴 A machine-parseable home for the three-way (EV-CITE 件一 review): `ci is None`
+# alone conflates the last two — a census has no sampling uncertainty; a default-deny total function
+# has uncertainty, but it lives in COVERAGE (allow-list holes), not in a rate. The INDICATOR declares
+# this (it alone knows its mechanism) and it rides on the Measurement so `citation_form` picks its
+# wording by declaration, never by the `ci is None` proxy.
+INTERVAL_SAMPLED = "sampled"  # open-space partial detector — carries a Wilson interval
+INTERVAL_TOTAL_FUNCTION = (
+    "total_function"  # default-deny total function — no interval; residual = coverage
+)
+INTERVAL_CENSUS = "census"  # full enumeration of the window — no sampling uncertainty
+# The no-interval mechanisms an indicator MUST declare (a partial detector declares by attaching ci).
+INTERVAL_NO_CI_BASES = frozenset({INTERVAL_TOTAL_FUNCTION, INTERVAL_CENSUS})
+
+
 @dataclass(frozen=True)
 class EvidenceRef:
     """Back-pointer so every Measurement traces to its source records."""
@@ -89,6 +104,11 @@ class Measurement:
     # invariant 2); the engine NEVER infers them from unit.
     ci_low: float | None = None
     ci_high: float | None = None
+    # EV-CIGATE §1.5 mechanism class (INTERVAL_SAMPLED / _TOTAL_FUNCTION / _CENSUS), set by the
+    # indicator. Rides here so `citation_form` can word "no interval" correctly — a census's "no
+    # sampling uncertainty" vs a total function's "residual is in coverage, not a rate". "" = legacy
+    # / unspecified (treated as sampled iff a ci is present, else worded WITHOUT claiming a census).
+    interval_basis: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,15 @@ class DimensionReport:
     awarded_level: str | None  # min(measured_ceiling, attested_ceiling) — the gate
     objectives: tuple[ObjectiveResult, ...]
     gaps: tuple[str, ...]  # attested-but-not-measured = over-claim flags
+    # EV-CITE 件二: which kind of `None` a null measured_ceiling is, and the fact that must ride with
+    # it. One of certified|below_floor|evidence_unverified|blocked_no_data|not_measured; the gap is
+    # the per-objective sentence(s) and is empty ONLY when certified (C8). Computed once by the engine
+    # (rubric.measured) so the CLI and Web read the SAME verdict, never re-derive it.
+    measured_state: str
+    measured_gap: tuple[str, ...]
+    # The level where the measured ladder broke (the "未达 L2" the pill/radar show) — serialized so
+    # the UI never parses it back out of the prose. None when certified or not_measured.
+    measured_breakpoint: str | None
 
 
 @dataclass(frozen=True)

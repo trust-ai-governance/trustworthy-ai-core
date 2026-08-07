@@ -16,9 +16,7 @@ from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = (
-    5  # EV-CIGATE: each measurement gains ci_low/ci_high (nullable Wilson interval)
-)
+SCHEMA_VERSION = 6  # EV-CITE: each measurement gains `interval_basis` (EV-CIGATE §1.5 mechanism class)
 # The bundle version that INTRODUCED the ci_low/ci_high fields. A bundle below this predates them —
 # so an injection_catch_rate with no interval means "produced before the fields existed" (re-collect),
 # NOT "a non-rate indicator" (EV-CIGATE F1: without the bump both looked identical and mis-diagnosed).
@@ -118,6 +116,13 @@ def parse_measurement(raw: object, where: str) -> Measurement:
     ci_low = _parse_ci(raw.get("ci_low"), "ci_low", where)
     ci_high = _parse_ci(raw.get("ci_high"), "ci_high", where)
 
+    # EV-CITE 件一 (review): the interval MECHANISM must survive the collect→report round-trip, just
+    # like ci — else citation_form loses it and falls back on the user's actual path. Absent (a pre-v6
+    # bundle, caught by the schema_version fork) or "" defaults to unspecified; never coerced.
+    interval_basis = raw.get("interval_basis", "")
+    if not isinstance(interval_basis, str):
+        raise BundleError(f"{where}: interval_basis must be a string")
+
     return Measurement(
         indicator_id=indicator_id,
         dimension=dimension,
@@ -130,6 +135,7 @@ def parse_measurement(raw: object, where: str) -> Measurement:
         integrity=IntegrityStatus(integrity),
         ci_low=ci_low,
         ci_high=ci_high,
+        interval_basis=interval_basis,
     )
 
 

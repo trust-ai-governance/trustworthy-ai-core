@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.indicators._integrity import min_integrity
-from treval.models import AuditEvidence, Measurement
+from treval.models import INTERVAL_CENSUS, AuditEvidence, Measurement
 
 _RESPONSE_OBSERVED = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
 
@@ -35,6 +35,9 @@ def _is_error(record: rc_pb.RequestContext) -> bool:
 class TerminalErrorRatio:
     indicator_id = "terminal_error_ratio"
     dimension = "efficient_reliability"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # full-window enumeration of terminal outcomes — a census
+    )
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         refs = []
@@ -62,5 +65,6 @@ class TerminalErrorRatio:
                 subject="",
                 notes=notes,
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )

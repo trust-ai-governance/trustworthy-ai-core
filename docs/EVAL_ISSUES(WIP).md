@@ -879,6 +879,23 @@ EV-ATTRIB 登记的 **marker 用例扩充** —— **一次评审、一次冻结
   ⇒ **请求级下钻在 #6 之前没有消费者,在 #6 之后才第一次有 PII 面** —— 两件事同时发生,
   所以它必须跟着 #6 走,不能"顺手做了"。
 
+### 🆕 EV-CITE — 可引用性闸 + 两种 None 的分辨（无外部依赖 · PM 已批 · 可下发）
+
+- **设计定稿**:[docs/issues/EV-CITE.md](issues/EV-CITE.md)(两件合一单,共用同一套判据)
+- 🔴 **不为 POC 而建** —— 它是任何对外引用(白皮书/NDA/售前/客户自算)都要过的门;
+  **批准它不等于批准任何 POC 方案**。
+- **件一 可引用性闸**:`citable`/`citable_blockers` **在配对路径已完整存在**
+  ([pair.py:318](../treval/cli/pair.py#L318)),**报告面一个字都没有** —— 又是「建成 ≠ live」,第二次。
+  blocker = unpinned · 段哈希缺失 · 证据基非链锚定 · 链断 · 维度有指标未采到。
+  🔴 **`unmet` 不是 blocker** —— 一个诚实的"未达标"正是 measured>attested 的卖点;
+  把它做成 blocker 就成了"只放好看的数"的闸。加 `citation_form` 让每个数自带 n/区间/口径。
+- **件二 两种 None 分辨**:🔴 **实测缺陷** —— 强鲁棒性有 5 条实测目标、详情页 `89% n=28`,
+  Dashboard 却写「未采到实测数据」。CLI 侧 `_is_not_measured` 分得清、Web 自己 derive 了一份错的
+  ⇒ **判据上移到引擎,只留一份**;维度加 `measured_state`(`not_measured`/`below_floor`/`certified`)
+  与 `measured_gap` 事实句。
+- **登记(C5)**:良性语料 n=19 ⇒ FPR 上界 16.8%,要过 `ci_high ≤ 0.05` 需 **n≈74**。
+  🔴 **良性侧扩样与攻击侧同等紧要**,而它一直排在后面 —— 归 序6/EV-COVERAGE。
+
 ### 🆕 UI-3-AUTH — 案级服务访问控制（无外部依赖 · 承 UI-3,下一轮可下发）
 
 - **设计定稿**:[docs/issues/UI-3-AUTH.md](issues/UI-3-AUTH.md)

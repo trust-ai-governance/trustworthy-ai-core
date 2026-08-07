@@ -22,10 +22,6 @@ _ROOT = Path(__file__).resolve().parents[1]
 _FIXTURES = _ROOT / "tests" / "fixtures" / "report" / "valid"
 _CHECK_JS = _ROOT / "tests" / "web" / "check_render.js"
 
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated"
-)
-
 
 @pytest.fixture
 def store_dir(tmp_path):
@@ -106,6 +102,56 @@ def test_cases_nav_item_only_when_cases_url_is_set(store_dir):
     assert "逐条用例的判定 · 可自行复算聚合数" in with_cases
     without = TestClient(create_app(store_dir=store_dir)).get("/").text
     assert "用例明细" not in without
+
+
+def test_citability_bar_shows_both_states(tmp_path):
+    """🔴 EV-CITE 件一 acceptance 14: the Dashboard citability bar is shown BOTH ways — a citable
+    (pinned) report reads "✅ 可对外引用", an unpinned one reads "🔴 不可对外引用" with the fixes. Showing
+    it only when NOT citable would make "citable" the silent default (the wrong direction)."""
+    pytest.importorskip("fastapi")
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from treval import load_registry
+    from treval.models import EvidenceRef, IntegrityStatus, Measurement
+    from treval.rubric.engine import evaluate
+    from treval.rubric.serialize import serialize_self_contained_bundle
+    from treval.stats import wilson_interval
+    from treval.web import create_app
+
+    reg = load_registry()
+    lo, _p, hi = wilson_interval(25, 28)
+    ms = [
+        Measurement(
+            "injection_catch_rate",
+            "robustness",
+            25 / 28,
+            "ratio",
+            28,
+            (EvidenceRef("wal:t", 1),),
+            integrity=IntegrityStatus.VERIFIED,
+            ci_low=lo,
+            ci_high=hi,
+        )
+    ]
+    report = evaluate(reg, ms, [], window=(100, 200), tenant_id="acme")
+    prov = {
+        "pinned": True,
+        "window": [100, 200],
+        "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        "data_source": "measured",
+    }
+    bundle = serialize_self_contained_bundle(
+        report, ms, reg, prov, target_kind="gateway"
+    )
+    assert bundle["citable"] is True
+    write_bundle(tmp_path, json.dumps(bundle, ensure_ascii=False), generated_at_ns=5)
+
+    page = TestClient(create_app(store_dir=tmp_path)).get("/").text
+    assert (
+        "可对外引用" in page and "🔴 不可对外引用" not in page
+    )  # the citable state IS shown
 
 
 def test_no_drilldown_wording_anywhere(client):

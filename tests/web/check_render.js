@@ -87,9 +87,13 @@ const fixtures = fs.readdirSync(dir).filter((f) => f.endsWith(".dash.html"))
   .map((f) => f.replace(/\.dash\.html$/, ""));
 check("fixtures rendered", fixtures.length === 6, "found=" + fixtures.length);
 
-// Expected no-signal axis counts per fixture (null ≠ 0 — asserted, not eyeballed).
-const NOSIG = { rich: 3, all_not_measured: 5, over_claim_gaps: 4,
-                insufficient_data: 5, verification_basis: 4, per_subject: 4 };
+// Expected null-ceiling axis counts per fixture (null ≠ 0 — asserted, not eyeballed). EV-CITE 件二
+// splits these: NULLCEIL = every non-certified axis (all carry a sub-label); DASHED = only the
+// genuine `not_measured` ones (a below_floor/blocked axis is NOT greyed out — acceptance 13).
+const NULLCEIL = { rich: 3, all_not_measured: 5, over_claim_gaps: 4,
+                   insufficient_data: 5, verification_basis: 4, per_subject: 4 };
+const DASHED   = { rich: 2, all_not_measured: 5, over_claim_gaps: 4,
+                   insufficient_data: 5, verification_basis: 3, per_subject: 4 };
 
 for (const fx of fixtures) {
   const { doc, errors } = load(path.join(dir, fx + ".dash.html"));
@@ -130,10 +134,16 @@ for (const fx of fixtures) {
   check(P + "maturity table 5 cols", $$("#mat thead th").length === 5);
   check(P + "every row has a 结论 pill", $$("#mat tbody tr .pill").length === 5);
 
-  // null ≠ 0 — the core rule of this issue.
-  check(P + "no-signal axes marked 无实测信号", $$("#radar text.axsub").length === NOSIG[fx],
-        "axsub=" + $$("#radar text.axsub").length + " want=" + NOSIG[fx]);
-  check(P + "no-signal spokes dashed", $$("#radar line.spoke.nosig").length === NOSIG[fx]);
+  // null ≠ 0 — the core rule of this issue; EV-CITE 件二 refines it into TWO kinds of null.
+  check(P + "every null-ceiling axis carries a sub-label", $$("#radar text.axsub").length === NULLCEIL[fx],
+        "axsub=" + $$("#radar text.axsub").length + " want=" + NULLCEIL[fx]);
+  // only a genuine `not_measured` axis is grey-dashed; below_floor/blocked keep a normal spoke.
+  check(P + "only no-signal spokes dashed", $$("#radar line.spoke.nosig").length === DASHED[fx],
+        "nosig=" + $$("#radar line.spoke.nosig").length + " want=" + DASHED[fx]);
+  // the dashed axes are exactly the ones labelled 无实测信号; the sub-gap axes never say it.
+  check(P + "dashed axes say 无实测信号, sub-gap axes do not",
+        $$("#radar text.axsub").filter((t) => t.textContent.trim() === "无实测信号").length === DASHED[fx]
+        && $$("#radar text.axsub.sub-gap").every((t) => t.textContent.trim() !== "无实测信号"));
   for (const cls of ["p-meas", "p-att", "p-awarded"]) {
     const poly = $("#radar polygon." + cls);
     check(P + cls + " points finite (no NaN/undefined)",

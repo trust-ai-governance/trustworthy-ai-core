@@ -16,12 +16,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from treval.indicators._integrity import min_integrity
-from treval.models import AuditEvidence, IntegrityStatus, Measurement
+from treval.models import INTERVAL_CENSUS, AuditEvidence, IntegrityStatus, Measurement
 
 
 class ChainIntegrity:
     indicator_id = "chain_integrity"
     dimension = "transparency_accountability"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # every record in the window checked — a deterministic census
+    )
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         refs = []
@@ -51,5 +54,6 @@ class ChainIntegrity:
                 subject="",
                 notes=notes,
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )

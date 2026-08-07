@@ -3,6 +3,20 @@
 {% block title %}成熟度报告 — {{ entry.tenant_id }}{% endblock %}
 {% block content %}
 
+{# EV-CITE 件一 §1.5 — the citability bar: may these numbers leave the room? Shown BOTH ways (green
+   可引用 / red 不可引用 + the blockers, each naming its fix), so "citable" is never the silent
+   default. Read straight off the bundle's `citable` — no second derivation. #}
+{% if citability.citable is not none %}
+<div class="citebar {{ 'yes' if citability.citable else 'no' }}">
+  {% if citability.citable %}
+  <b>✅ 可对外引用</b> —— 窗口已固定 · 链锚定 · 完整性完好；下方每条率的口径见「用例明细 / citation_form」。
+  {% else %}
+  <b>🔴 不可对外引用</b> —— 先修下面这些（数字照发，但别贴进对外材料）：
+  <ul>{% for b in citability.blockers %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% endif %}
+
 {# 报告标识条 — the fingerprint is the REGISTRY/rubric version (which rules graded this),
    NOT a report fingerprint. It is identical across reports that share a registry; calling
    it 报告指纹 would be a lie. #}
@@ -98,13 +112,16 @@
       {% if radar.awarded_polygon %}<polygon class="p-awarded" points="{{ radar.awarded_polygon }}"/>{% endif %}
       {% for a in radar.axes %}
         {% if a.awarded_xy %}<circle class="dot-a" cx="{{ a.awarded_xy[0] }}" cy="{{ a.awarded_xy[1] }}" r="3.6"/>{% endif %}
+        {# below_floor: a hollow marker AT the breakpoint — "measured here, but the CI is too wide to
+           certify". Distinct from a grey no-signal axis (EV-CITE 件二 ④). #}
+        {% if a.attempted_xy %}<circle class="dot-attempt" cx="{{ a.attempted_xy[0] }}" cy="{{ a.attempted_xy[1] }}" r="4"/>{% endif %}
       {% endfor %}
       {% for a in radar.axes %}
       <text class="axl {% if a.no_signal %}nosig{% endif %}"
             x="{{ a.label_x }}" y="{{ a.label_y }}" text-anchor="{{ a.label_anchor }}">{{ a.title }}</text>
-      {% if a.no_signal %}
-      <text class="axsub" x="{{ a.label_x }}" y="{{ a.label_y + 11 }}"
-            text-anchor="{{ a.label_anchor }}">无实测信号</text>
+      {% if a.sub_label %}
+      <text class="axsub {% if not a.no_signal %}sub-gap{% endif %}" x="{{ a.label_x }}" y="{{ a.label_y + 11 }}"
+            text-anchor="{{ a.label_anchor }}">{{ a.sub_label }}</text>
       {% endif %}
       {% endfor %}
     </svg>
@@ -134,7 +151,10 @@
               <ul>
                 <li><b>一致</b> = 实测支撑声明（声明未超过实测）</li>
                 <li><b>声明高于实测 / 过度声明 N</b> = 已声明达标，但实测证据不支持</li>
-                <li><b>无实测信号</b> = 该维度本次未采到实测数据（≠ 0 分）</li>
+                <li><b>实测未达 L&lt;N&gt;</b> = 测到了，但区间下界不到线（样本不足，非 0 分）</li>
+                <li><b>缺实测证据</b> = 该级某指标本次未产出（不是没测这一维度）</li>
+                <li><b>证据待核验</b> = 有值，但来源不可链校验，不予采信</li>
+                <li><b>无实测信号</b> = 该维度本次未采到任何实测数据（≠ 0 分）</li>
               </ul>
             </span>
           </span>
@@ -153,6 +173,20 @@
       </tbody>
     </table>
     <p class="note">授级 = min(实测, 声明) —— 短板决定；声明抬不高实测。</p>
+    {# EV-CITE 件二: the FACT that rides with every non-certified dimension — the same engine-computed
+       `measured_gap` the CLI prints, so "没测到" and "测了没达标" can never again read the same. #}
+    {% set gap_rows = maturity_rows | selectattr('measured_gap') | list %}
+    {% if gap_rows %}
+    <details class="mgaps" open>
+      <summary>实测差距 —— 为什么这些维度没有实测授级（各带可照抄的事实）</summary>
+      {% for r in gap_rows %}
+      <div class="mgap">
+        <span class="mgap-dim">{{ r.title }}</span> <span class="pill {{ r.pill.kind }}">{{ r.pill.text }}</span>
+        <ul>{% for s in r.measured_gap %}<li>{{ s }}</li>{% endfor %}</ul>
+      </div>
+      {% endfor %}
+    </details>
+    {% endif %}
   </div>
 </section>
 {% endblock %}

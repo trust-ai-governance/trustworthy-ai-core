@@ -31,6 +31,7 @@ from treval.registry.satisfied_when import (
     compile_satisfied_when,
     satisfied_when_field,
 )
+from treval.rubric.measured import MeasuredObjective, classify as classify_measured
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _LEVEL_INDEX = {level: i for i, level in enumerate(_LEVELS, start=1)}  # L1→1 … L5→5
@@ -115,11 +116,18 @@ def evaluate(
         if p.attested_by and p.key not in attested_ref_by_key:
             attested_ref_by_key[p.key] = (p.ref,)
 
+    # Report-wide integrity first: a single BROKEN measurement (cause A) voids the whole report, so
+    # every non-certified dimension collapses its gap to a pointer (EV-CITE C11 / acceptance 20).
+    integrity_summary = _integrity_summary(materialized)
+    chain_broken = integrity_summary.get(IntegrityStatus.BROKEN.value, 0) > 0
+
     consumed: list[
         IntegrityStatus
     ] = []  # integrity of measurements a measured obj used
     dimensions = tuple(
-        _evaluate_dimension(dim, agg_by_id, attested_ref_by_key, consumed)
+        _evaluate_dimension(
+            dim, agg_by_id, attested_ref_by_key, consumed, chain_broken=chain_broken
+        )
         for dim in registry.dimensions.values()  # registry key order (deterministic)
     )
 
@@ -127,7 +135,7 @@ def evaluate(
         tenant_id=tenant_id,
         window=window,
         dimensions=dimensions,
-        integrity_summary=_integrity_summary(materialized),
+        integrity_summary=integrity_summary,
         verification_basis=_verification_basis(consumed),
     )
 
@@ -137,12 +145,17 @@ def _evaluate_dimension(
     agg_by_id: dict[str, Measurement],
     attested_ref_by_key: dict[str, tuple[EvidenceRef, ...]],
     consumed: list[IntegrityStatus],
+    *,
+    chain_broken: bool,
 ) -> DimensionReport:
     results: list[ObjectiveResult] = []
     # Per-level, per-kind status lists drive the ceilings; (level, id) → attested-met
     # feeds the gap list.
     measured_status: dict[str, list[str]] = {level: [] for level in _LEVELS}
     attested_status: dict[str, list[str]] = {level: [] for level in _LEVELS}
+    measured_objs: list[
+        MeasuredObjective
+    ] = []  # EV-CITE 件二: feeds measured_state / measured_gap
 
     for level in _LEVELS:  # L1 → L5
         for obj in dim.levels[level]:  # registry order within the level
@@ -150,6 +163,22 @@ def _evaluate_dimension(
             results.append(res)
             if res.kind == "measured":
                 measured_status[level].append(res.status)
+                m = (
+                    agg_by_id.get(obj.evidence.indicator_id)
+                    if obj.evidence.indicator_id
+                    else None
+                )
+                measured_objs.append(
+                    MeasuredObjective(
+                        level=level,
+                        objective_id=obj.id,
+                        indicator_id=obj.evidence.indicator_id,
+                        status=res.status,
+                        value=m.value if m is not None else None,
+                        sample_size=m.sample_size if m is not None else None,
+                        satisfied_when=obj.evidence.satisfied_when,
+                    )
+                )
             else:
                 attested_status[level].append(res.status)
 
@@ -157,6 +186,9 @@ def _evaluate_dimension(
     attested_ceiling = _ceiling(attested_status)
     awarded = _min_level(measured_ceiling, attested_ceiling)
     gaps = _over_claim_gaps(dim, attested_ref_by_key, measured_ceiling)
+    measured_state, measured_breakpoint, measured_gap = classify_measured(
+        measured_objs, measured_ceiling, chain_broken=chain_broken
+    )
 
     return DimensionReport(
         dimension=dim.dimension,
@@ -165,6 +197,9 @@ def _evaluate_dimension(
         awarded_level=awarded,
         objectives=tuple(results),
         gaps=gaps,
+        measured_state=measured_state,
+        measured_gap=measured_gap,
+        measured_breakpoint=measured_breakpoint,
     )
 
 

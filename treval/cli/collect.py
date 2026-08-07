@@ -227,6 +227,17 @@ def scan_passive(
     )
 
 
+def _observed_window_unfiltered(wal_dir: str, tenant: str) -> tuple[int, int] | None:
+    """The [min, max+1) span of ALL of a tenant's records, IGNORING any window filter (EV-CITE C12).
+    Used only when a pinned window caught nothing — to tell the operator where the records really are
+    so they can re-pin. Best-effort: an unreadable WAL yields None (the blocker degrades gracefully)."""
+    try:
+        evidence = tuple(WalEvidenceReader(wal_dir).read_audit(tenant_id=tenant))
+    except Exception:
+        return None
+    return observed_window(evidence)
+
+
 def collect_passive(
     wal_dir: str, tenant: str, *, warnings: list[str]
 ) -> tuple[Measurement, ...]:
@@ -429,6 +440,13 @@ def run_collect(args: argparse.Namespace) -> int:
     parsed = urlparse(target_url)
     target_url_host = parsed.netloc or target_url
 
+    # C12: the window the records occupy, for provenance. Normally the scan's own span; but if a
+    # PINNED window caught NOTHING, an unfiltered read finds where the records really are — so the
+    # citability blocker can hand the operator a window to re-pin (never "compute the ns yourself").
+    prov_observed = scan.observed_window
+    if pinned and scan.record_count == 0 and args.wal:
+        prov_observed = _observed_window_unfiltered(args.wal, args.tenant)
+
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
@@ -446,6 +464,7 @@ def run_collect(args: argparse.Namespace) -> int:
             pinned=pinned,
             tenant_id=args.tenant,
             record_count=scan.record_count,
+            observed_window=prov_observed,
         ),
     )
     out = args.out or "bundle.json"

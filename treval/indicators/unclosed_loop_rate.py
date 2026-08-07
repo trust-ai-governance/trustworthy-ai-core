@@ -19,7 +19,7 @@ from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.indicators._integrity import min_integrity
 from treval.indicators.correlate import join_ab
-from treval.models import AuditEvidence, Measurement
+from treval.models import INTERVAL_CENSUS, AuditEvidence, Measurement
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
 _DECISION_MADE = rc_pb.AUDIT_RECORD_TYPE_DECISION_MADE
@@ -40,6 +40,9 @@ def _default_window_ns() -> int:
 class UnclosedLoopRate:
     indicator_id = "unclosed_loop_rate"
     dimension = "transparency_accountability"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # every A-record in the window checked for closure — a census
+    )
 
     def __init__(self, close_window_ns: int | None = None) -> None:
         self._window_ns = (
@@ -92,5 +95,6 @@ class UnclosedLoopRate:
                 subject="",
                 notes=notes,
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )

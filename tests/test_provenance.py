@@ -135,6 +135,69 @@ def test_observed_window_round_trips_exactly(wal):
 
 
 # --------------------------------------------------------------------------- #
+# C12 — a pin over an empty window recovers the REAL window (unfiltered) for the blocker
+# --------------------------------------------------------------------------- #
+
+
+def test_build_provenance_carries_observed_window():
+    """C12: build_provenance records the actual observed window; absent ⇒ null (never fabricated)."""
+    prov = build_provenance(
+        wal_dir="/w",
+        window=(1, 2),
+        pinned=True,
+        tenant_id=_TENANT,
+        record_count=0,
+        observed_window=(100, 251),
+    )
+    assert prov["observed_window"] == [100, 251]
+    assert (
+        build_provenance(
+            wal_dir=None, window=None, pinned=False, tenant_id=_TENANT, record_count=5
+        )["observed_window"]
+        is None
+    )
+
+
+def test_pinned_empty_window_recovers_the_real_window_for_the_blocker(wal):
+    """🔴 C12: a PINNED window with no records (record_count==0) — the windowed scan sees nothing,
+    but an UNFILTERED read recovers where the records really are ([1000,1501)); that window rides in
+    provenance so report_citability blocks AND hands the operator the numbers to re-pin."""
+    from treval.cli.collect import _observed_window_unfiltered
+    from treval.citability import report_citability
+
+    empty = scan_passive(
+        str(wal), _TENANT, warnings=[], window_from_ns=5000, window_to_ns=6000
+    )
+    assert (
+        empty.record_count == 0 and empty.observed_window is None
+    )  # the pin caught nothing…
+    recovered = _observed_window_unfiltered(
+        str(wal), _TENANT
+    )  # …but the records are here
+    assert recovered == (1000, 1501)
+
+    prov = build_provenance(
+        wal_dir=str(wal),
+        window=(5000, 6000),
+        pinned=True,
+        tenant_id=_TENANT,
+        record_count=empty.record_count,
+        observed_window=recovered,
+    )
+    citable, blockers = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": prov,
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    assert citable is False
+    assert any(
+        "1000" in b and "1501" in b for b in blockers
+    )  # copyable, not "compute it yourself"
+
+
+# --------------------------------------------------------------------------- #
 # Pinned runs — same WAL + same bounds ⇒ same n, same value
 # --------------------------------------------------------------------------- #
 

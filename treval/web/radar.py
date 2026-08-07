@@ -52,8 +52,18 @@ class RadarAxis:
     measured_xy: tuple[float, float] | None
     attested_xy: tuple[float, float] | None
     awarded_xy: tuple[float, float] | None
-    no_signal: bool  # measured is None → dashed grey spoke + 无实测信号 sub-label
+    no_signal: (
+        bool  # 🔴 EV-CITE 件二: grey-dashed "无实测信号" ONLY for `not_measured` — a
+    )
+    # below_floor dimension has data (just below the line) and must NOT be greyed out (acceptance 13).
     over_claim: bool  # attested > measured (or measured absent while attested present)
+    measured_state: (
+        str | None
+    )  # certified|below_floor|evidence_unverified|blocked_no_data|not_measured
+    sub_label: str  # axis sub-label: "" (certified) | 无实测信号 | 未达 L2 | L3 缺证据 | L3 证据待核
+    attempted_xy: (
+        tuple[float, float] | None
+    )  # below_floor: a hollow marker AT the breakpoint level
 
 
 @dataclass(frozen=True)
@@ -86,6 +96,20 @@ def level_number(level: str | None) -> int | None:
         return None
 
 
+def _sub_label(state: str | None, breakpoint: str | None) -> str:
+    """The axis sub-label — EV-CITE 件二: distinct wording per kind of null ceiling, never the flat
+    "无实测信号" for a dimension that was measured-but-low."""
+    if state == "not_measured":
+        return "无实测信号"
+    if state == "below_floor" and breakpoint:
+        return f"未达 {breakpoint}"
+    if state == "blocked_no_data" and breakpoint:
+        return f"{breakpoint} 缺证据"
+    if state == "evidence_unverified" and breakpoint:
+        return f"{breakpoint} 证据待核"
+    return ""
+
+
 def _angle(i: int, n: int) -> float:
     return -math.pi / 2 + i * 2 * math.pi / n
 
@@ -108,6 +132,8 @@ def radar_points(report: dict, dimension_titles: dict[str, str]) -> Radar:
         # awarded comes from the engine (= min of the two), never recomputed here — the UI
         # renders the grade, it does not derive one.
         awarded = level_number(d.get("awarded_level"))
+        state = d.get("measured_state")
+        bp = level_number(d.get("measured_breakpoint"))
         ox, oy = _point(i, n, LEVELS)
         lx, ly = _point(i, n, _LABEL_RING)
         anchor = "middle" if abs(lx - CX) < 8 else ("start" if lx > CX else "end")
@@ -126,8 +152,14 @@ def radar_points(report: dict, dimension_titles: dict[str, str]) -> Radar:
                 measured_xy=_point(i, n, measured) if measured else None,
                 attested_xy=_point(i, n, attested) if attested else None,
                 awarded_xy=_point(i, n, awarded) if awarded else None,
-                no_signal=measured is None,
+                # grey-dashed only for genuine no-signal; below_floor keeps a normal spoke (acc. 13)
+                no_signal=(state == "not_measured"),
                 over_claim=(attested or 0) > (measured or 0),
+                measured_state=state,
+                sub_label=_sub_label(state, d.get("measured_breakpoint")),
+                attempted_xy=(
+                    _point(i, n, bp) if state == "below_floor" and bp else None
+                ),
             )
         )
 

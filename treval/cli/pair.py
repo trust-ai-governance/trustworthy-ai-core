@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from treval.citability import OBSERVABLE_BIAS_NOTE, OBSERVABLE_BIASED_IDS
 from treval.stats import binomial_ci
 
 EXIT_OK = 0
@@ -53,18 +54,9 @@ _BENIGN_ARM_IDS = frozenset(
 # traffic blocker.
 _REAL_TRAFFIC = "a_real_traffic"
 
-# EV-R2 §9.7 — injection_success_rate is measured over the output_marker-bearing subset ONLY, which
-# systematically favours lexically-salient, detector-easy attacks (evasive encoding / language-switch
-# / translation cases plant no marker) ⇒ the value AND its delta are OPTIMISTICALLY biased vs a
-# representative attack distribution. Mechanism-consistent, NOT proven (small n). Rides IN the delta so
-# the caveat travels with the number, not just in the source measurement's notes. It is a口径 note, NOT
-# a citability blocker — the delta is still emitted and can be citable.
-_OBSERVABLE_BIAS_NOTE = (
-    "🔴 measured on the output_marker-bearing subset ONLY — biased toward detector-easy attacks; this "
-    "delta is OPTIMISTICALLY biased vs a representative attack distribution (mechanism-consistent, NOT "
-    "proven; EV-R2 §9.7)"
-)
-_OBSERVABLE_BIASED_IDS = frozenset({"injection_success_rate"})
+# EV-R2 §9.7 — the observable-subset bias note + its indicator set live in `treval.citability` now, so
+# the pairing delta and the report's citation_form share ONE note (a second copy would drift). The
+# caveat rides IN the delta so it travels with the number; it is a口径 note, NOT a citability blocker.
 
 
 def _wilson_ci(value: float, n: int) -> list[float]:
@@ -323,10 +315,10 @@ def pair_bundles(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
             # (None when absent, which the blocker above has already flagged). No "delta-only" output.
             entry["raw_benign_compliance"] = raw_benign
             entry["gateway_benign_compliance"] = gw_benign
-        if iid in _OBSERVABLE_BIASED_IDS:
+        if iid in OBSERVABLE_BIASED_IDS:
             entry["caveats"] = [
-                _OBSERVABLE_BIAS_NOTE
-            ]  # 🔴 EV-R2 §9.7 — rides WITH the delta
+                OBSERVABLE_BIAS_NOTE
+            ]  # 🔴 EV-R2 §9.7 — rides WITH the delta (shared note, treval.citability)
         if confounded:
             entry["confound_label"] = label  # 🔴 same-frame with the delta (§4.1-3)
         deltas.append(entry)
