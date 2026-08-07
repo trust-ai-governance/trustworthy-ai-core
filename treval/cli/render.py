@@ -13,9 +13,10 @@ from __future__ import annotations
 import csv
 import io
 
-from treval.models import DimensionReport, MaturityReport, Measurement
+from treval.models import MaturityReport, Measurement
 from treval.registry import ControlObjective, DimensionRegistry
 from treval.registry.satisfied_when import SatisfiedWhenError, parse_satisfied_when
+from treval.rubric.measured import CERTIFIED, NOT_MEASURED
 
 _LEVELS = ("L1", "L2", "L3", "L4", "L5")
 _LEVEL_INDEX = {level: i for i, level in enumerate(_LEVELS, start=1)}
@@ -59,14 +60,6 @@ def _all_objectives(reg: DimensionRegistry, dim_id: str) -> dict[str, ControlObj
     return {o.id: o for level in _LEVELS for o in dim.levels[level]}
 
 
-def _is_not_measured(dim: DimensionReport) -> bool:
-    """A dimension is NotMeasured when it produced NO measured signal — every measured
-    objective is `insufficient_data` (or it has none). Distinct from measured-but-failing
-    (some data, below threshold), which is NOT tagged NotMeasured (EV-7 §0)."""
-    measured = [o for o in dim.objectives if o.kind == "measured"]
-    return all(o.status == "insufficient_data" for o in measured)
-
-
 def _level_of(reg: DimensionRegistry, dim_id: str, obj_id: str) -> str:
     dim = reg.dimensions[dim_id]
     for level in _LEVELS:
@@ -105,9 +98,25 @@ def render_human(
     warnings: tuple[str, ...],
     *,
     color: bool,
+    citable: bool | None = None,
+    citable_blockers: tuple[str, ...] = (),
 ) -> str:
     agg = {m.indicator_id: m for m in measurements if m.subject == ""}
     out: list[str] = []
+
+    # EV-CITE 件一 §1.5: the citability verdict is the FIRST line — a reader must see "can these
+    # numbers leave the room?" before the numbers, not hunt for it in a footer. Not-citable is loud
+    # and names the first fix; citable is stated too (showing it only when NOT citable would make
+    # "citable" the silent default — the wrong direction).
+    if citable is True:
+        out.append("✅ CITABLE — 这些数可对外引用（窗口已固定 · 链锚定 · 完整性完好）")
+    elif citable is False:
+        out.append(
+            f"🔴 NOT CITABLE — {citable_blockers[0] if citable_blockers else '不可引用'}"
+        )
+        out.extend(f"   · {b}" for b in citable_blockers[1:])
+    if citable is not None:
+        out.append("")
 
     out.append(f"treval maturity report  (schema v{_bundle_schema_version()})")
     out.append(
@@ -126,7 +135,9 @@ def render_human(
     label_w = max(len(d.dimension) for d in report.dimensions) + 2
     out.append(" " * label_w + "  ".join(f"{lvl:>2}" for lvl in _LEVELS))
     for dim in report.dimensions:
-        not_measured = _is_not_measured(dim)
+        not_measured = (
+            dim.measured_state == NOT_MEASURED
+        )  # engine-computed, not re-derived
         a, mc, ac = (
             _idx(dim.awarded_level),
             _idx(dim.measured_ceiling),
@@ -155,6 +166,20 @@ def render_human(
             )
     out.append("over-claim gaps (declared above what measurement supports):")
     out.extend(gap_lines or ["  (none)"])
+    out.append("")
+
+    # 2b. measured gaps — the TWO (three) kinds of a null measured_ceiling, each with the fact that
+    # rides with it (EV-CITE 件二). The CLI and the Web read the SAME engine-computed field, so
+    # "not measured" (无实测信号) can never again be printed for a dimension that was measured-but-low.
+    mg_lines: list[str] = []
+    for dim in report.dimensions:
+        if dim.measured_state == CERTIFIED:
+            continue
+        bp = f" @{dim.measured_breakpoint}" if dim.measured_breakpoint else ""
+        mg_lines.append(f"  {dim.dimension}  [{dim.measured_state}{bp}]")
+        mg_lines.extend(f"    - {sentence}" for sentence in dim.measured_gap)
+    out.append("measured gaps (why a dimension has no certified measured level):")
+    out.extend(mg_lines or ["  (none — every dimension certified a measured level)"])
     out.append("")
 
     # 3. per-dimension detail.

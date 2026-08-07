@@ -164,6 +164,20 @@ def run_report(
         bundle_path, posture_path, registry
     )
 
+    if fmt == "human":
+        # EV-CITE 件一: the human report leads with the citability verdict. Derived from the same
+        # provenance/integrity the delivery bundle carries (evidence_basis follows target_kind).
+        from treval.citability import report_citability
+        from treval.rubric.serialize import derive_evidence_basis
+
+        _citable, _blockers = report_citability(
+            {
+                "evidence_basis": derive_evidence_basis(target_kind),
+                "provenance": _prov,
+                "report": {"integrity_summary": dict(report.integrity_summary)},
+            }
+        )
+
     if fmt == "json":
         from treval.active_eval import EVIDENCE_REQUIREMENTS
 
@@ -176,7 +190,15 @@ def run_report(
     elif fmt == "csv":
         text = render_csv(reg, report, measurements)
     else:  # human
-        text = render_human(reg, report, measurements, tuple(warnings), color=color)
+        text = render_human(
+            reg,
+            report,
+            measurements,
+            tuple(warnings),
+            color=color,
+            citable=_citable,
+            citable_blockers=tuple(_blockers),
+        )
     return text, warnings
 
 

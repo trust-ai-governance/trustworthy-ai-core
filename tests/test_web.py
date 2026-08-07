@@ -24,13 +24,6 @@ from treval.registry.serialize import (
 
 _SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "web" / "registry.sample.json"
 
-# Starlette's TestClient emits a forward-deprecation about its httpx backend on
-# import ("install httpx2 instead") — upstream and not actionable here. Silence
-# just that one message so the web-test output stays clean.
-pytestmark = pytest.mark.filterwarnings(
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated"
-)
-
 
 # --------------------------------------------------------------------------- #
 # Serializer (pure — no web deps)

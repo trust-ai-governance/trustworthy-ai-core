@@ -9,7 +9,14 @@ Deterministic: fixed inputs + the byte-stable `self_contained_bundle_to_json`.
 from __future__ import annotations
 
 from treval import evaluate, load_registry, self_contained_bundle_to_json
-from treval.models import EvidenceRef, IntegrityStatus, Measurement, PostureEvidence
+from treval.models import (
+    INTERVAL_CENSUS,
+    INTERVAL_TOTAL_FUNCTION,
+    EvidenceRef,
+    IntegrityStatus,
+    Measurement,
+    PostureEvidence,
+)
 from treval.stats import binomial_ci
 
 _WINDOW = (1782000000000000000, 1782000600000000000)
@@ -30,9 +37,12 @@ def _m(
     integrity=_V,
     unit="ratio",
     ci=False,
+    interval_basis="",
 ):
     # ci=True fills the Wilson interval — set it for injection_catch_rate, which the shipped registry
     # now gates on ci_low (EV-CIGATE); its scenarios use enough n for the lower bound to clear 0.80.
+    # interval_basis declares a no-CI mechanism (census / total_function) so citation_form words it
+    # right (EV-CITE 件一 review) — a ci-None rate without it would read as "未声明", not "普查".
     ci_low, ci_high = binomial_ci(value, sample_size) if ci else (None, None)
     return Measurement(
         indicator_id=indicator_id,
@@ -46,6 +56,7 @@ def _m(
         notes="",
         ci_low=ci_low,
         ci_high=ci_high,
+        interval_basis=interval_basis,
     )
 
 
@@ -101,14 +112,22 @@ def _inputs():
                     "transparency_accountability",
                     1.0,
                     sample_size=120,
+                    interval_basis=INTERVAL_CENSUS,
                 ),
                 _m(
                     "tool_scope_violation_rate",
                     "security_alignment",
                     0.0,
                     sample_size=12,
+                    interval_basis=INTERVAL_TOTAL_FUNCTION,
                 ),
-                _m("block_rate", "security_alignment", 0.25, sample_size=40),
+                _m(
+                    "block_rate",
+                    "security_alignment",
+                    0.25,
+                    sample_size=40,
+                    interval_basis=INTERVAL_CENSUS,
+                ),
             ],
             _ROBUSTNESS_L3 + _SECURITY_L3,
         ),
@@ -145,6 +164,7 @@ def _inputs():
                     1.0,
                     sample_size=120,
                     integrity=_U,
+                    interval_basis=INTERVAL_CENSUS,
                 ),
                 _m(
                     "boundary_breach_rate",
@@ -152,6 +172,7 @@ def _inputs():
                     0.1,
                     sample_size=50,
                     integrity=_B,
+                    interval_basis=INTERVAL_CENSUS,
                 ),
             ],
             [],

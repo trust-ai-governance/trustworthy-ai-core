@@ -17,7 +17,7 @@ from collections.abc import Iterable
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.indicators._integrity import min_integrity
-from treval.models import AuditEvidence, Measurement
+from treval.models import INTERVAL_CENSUS, AuditEvidence, Measurement
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
 _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
@@ -27,6 +27,9 @@ _RESPONSE_OBSERVED = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
 class BlockRate:
     indicator_id = "block_rate"
     dimension = "security_alignment"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # full-window enumeration of decided records — no sampling
+    )
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         refs = []
@@ -57,5 +60,6 @@ class BlockRate:
                 evidence_refs=tuple(refs),
                 subject="",
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )

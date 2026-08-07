@@ -18,6 +18,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from treval.citability import citation_form, report_citability
 from treval.models import (
     DimensionReport,
     EvidenceRef,
@@ -27,9 +28,7 @@ from treval.models import (
 )
 from treval.registry import DimensionRegistry, serialize_registry
 
-SCHEMA_VERSION = (
-    4  # EV-CIGATE: each measurement gains a Wilson ci_low/ci_high (nullable)
-)
+SCHEMA_VERSION = 5  # EV-CITE: each measurement gains `interval_basis` (the EV-CIGATE §1.5 mechanism class)
 
 # --- R1 — target_kind (report-level) + evidence_basis (DERIVED, single source of truth) ---
 # target_kind names WHAT was evaluated; evidence_basis is its evidence strength and is NEVER
@@ -163,6 +162,11 @@ def _serialize_dimension(dim: DimensionReport) -> dict[str, Any]:
         "measured_ceiling": dim.measured_ceiling,
         "attested_ceiling": dim.attested_ceiling,
         "awarded_level": dim.awarded_level,
+        # EV-CITE 件二: the kind of `None` + the fact that must ride with it (a null ceiling has two
+        # very different meanings — "measured, below the line" vs "not produced this run").
+        "measured_state": dim.measured_state,
+        "measured_breakpoint": dim.measured_breakpoint,
+        "measured_gap": list(dim.measured_gap),
         "objectives": [_serialize_objective(o) for o in dim.objectives],
         "gaps": list(dim.gaps),
     }
@@ -218,6 +222,10 @@ def serialize_measurement(
         # not a binomial proportion — a `ci_low >= τ` gate over null RAISES, never silently grades.
         "ci_low": m.ci_low,
         "ci_high": m.ci_high,
+        # EV-CITE 件一 (review): the interval MECHANISM must ride with the product, not just the
+        # in-memory object — else the collect→report round-trip loses it and citation_form falls back.
+        # "" (a detector / non-rate) is honest; a census / total_function declares its class.
+        "interval_basis": m.interval_basis,
         "evidence_refs": _serialize_refs(m.evidence_refs),
     }
 
@@ -315,16 +323,55 @@ def serialize_self_contained_bundle(
     EV-W0 serializer so the UI loads one file and never mis-pairs parts. `report`/`measurements`
     are the EV-7 shapes, unchanged."""
     registry_dict = serialize_registry(registry)
+    materialized = tuple(measurements)
     base = serialize_bundle(
         report,
-        measurements,
+        materialized,
         target_kind=target_kind,
         evidence_requirements=evidence_requirements,
     )
+    # EV-CITE 件一: the citability gate lives ON the delivery artifact — the only envelope that
+    # carries `provenance` (pinned / segment hash), so it is the only one that can judge whether a
+    # number may leave the room. Disclosure, not refusal: the bundle is emitted either way.
+    citable, citable_blockers = report_citability(
+        {
+            "evidence_basis": base["evidence_basis"],
+            "provenance": provenance,
+            "report": base["report"],
+        }
+    )
+    # 件一 §1.4: each measurement gets a paste-whole `citation_form` (n + interval, or "普查", per
+    # mechanism) computed here where provenance + the citable verdict are known. Same sort order as
+    # serialize_bundle so it zips 1:1 onto the serialized rows.
+    pred_by_indicator = {
+        obj.evidence.indicator_id: obj.evidence.satisfied_when
+        for dim in registry.dimensions.values()
+        for level in dim.levels.values()
+        for obj in level
+        if obj.evidence.kind == "measured" and obj.evidence.indicator_id
+    }
+    pinned = bool(provenance and provenance.get("pinned"))
+    window = provenance.get("window") if provenance else None
+    first_blocker = citable_blockers[0] if citable_blockers else None
+    for m, row in zip(
+        sorted(materialized, key=lambda x: (x.indicator_id, x.subject)),
+        base["measurements"],
+    ):
+        row["citation_form"] = citation_form(
+            m,
+            pinned=pinned,
+            window=window,
+            evidence_basis=base["evidence_basis"],
+            citable=citable,
+            first_blocker=first_blocker,
+            satisfied_when=pred_by_indicator.get(m.indicator_id),
+        )
     return {
         "schema_version": base["schema_version"],
         "target_kind": base["target_kind"],
         "evidence_basis": base["evidence_basis"],
+        "citable": citable,
+        "citable_blockers": citable_blockers,
         "registry_fingerprint": _fingerprint_of(registry_dict),
         # EV-PIN §1.5-1: the pin stamp must reach the DELIVERY artifact, not stop at the
         # collect bundle. Without it a `window=0-0` snapshot is indistinguishable from a

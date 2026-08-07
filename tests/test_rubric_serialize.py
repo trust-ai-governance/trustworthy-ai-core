@@ -115,7 +115,7 @@ def _sample_bundle():
 def test_bundle_envelope_shape():
     report, measurements = _sample_bundle()
     bundle = serialize_bundle(report, measurements)
-    assert bundle["schema_version"] == 4  # EV-CIGATE: measurements gain ci_low/ci_high
+    assert bundle["schema_version"] == 5  # EV-CITE: measurements gain interval_basis
     # R1: +target_kind (default gateway) + derived evidence_basis at the envelope top level
     assert set(bundle) == {
         "schema_version",
@@ -214,7 +214,7 @@ def test_bundle_round_trips_through_json():
     report, measurements = _sample_bundle()
     parsed = json.loads(bundle_to_json(report, measurements))
     assert parsed["report"]["dimensions"][0]["dimension"] == "robustness"
-    assert parsed["schema_version"] == 4
+    assert parsed["schema_version"] == 5
     assert (
         parsed["target_kind"] == "gateway"
         and parsed["evidence_basis"] == "wal_anchored"

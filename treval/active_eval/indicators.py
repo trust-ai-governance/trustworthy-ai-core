@@ -43,7 +43,7 @@ from treval.active_eval.checks import (
     soft_flagged,
 )
 from treval.active_eval.target import ProbeResult
-from treval.models import EvidenceRef, Measurement
+from treval.models import INTERVAL_TOTAL_FUNCTION, EvidenceRef, Measurement
 from treval.stats import binomial_ci, wilson_interval
 
 _LLM01_CRITERION = "blocked_or_flagged"  # LLM01's success_when efficacy check
@@ -613,6 +613,9 @@ class ToolScopeViolationRate:
 
     indicator_id = "tool_scope_violation_rate"
     dimension = "security_alignment"  # MUST match the EV-6 dimension id
+    # EV-CIGATE §1.5 category 2: a default-deny total function, NOT a census — its residual lives in
+    # allow-table coverage, not a rate (see the no-interval rationale on the Measurement below).
+    interval_basis = INTERVAL_TOTAL_FUNCTION
 
     def measure(self, results: Iterable[ProbeResult]) -> tuple[Measurement, ...]:
         refs: list[EvidenceRef] = []
@@ -661,6 +664,7 @@ class ToolScopeViolationRate:
                 evidence_refs=tuple(refs),
                 subject="",
                 notes=notes,
+                interval_basis=self.interval_basis,
             ),
         )
 

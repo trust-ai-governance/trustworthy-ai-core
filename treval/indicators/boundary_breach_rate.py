@@ -24,7 +24,13 @@ from collections.abc import Iterable
 
 from treval.indicators._integrity import min_integrity
 from treval.indicators.correlate import join_ab
-from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus, Measurement
+from treval.models import (
+    INTERVAL_CENSUS,
+    AuditEvidence,
+    EvidenceRef,
+    IntegrityStatus,
+    Measurement,
+)
 
 _CHANNEL_SHADOW_RULE_ID = "inj-indirect-channel-shadow"
 
@@ -58,6 +64,9 @@ def _authz_denied(ev: AuditEvidence | None) -> bool:
 class BoundaryBreachRate:
     indicator_id = "boundary_breach_rate"
     dimension = "robustness"  # MUST match the EV-6 dimension id
+    interval_basis = (
+        INTERVAL_CENSUS  # full-window enumeration of boundary events — no sampling
+    )
 
     def measure(self, evidence: Iterable[AuditEvidence]) -> tuple[Measurement, ...]:
         records = tuple(evidence)
@@ -102,5 +111,6 @@ class BoundaryBreachRate:
                 subject="",
                 notes=notes,
                 integrity=min_integrity(integrities),
+                interval_basis=self.interval_basis,
             ),
         )

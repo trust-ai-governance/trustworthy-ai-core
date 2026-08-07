@@ -99,6 +99,7 @@ def build_provenance(
     pinned: bool,
     tenant_id: str,
     record_count: int,
+    observed_window: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """The run's pin artifact, embedded in the collect bundle (EV-PIN §1.3).
 
@@ -121,4 +122,9 @@ def build_provenance(
         "wal_dir": str(wal_dir) if wal_dir else None,
         "wal_segments": segments.as_dict() if segments else None,
         "record_count": record_count,
+        # EV-CITE C12 — the window the records ACTUALLY occupy. For a normal run it is the span
+        # covered by the scan; when a PINNED window caught nothing (record_count==0), the caller
+        # supplies the UNFILTERED span so the citability blocker can hand the operator a window to
+        # re-pin (they must never have to compute nanoseconds themselves). None ⇒ no records to point at.
+        "observed_window": list(observed_window) if observed_window else None,
     }

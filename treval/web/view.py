@@ -142,7 +142,9 @@ def maturity_rows(report: dict, titles: dict[str, str]) -> list[dict[str, Any]]:
         if gaps:
             pill = {"kind": "risk", "text": f"过度声明 {gaps}"}
         elif not measured:
-            pill = {"kind": "warn", "text": "无实测信号"}
+            # EV-CITE 件二: a null measured_ceiling is NOT one thing — the pill is driven by the
+            # engine's `measured_state`, so "无实测信号" is used ONLY when nothing was measured.
+            pill = _state_pill(d.get("measured_state"), d.get("measured_breakpoint"))
         elif _lv(attested) > _lv(measured):
             pill = {"kind": "risk", "text": "声明高于实测"}
         else:
@@ -155,9 +157,29 @@ def maturity_rows(report: dict, titles: dict[str, str]) -> list[dict[str, Any]]:
                 "attested": attested or "—",
                 "awarded": d.get("awarded_level") or "—",
                 "pill": pill,
+                # the facts that must ride with a non-certified dimension (rendered below the table)
+                "measured_state": d.get("measured_state"),
+                "measured_gap": list(d.get("measured_gap", [])),
             }
         )
     return rows
+
+
+# EV-CITE 件二 — each non-certified state maps to a DIFFERENT pill + a DIFFERENT operator action.
+# "无实测信号" is reserved for `not_measured`; a measured-but-low dimension never gets it again.
+_STATE_PILL = {
+    "below_floor": ("warn", "实测未达"),
+    "blocked_no_data": ("warn", "缺实测证据"),
+    "evidence_unverified": ("warn", "证据待核验"),
+    "not_measured": ("warn", "无实测信号"),
+}
+
+
+def _state_pill(state: str | None, breakpoint: str | None) -> dict[str, str]:
+    kind, text = _STATE_PILL.get(state or "", ("warn", "无实测信号"))
+    if state == "below_floor" and breakpoint:
+        text = f"{text} {breakpoint}"  # 实测未达 L2 — the level rides in the pill (acceptance 13)
+    return {"kind": kind, "text": text}
 
 
 _UNIT_SUFFIX = {"ms": "ms", "tokens": "tokens", "count": ""}
@@ -290,6 +312,13 @@ def build_context(bundle: dict) -> dict[str, Any]:
         # EV-PIN §1.5-2/3: is this report reproducible (⇒ citable), and the window rendered
         # for humans. The raw ns stays the selector's value elsewhere — this is label only.
         "pin": pin_status(bundle),
+        # EV-CITE 件一 §1.5: the report-level citability verdict, read straight off the bundle (the
+        # engine already decided it). Shown BOTH ways — a green "可引用" as well as the red blockers —
+        # so "citable" is never the silent default.
+        "citability": {
+            "citable": bundle.get("citable"),
+            "blockers": list(bundle.get("citable_blockers", [])),
+        },
         "window_label": window_label(report.get("window", [0, 0])),
         "STATUS_LABEL": STATUS_LABEL,
         "STATUS_HELP": STATUS_HELP,

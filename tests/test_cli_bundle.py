@@ -7,7 +7,13 @@ import json
 import pytest
 
 from treval.cli.bundle import BundleError, build_bundle, load_bundle
-from treval.models import EvidenceRef, IntegrityStatus, Measurement
+from treval.models import (
+    INTERVAL_CENSUS,
+    INTERVAL_TOTAL_FUNCTION,
+    EvidenceRef,
+    IntegrityStatus,
+    Measurement,
+)
 
 
 def _m(indicator_id, dimension, value, **kw):
@@ -31,6 +37,41 @@ def _write(tmp_path, doc):
     return p
 
 
+def test_interval_basis_survives_the_round_trip(tmp_path):
+    """🔴 EV-CITE 件一 (review): the interval MECHANISM must ride WITH the product through the
+    collect→report round-trip — else citation_form loses it on the user's actual path and falls back.
+    A census stays census, a total function stays total_function."""
+    measurements = (
+        Measurement(
+            "chain_integrity",
+            "transparency_accountability",
+            1.0,
+            "ratio",
+            867,
+            (EvidenceRef(source="wal:x", seq=1),),
+            interval_basis=INTERVAL_CENSUS,
+        ),
+        Measurement(
+            "tool_scope_violation_rate",
+            "security_alignment",
+            0.0,
+            "ratio",
+            12,
+            (EvidenceRef(source="wal:x", seq=2),),
+            interval_basis=INTERVAL_TOTAL_FUNCTION,
+        ),
+    )
+    loaded = load_bundle(
+        _write(
+            tmp_path,
+            build_bundle(measurements, tenant_id="t", window=(1, 2), mode="active"),
+        )
+    )
+    by_id = {m.indicator_id: m.interval_basis for m in loaded.measurements}
+    assert by_id["chain_integrity"] == INTERVAL_CENSUS
+    assert by_id["tool_scope_violation_rate"] == INTERVAL_TOTAL_FUNCTION
+
+
 def test_build_then_load_round_trips(tmp_path):
     measurements = (
         _m("injection_catch_rate", "robustness", 0.9),
@@ -48,8 +89,8 @@ def test_build_then_load_round_trips(tmp_path):
     assert loaded.tenant_id == "t"
     assert loaded.window == (1, 2)
     assert (
-        loaded.schema_version == 5
-    )  # EV-CIGATE: collect bundle v5 (measurements gain ci_low/ci_high)
+        loaded.schema_version == 6
+    )  # EV-CITE: collect bundle v6 (measurements gain interval_basis)
     assert loaded.target_kind == "gateway"  # R1: default, round-trips
     # same measurements (order-independent: compare as sets of key fields)
     got = {

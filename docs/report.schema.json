@@ -9,6 +9,8 @@
     "schema_version",
     "target_kind",
     "evidence_basis",
+    "citable",
+    "citable_blockers",
     "registry_fingerprint",
     "provenance",
     "report",
@@ -19,6 +21,17 @@
     "schema_version": {
       "type": "integer",
       "minimum": 1
+    },
+    "citable": {
+      "description": "EV-CITE 件一: may these numbers leave the room? true iff citable_blockers is empty. Disclosure, not refusal — the bundle is emitted either way. NOT about whether a result looks good: an honest 'unmet' is citable; only report-wide provenance failures block.",
+      "type": "boolean"
+    },
+    "citable_blockers": {
+      "description": "EV-CITE 件一: report-wide reasons a number can't be cited (broken chain / unpinned / missing segment hash / non-chain-anchored evidence). Each entry NAMES A FIX. Empty ⇔ citable.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "target_kind": {
       "description": "R1: what was evaluated. raw_model = bare-model baseline · gateway = governed (WAL-anchored) · moderation_api = third-party moderation API. Default gateway.",
@@ -98,6 +111,18 @@
         "record_count": {
           "type": "integer",
           "minimum": 0
+        },
+        "observed_window": {
+          "description": "EV-CITE C12: the half-open [min, max+1) window the records ACTUALLY occupy. When a pinned window caught nothing (record_count==0), this is the UNFILTERED span so the citability blocker can hand the operator a window to re-pin. null ⇒ no records to point at.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
         },
         "wal_segments": {
           "type": [
@@ -207,6 +232,9 @@
         "measured_ceiling",
         "attested_ceiling",
         "awarded_level",
+        "measured_state",
+        "measured_breakpoint",
+        "measured_gap",
         "objectives",
         "gaps"
       ],
@@ -222,6 +250,25 @@
         },
         "awarded_level": {
           "$ref": "#/definitions/level_or_null"
+        },
+        "measured_state": {
+          "type": "string",
+          "enum": [
+            "certified",
+            "below_floor",
+            "evidence_unverified",
+            "blocked_no_data",
+            "not_measured"
+          ]
+        },
+        "measured_breakpoint": {
+          "$ref": "#/definitions/level_or_null"
+        },
+        "measured_gap": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "objectives": {
           "type": "array",
@@ -310,10 +357,26 @@
         "notes",
         "integrity",
         "availability",
+        "interval_basis",
+        "citation_form",
         "evidence_refs"
       ],
       "properties": {
         "indicator_id": {
+          "type": "string"
+        },
+        "interval_basis": {
+          "description": "EV-CIGATE §1.5 mechanism class, declared by the indicator and carried with the measurement so citation_form words 'no interval' correctly: 'sampled' (detector → interval), 'total_function' (default-deny → residual in coverage), 'census' (full enumeration → no sampling uncertainty), or '' (detector/non-rate, unspecified).",
+          "type": "string",
+          "enum": [
+            "",
+            "sampled",
+            "total_function",
+            "census"
+          ]
+        },
+        "citation_form": {
+          "description": "EV-CITE 件一 §1.4: a paste-whole口径 for this measurement — a rate carries n + 95% interval, a census says '普查 n/n' (no interval), and a not-citable value is prefixed '🔴 NOT CITABLE —'. Present on the self-contained (delivery) bundle only.",
           "type": "string"
         },
         "dimension": {
