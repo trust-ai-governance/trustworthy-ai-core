@@ -14,3 +14,17 @@
 # not bundled here so an "upgrade" diff never hides a "changed 80 lines" diff.
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
+
+# Pytest — the ONE place warning filters live.
+#
+# WHY global (not per-module): Starlette's TestClient emits a forward-deprecation
+# ("Using `httpx` with `starlette.testclient` is deprecated; install httpx2 instead")
+# the moment `fastapi.testclient` is imported — upstream, not actionable here. A
+# per-module `pytest.mark.filterwarnings` can't silence it, because markers apply during
+# the test CALL while the trigger is a module-top-level import at COLLECTION time
+# (tests/test_cases_app.py). An ini filter covers both phases everywhere, so this one
+# entry replaces the three copies that used to drift across the web-test modules.
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+]

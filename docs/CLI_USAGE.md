@@ -98,6 +98,23 @@ security_alignment            ·   ·   ·   ·   ·
   design attestation **cannot** raise it. That honesty *is* the point.
 - Colours show on a TTY; piped/`--out`/`NO_COLOR` → the plain letters above (diff-stable).
 
+**Citability (件一) — the first line.** `--format human` leads with one verdict: `✅ CITABLE` or `🔴 NOT
+CITABLE — <fix>`. It answers *may these numbers leave the room?* — a report-wide **provenance** question
+(pinned window · segment hash · chain-anchored evidence · intact integrity chain), **not** whether a result
+looks good. 🔴 An honest `unmet` (measured, below the line) is **citable**; only a standing-up failure
+blocks. Each blocker names its fix. The delivery bundle carries `citable` / `citable_blockers` (top level)
+and a paste-whole `citation_form` per measurement, worded by the indicator's **declared mechanism**
+(EV-CIGATE §1.5, three ways — never derived from `ci is None`): a sampled **detector** → `n` + 95%
+interval; a default-deny **total function** → *no* interval, "残余在覆盖面，不在抽样" (its residual is a hole
+in the allow-list, not a rate); a **census** → `普查 n/n`, no sampling uncertainty. Not-citable → the same
+string prefixed `🔴 NOT CITABLE`.
+
+**Two kinds of a null measured level (件二).** A dimension with no certified measured level is **not one
+thing** — the report (grid `measured gaps:` section, and the Dashboard) says which, each with a different
+action: **below_floor** (测到了、区间下界不到线 → 扩样本，附条件式「还要多少 n」), **blocked_no_data**
+(该级某指标本次未产出 → 查那个指标), **evidence_unverified** (有值但来源不可链校验 → 换 WAL 证据源), and
+**not_measured** (真的没测 → `无实测信号`). "没测到" and "测了没达标" never read the same again.
+
 **Today's coverage is thin on purpose (EV-8 §1):** only `injection_catch_rate`, `tool_scope_violation_rate`
 (active) and `block_rate` (passive, not yet collected) exist — so **robustness + security** carry measured
 rows and the other three dimensions read **NotMeasured**. Each future indicator (EV-5/EV-9) lights up more
