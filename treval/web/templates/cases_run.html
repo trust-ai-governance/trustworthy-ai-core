@@ -27,8 +27,9 @@
 {% endmacro %}
 
 {% block content %}
-<p class="case-crossrun">📌 本页来自<strong>另一次评测运行</strong> · {{ run_time }} · corpus_sha={{ corpus_sha8 }}
-  —— 🔴 与成熟度报告<strong>不是同一次跑</strong>；同名指标是<strong>两次抽样</strong>，<strong>不可直接相减</strong>（EV-CIGATE F1 / §9.1）。</p>
+<p class="case-crossrun" title="内部参照：EV-CIGATE F1 / §9.1">📌 本页与「成熟度报告」不是同一次评测<br>
+  本页数据来自 {{ run_time }} 的一次主动评测（语料 {{ corpus_sha8 }}）<br>
+  🔴 两次跑是对同一个量的两次抽样 —— 同名指标不可直接相减，差值不是结论</p>
 
 <pre class="case-scope">{{ scope_declaration }}</pre>
 
