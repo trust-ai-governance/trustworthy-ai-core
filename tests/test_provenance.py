@@ -158,6 +158,28 @@ def test_build_provenance_carries_observed_window():
     )
 
 
+def test_build_provenance_carries_generated_at_ns():
+    """🔴 C15: build_provenance stamps the collect-time clock (generated_at_ns) INTO the product, so
+    citability can judge a future window from data inside the bundle. Absent ⇒ null (a pre-C15
+    bundle has no stamp; the future-upper-bound blocker then skips — never a clock fallback)."""
+    stamped = build_provenance(
+        wal_dir="/w",
+        window=(1, 2),
+        pinned=True,
+        tenant_id=_TENANT,
+        record_count=1,
+        generated_at_ns=1786019882041459593,
+    )
+    assert stamped["generated_at_ns"] == 1786019882041459593
+    # RED input: no generated_at_ns kwarg ⇒ null, never invented
+    assert (
+        build_provenance(
+            wal_dir=None, window=None, pinned=False, tenant_id=_TENANT, record_count=0
+        )["generated_at_ns"]
+        is None
+    )
+
+
 def test_pinned_empty_window_recovers_the_real_window_for_the_blocker(wal):
     """🔴 C12: a PINNED window with no records (record_count==0) — the windowed scan sees nothing,
     but an UNFILTERED read recovers where the records really are ([1000,1501)); that window rides in

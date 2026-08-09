@@ -11,6 +11,8 @@ from dataclasses import replace
 
 from treval import load_registry
 from treval.citability import (
+    CRITERIA_BLOCKERS,
+    CRITERIA_VERSION,
     OBSERVABLE_BIAS_NOTE,
     citation_form,
     report_citability,
@@ -29,7 +31,15 @@ from treval.stats import wilson_interval
 
 _REG = load_registry()
 _ROB = "robustness"
-_PINNED = {"pinned": True, "wal_segments": {"sha256": "sha256:" + "a" * 64}}
+# A PROPERLY pinned run: a WAL source declared (wal_dir), a closure stamp (generated_at_ns), and a
+# segment hash. C14 keys the window-family blockers on wal_dir; C15 requires generated_at_ns on a
+# pinned run (fail-closed), so a citable fixture must carry it.
+_PINNED = {
+    "pinned": True,
+    "wal_dir": "/wal",
+    "generated_at_ns": 10,
+    "wal_segments": {"sha256": "sha256:" + "a" * 64},
+}
 
 
 def _m(indicator: str, value: float, n: int) -> Measurement:
@@ -90,7 +100,7 @@ def test_unpinned_is_not_citable_and_the_blocker_names_the_fix():
     """🔴 acceptance 2: `provenance.pinned=false` ⇒ citable=false, and the blocker contains the
     actual remedy `--window-from-ns` — a bare "unpinned" with no fix would red this."""
     citable, blockers = report_citability(
-        _bundle({"pinned": False, "wal_segments": {"sha256": "x"}})
+        _bundle({"pinned": False, "wal_dir": "/w", "wal_segments": {"sha256": "x"}})
     )
     assert citable is False
     assert any("--window-from-ns" in b for b in blockers)
@@ -184,7 +194,7 @@ def test_broken_chain_is_not_citable_and_ranks_first():
     """🔴 acceptance 6: integrity_summary.broken>0 ⇒ not citable, and the integrity blocker is the
     FIRST entry (it voids everything beneath it) even when the run is also unpinned."""
     citable, blockers = report_citability(
-        _bundle({"pinned": False, "wal_segments": {}}, broken=2)
+        _bundle({"pinned": False, "wal_dir": "/w", "wal_segments": {}}, broken=2)
     )
     assert citable is False
     assert (
@@ -208,6 +218,7 @@ def test_pinned_but_empty_window_is_not_citable_and_prints_the_observed_window()
             "evidence_basis": "wal_anchored",
             "provenance": {
                 "pinned": True,
+                "wal_dir": "/w",
                 "record_count": 0,
                 "observed_window": [x, y],
                 "wal_segments": {"sha256": "sha256:" + "a" * 64},
@@ -221,13 +232,185 @@ def test_pinned_but_empty_window_is_not_citable_and_prints_the_observed_window()
         str(x) in blk and str(y) in blk
     )  # 🔴 the actual ns, copyable — not just "空窗口"
 
-    # a pinned run WITH records is untouched (no false positive)
+    # a pinned run WITH records AND a closure stamp is untouched (no false positive)
     ok, _b = report_citability(
         {
             "evidence_basis": "wal_anchored",
             "provenance": {
                 "pinned": True,
+                "wal_dir": "/w",
                 "record_count": 867,
+                "generated_at_ns": y,
+                "wal_segments": {"sha256": "sha256:" + "a" * 64},
+            },
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    assert ok is True
+
+
+# --------------------------------------------------------------------------- #
+# 23 / 27 — C15: an unclosed (future-upper-bound) pin is not a pin
+# --------------------------------------------------------------------------- #
+
+
+def test_future_upper_bound_is_not_citable_C15():
+    """🔴 C15 / acceptance 23: a pinned window whose UPPER bound is in the future (relative to the
+    product's OWN generated_at_ns) is not frozen — re-reading the same WAL later returns MORE records
+    and the number moves. citable=false. 🔴 The verdict reads generated_at_ns from INSIDE the bundle,
+    never the wall clock. RED input: before C15 this exact bundle returned (True, [])."""
+    gen = 1786019882041459593
+    citable, blockers = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": {
+                "pinned": True,
+                "wal_dir": "/w",
+                "record_count": 867,
+                "window": [gen - 1000, 9999999999999999999],  # upper ≈ year 2286
+                "generated_at_ns": gen,
+                "wal_segments": {"sha256": "sha256:" + "a" * 64},
+            },
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    assert citable is False
+    assert any(
+        "未来" in b for b in blockers
+    )  # the blocker names the unclosed-window fix
+
+    # the SAME window with a stamp AT/after its upper bound is CLOSED (window[1] > gen is false) ⇒
+    # citable. Proves C15 keys on the product's own datum, not on the window being small.
+    closed = 9999999999999999999
+    ok, blk = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": {
+                "pinned": True,
+                "wal_dir": "/w",
+                "record_count": 867,
+                "window": [0, closed],
+                "generated_at_ns": closed,
+                "wal_segments": {"sha256": "sha256:" + "a" * 64},
+            },
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    assert ok is True and not any("未来" in b for b in blk)
+
+
+def test_C12_message_warns_not_to_widen_into_the_future_C15():
+    """🔴 C15 / acceptance 27: the C12 empty-window blocker must ALSO tell the operator not to widen
+    the upper bound into the future — else the report itself teaches the hole (the natural reaction
+    to '空窗口' is to widen the window; widening into the future turns the gate falsely green). RED
+    input: a C12 blocker that hands over the observed window but omits the anti-widen clause."""
+    x, y = 1737000000000000000, 1737000005000000000
+    _c, blockers = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": {
+                "pinned": True,
+                "wal_dir": "/w",
+                "record_count": 0,
+                "observed_window": [x, y],
+                "wal_segments": {"sha256": "sha256:" + "a" * 64},
+            },
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    blk = next(b for b in blockers if "锚不住" in b)
+    assert (
+        "不要把上界放宽到未来" in blk
+    )  # the explicit anti-踩洞 clause (acceptance 27)
+    assert (
+        str(x) in blk and str(y) in blk
+    )  # AND still hands over the copyable window (C12)
+
+
+# --------------------------------------------------------------------------- #
+# C14 — the window-family blockers apply only when a WAL source was DECLARED (wal_dir)
+# --------------------------------------------------------------------------- #
+
+
+def test_window_family_blockers_gate_on_wal_dir_not_a_result_C14():
+    """🔴 C14: the window-family blockers apply only when this run DECLARED a WAL evidence source
+    (provenance.wal_dir). A no-WAL bundle (a raw_model run, or a gateway run given no --wal) is
+    anchored by corpus_sha + evidence_refs, NOT a window — so unpinned / empty-window / seghash must
+    NOT fire. 🔴 The gate keys on INTENT (wal_dir), NOT a RESULT (mode / record_count): a run that
+    NAMED --wal but read 0 records still has wal_dir set ⇒ C12 fires (the gate must not re-open C12)."""
+    # no wal_dir ⇒ exempt: an unpinned no-WAL bundle is citable
+    no_wal = {
+        "evidence_basis": "wal_anchored",
+        "provenance": {"pinned": False, "wal_segments": {}},
+        "report": {"integrity_summary": {"broken": 0}},
+    }
+    citable, blockers = report_citability(no_wal)
+    assert citable is True and blockers == []  # unpinned does NOT block a no-WAL bundle
+
+    # a broken chain is NOT window-family — it still voids a no-WAL bundle
+    broken = {**no_wal, "report": {"integrity_summary": {"broken": 1}}}
+    c2, b2 = report_citability(broken)
+    assert c2 is False and any("完整性破损" in b for b in b2)
+
+    # 🔴 teeth (the C14-re-opens-C12 regression): a run that DECLARED --wal but read 0 records has
+    # wal_dir SET ⇒ NOT exempt ⇒ the empty-window (C12) blocker fires. `mode: "active"` is exactly
+    # what the pre-fix collect stamped for a 0-record run (record_count==0 ⇒ passive empty ⇒ mode
+    # "active"), and the OLD `if mode != "active"` gate then EXEMPTED it from the very C12 blocker
+    # built to catch it (returned (True, [])). The new gate ignores `mode` and keys on wal_dir, so
+    # this now correctly blocks — RED before the fix, green after.
+    declared_wal_empty = {
+        "mode": "active",  # the pre-fix symptom; the new gate ignores it
+        "evidence_basis": "wal_anchored",
+        "provenance": {
+            "pinned": True,
+            "wal_dir": "/w",
+            "record_count": 0,
+            "observed_window": [100, 200],
+            "generated_at_ns": 300,
+            "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        },
+        "report": {"integrity_summary": {"broken": 0}},
+    }
+    c3, b3 = report_citability(declared_wal_empty)
+    assert c3 is False and any("锚不住" in b for b in b3)  # C12 fired despite wal_dir
+
+
+def test_missing_generated_at_ns_on_pinned_run_is_not_citable_C15():
+    """🔴 C15 fail-CLOSED (I-rule): a PINNED run that declared a WAL source (wal_dir) but carries NO
+    generated_at_ns cannot prove its window is closed, so it BLOCKS — same repo posture as C12 (an
+    unverifiable claim ⇒ refuse). 🔴 口径: every pre-C15 pinned bundle lacks this collect-time stamp,
+    so they all become NOT citable until regenerated (intended). RED input: pinned + wal_dir +
+    generated_at_ns absent — before this ruling C15 skipped silently ⇒ (True, [])."""
+    citable, blockers = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": {
+                "pinned": True,
+                "wal_dir": "/w",
+                "record_count": 867,
+                "window": [
+                    1000,
+                    2000,
+                ],  # window present, but no stamp to check it against
+                "wal_segments": {"sha256": "sha256:" + "a" * 64},
+            },
+            "report": {"integrity_summary": {"broken": 0}},
+        }
+    )
+    assert citable is False
+    assert any("generated_at_ns" in b and "重新采集" in b for b in blockers)
+
+    # the SAME bundle WITH a valid stamp (>= window[1]) is citable — the ruling blocks only the
+    # unverifiable claim, it does not make every pinned run un-citable.
+    ok, _b = report_citability(
+        {
+            "evidence_basis": "wal_anchored",
+            "provenance": {
+                "pinned": True,
+                "wal_dir": "/w",
+                "record_count": 867,
+                "window": [1000, 2000],
+                "generated_at_ns": 2000,
                 "wal_segments": {"sha256": "sha256:" + "a" * 64},
             },
             "report": {"integrity_summary": {"broken": 0}},
@@ -274,9 +457,12 @@ def _cite(m: Measurement, *, citable=True) -> str:
 
 def _pinned_bundle(measurements):
     report = evaluate(_REG, measurements, [], window=(100, 200), tenant_id="t")
+    # a properly pinned run: wal_dir declared, window closed (generated_at_ns >= window[1]) ⇒ citable
     prov = {
         "pinned": True,
+        "wal_dir": "/wal",
         "window": [100, 200],
+        "generated_at_ns": 200,
         "wal_segments": {"sha256": "sha256:" + "a" * 64},
     }
     return serialize_self_contained_bundle(report, measurements, _REG, prov)
@@ -315,8 +501,12 @@ def test_citation_form_not_citable_is_prefixed_never_blank():
         window=(0, 1),
         tenant_id="t",
     )
+    # a run that declared a WAL source but is unpinned ⇒ not citable (window-family applies)
     bundle = serialize_self_contained_bundle(
-        report, [_m("injection_catch_rate", 25 / 28, 28)], _REG, None
+        report,
+        [_m("injection_catch_rate", 25 / 28, 28)],
+        _REG,
+        {"pinned": False, "wal_dir": "/w", "wal_segments": {}},
     )
     assert bundle["citable"] is False
     for row in bundle["measurements"]:
@@ -444,3 +634,75 @@ def test_every_ci_none_ratio_indicator_declares_its_mechanism():
     assert {"ChainIntegrity", "ToolScopeViolationRate", "BlockRate"} <= set(
         discovered
     ), discovered
+
+
+# --------------------------------------------------------------------------- #
+# C16 — the citability verdict is versioned, so it is falsifiable
+# --------------------------------------------------------------------------- #
+
+
+def test_citability_criteria_version_is_serialized_with_the_verdict_C16():
+    """🔴 C16 teeth ①: a citability verdict can NEVER be serialized without its criteria version —
+    the self-contained bundle carries top-level `citability_criteria` next to citable/citable_blockers,
+    and the report schema REQUIRES it. RED input: delete the serialize line, or the schema `required`
+    entry — either makes this red."""
+    import json
+    from pathlib import Path
+
+    report = evaluate(
+        _REG,
+        [_m("injection_catch_rate", 25 / 28, 28)],
+        [],
+        window=(0, 1),
+        tenant_id="t",
+    )
+    bundle = serialize_self_contained_bundle(report, [], _REG, _PINNED)
+    assert bundle["citability_criteria"] == CRITERIA_VERSION
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs" / "report.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "citability_criteria" in schema["required"]
+    assert "citability_criteria" in schema["properties"]
+
+
+def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
+    """🔴 C16 teeth ②: the version is pinned to the IDENTITY set of blockers this gate can emit.
+    Changing CRITERIA_BLOCKERS (add / remove / repurpose a key) WITHOUT bumping CRITERIA_VERSION ⇒
+    red. A wording-only edit to a `_*_FIX` string leaves CRITERIA_BLOCKERS untouched ⇒ this stays
+    green (proving 文案改动 does not bump the version)."""
+    assert (CRITERIA_VERSION, CRITERIA_BLOCKERS) == (
+        1,
+        frozenset(
+            {
+                "integrity_broken",
+                "pinned_empty_window",
+                "future_upper_bound",
+                "no_generated_at_ns",
+                "unpinned",
+                "missing_segment_hash",
+                "not_wal_anchored",
+            }
+        ),
+    )
+
+
+def test_criteria_blockers_count_matches_the_code_append_sites_C16():
+    """🔴 C16 honesty: the number of blocker-append sites in report_citability's SOURCE must equal
+    len(CRITERIA_BLOCKERS). Add a code blocker but forget its identity key (or vice versa) ⇒ counts
+    diverge ⇒ red — closing the "added a code blocker but forgot the key set" gap. Uses source
+    introspection (like the existing indicator-mechanism gate), NOT message matching, so a pure 文案
+    edit to a `_*_FIX` string never trips it."""
+    import inspect
+
+    from treval import citability
+
+    append_sites = inspect.getsource(citability.report_citability).count(
+        "blockers.append("
+    )
+    assert append_sites == len(citability.CRITERIA_BLOCKERS), (
+        f"{append_sites} blocker-append site(s) vs {len(citability.CRITERIA_BLOCKERS)} declared "
+        "key(s) — add/remove a blocker ⇒ update CRITERIA_BLOCKERS (and bump CRITERIA_VERSION)"
+    )

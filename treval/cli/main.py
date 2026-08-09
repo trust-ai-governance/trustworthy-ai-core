@@ -468,6 +468,20 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="pin the run's window end (EXCLUSIVE, ns since epoch)",
         )
+        # EV-CITE C13 — make a citable product reachable in ONE command.
+        col.add_argument(
+            "--passive-only",
+            action="store_true",
+            help="read the WAL and send NO probes (requires --wal, no target) — measure the passive "
+            "indicators alone, without re-paying the whole active side",
+        )
+        col.add_argument(
+            "--pin-observed-window",
+            action="store_true",
+            help="pin to the window the passive scan actually covered (an explicit口径 declaration). "
+            "One command, zero extra probes, window correct by construction; combinable with --gateway. "
+            "Mutually exclusive with --window-from-ns/--window-to-ns.",
+        )
         if name == "run":
             col.add_argument("--posture", default=None)
             col.add_argument(

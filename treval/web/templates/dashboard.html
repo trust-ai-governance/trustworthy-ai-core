@@ -5,8 +5,20 @@
 
 {# EV-CITE 件一 §1.5 — the citability bar: may these numbers leave the room? Shown BOTH ways (green
    可引用 / red 不可引用 + the blockers, each naming its fix), so "citable" is never the silent
-   default. Read straight off the bundle's `citable` — no second derivation. #}
-{% if citability.citable is not none %}
+   default. C16: the STORED verdict is recomputed under the CURRENT criteria; on disagreement (pure
+   criteria drift, one immutable bundle) BOTH are shown — the stored verdict is never silently
+   replaced. #}
+{% if citability.changed %}
+<div class="citebar no">
+  <b>🔴 判据已变，请按当前判据重新生成</b>
+  <div>as-generated：{{ '可引' if citability.stored_citable else '不可引' }}（判据
+    {% if citability.stored_criteria %}v{{ citability.stored_criteria }}{% else %}旧判据·未版本化{% endif %}）</div>
+  <div>按当前判据 v{{ citability.current_criteria }}：{{ '可引' if citability.current_citable else '不可引' }}</div>
+  {% if not citability.current_citable %}
+  <ul>{% for b in citability.current_blockers %}<li>{{ b }}</li>{% endfor %}</ul>
+  {% endif %}
+</div>
+{% elif citability.citable is not none %}
 <div class="citebar {{ 'yes' if citability.citable else 'no' }}">
   {% if citability.citable %}
   <b>✅ 可对外引用</b> —— 窗口已固定 · 链锚定 · 完整性完好；下方每条率的口径见「用例明细 / citation_form」。

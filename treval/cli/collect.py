@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -337,66 +338,117 @@ def _resolve_target(args: argparse.Namespace) -> tuple[str, str] | None:
 
 
 def run_collect(args: argparse.Namespace) -> int:
-    resolved = _resolve_target(args)
-    if resolved is None:
-        return EXIT_IO
-    target_url, target_kind = resolved
+    warnings: list[str] = []
+    passive_only = getattr(args, "passive_only", False)
+    pin_observed = getattr(args, "pin_observed_window", False)
+    # C15 (source): the wall clock at INPUT-VALIDATION time — legal here — used ONLY to reject a
+    # future --window-to-ns before any probe runs. This is a DIFFERENT moment from generated_at_ns
+    # (the product-GENERATION clock, read AFTER the scan below): with --gateway --pin-observed-window
+    # the probes CREATE records DURING the run, so the stamp must be taken after them. Two reads is
+    # correct, not a smell.
+    now_ns = time.time_ns()
 
-    # EV-PAIR-A2 §2: `--model` is REQUIRED for a non-gateway target — `deepseek-v4-flash` is the
-    # GATEWAY deployment's model id, no default is correct for an arbitrary endpoint (unset ⇒
-    # near-certain 404 + a whole wasted run). Same discipline as D3's "never infer target_kind":
-    # what can't be guessed isn't guessed. The gateway keeps its meaningful default.
-    model = args.model
-    if not model:
-        if target_kind == "gateway":
-            model = "deepseek-v4-flash"
-        else:
-            print(
-                f"error: --model is required for --target-kind {target_kind} (no default "
-                "for an arbitrary endpoint); it reads TREVAL_EVAL_MODEL",
-                file=sys.stderr,
-            )
-            return EXIT_IO
+    # EV-PIN: a run is PINNED only when the operator supplied BOTH window bounds — that is the
+    # reproducibility claim (same WAL + same bounds ⇒ same records ⇒ same n and value). Parsed FIRST
+    # so the C15/exclusivity refusals below happen at the SOURCE, before any probe is spent.
+    raw_from = getattr(args, "window_from_ns", None)
+    raw_to = getattr(args, "window_to_ns", None)
+    window_from: int | None = int(raw_from) if raw_from is not None else None
+    window_to: int | None = int(raw_to) if raw_to is not None else None
 
-    # Lazy — the targets pull httpx only when we actually collect.
-    from treval.active_eval import GatewayTarget, OpenAITarget
-
-    target: object
-    if target_kind == "gateway":
-        target = GatewayTarget(
-            target_url,
-            wal_dir=args.wal,
-            tenant_id=args.tenant,
-            user_id=args.user,  # MUST be provisioned (else all-unmeasurable)
-            model=model,
-            temperature=0.0,  # pin for the statistical verticals
-        )
-    elif target_kind == "raw_model":
-        # EV-FWD: a bare OpenAI-compatible model. NO wal_dir / NO tenant — it is not governed;
-        # only the output-side indicators measure on it, the rest surface as availability=n/a.
-        target = OpenAITarget(target_url, model=model, temperature=0.0)
-    else:  # moderation_api
+    # 🔴 C15 (source, primary): reject a FUTURE upper bound BEFORE probing. A window whose `to` has
+    # not passed is NOT frozen — re-reading the same WAL later returns MORE records, so the pinned
+    # number changes; reproducibility is the one thing `pinned` exists to guarantee. The clock is
+    # legal HERE (source), so this refuses to even PRODUCE a fake-pinned bundle (not lean on downstream).
+    if window_to is not None and window_to > now_ns:
         print(
-            "error: --target-kind moderation_api has no runtime in EV-FWD (its vendor-catch "
-            "indicator lands with C2); only gateway | raw_model can be driven today",
+            f"error: --window-to-ns {window_to} is in the future (now {now_ns}) — a window whose "
+            "upper bound has not passed is NOT frozen: re-reading the same WAL later returns MORE "
+            "records, so the pinned number changes. Pin with a CLOSED, past upper bound.",
             file=sys.stderr,
         )
         return EXIT_IO
-    corpus_root = Path(args.corpus) if args.corpus else _DEFAULT_CORPUS
 
-    warnings: list[str] = []
-    active = collect_measurements(target, corpus_root=corpus_root, warnings=warnings)
+    # C13: --pin-observed-window pins to whatever the passive scan covers, so explicit bounds make no
+    # sense alongside it (they would filter the very scan it pins to). Reject the contradictory combo.
+    if pin_observed and (window_from is not None or window_to is not None):
+        print(
+            "error: --pin-observed-window pins to the observed window — do not also pass "
+            "--window-from-ns/--window-to-ns (they would filter the scan it pins to)",
+            file=sys.stderr,
+        )
+        return EXIT_IO
+
+    # C13: --passive-only reads the WAL and sends NO probes, so it needs no target — only a --wal to
+    # read. The eval WAL is gateway-governed ⇒ its passive numbers are wal_anchored, so this is a
+    # gateway-kind bundle with no active half. (It removes "re-pay the whole active side just to
+    # change a WAL-read parameter".)
+    if passive_only:
+        if not args.wal:
+            print(
+                "error: --passive-only reads the WAL and sends no probes — it requires --wal DIR "
+                "(plus --window-from-ns/--window-to-ns or --pin-observed-window to be citable)",
+                file=sys.stderr,
+            )
+            return EXIT_IO
+        target_url, target_kind, model = "", "gateway", None
+        active = ActiveScan((), 0, 0, None, {})
+    else:
+        resolved = _resolve_target(args)
+        if resolved is None:
+            return EXIT_IO
+        target_url, target_kind = resolved
+
+        # EV-PAIR-A2 §2: `--model` is REQUIRED for a non-gateway target — `deepseek-v4-flash` is the
+        # GATEWAY deployment's model id, no default is correct for an arbitrary endpoint (unset ⇒
+        # near-certain 404 + a whole wasted run). Same discipline as D3's "never infer target_kind":
+        # what can't be guessed isn't guessed. The gateway keeps its meaningful default.
+        model = args.model
+        if not model:
+            if target_kind == "gateway":
+                model = "deepseek-v4-flash"
+            else:
+                print(
+                    f"error: --model is required for --target-kind {target_kind} (no default "
+                    "for an arbitrary endpoint); it reads TREVAL_EVAL_MODEL",
+                    file=sys.stderr,
+                )
+                return EXIT_IO
+
+        # Lazy — the targets pull httpx only when we actually collect.
+        from treval.active_eval import GatewayTarget, OpenAITarget
+
+        target: object
+        if target_kind == "gateway":
+            target = GatewayTarget(
+                target_url,
+                wal_dir=args.wal,
+                tenant_id=args.tenant,
+                user_id=args.user,  # MUST be provisioned (else all-unmeasurable)
+                model=model,
+                temperature=0.0,  # pin for the statistical verticals
+            )
+        elif target_kind == "raw_model":
+            # EV-FWD: a bare OpenAI-compatible model. NO wal_dir / NO tenant — it is not governed;
+            # only the output-side indicators measure on it, the rest surface as availability=n/a.
+            target = OpenAITarget(target_url, model=model, temperature=0.0)
+        else:  # moderation_api
+            print(
+                "error: --target-kind moderation_api has no runtime in EV-FWD (its vendor-catch "
+                "indicator lands with C2); only gateway | raw_model can be driven today",
+                file=sys.stderr,
+            )
+            return EXIT_IO
+        corpus_root = Path(args.corpus) if args.corpus else _DEFAULT_CORPUS
+        active = collect_measurements(
+            target, corpus_root=corpus_root, warnings=warnings
+        )
     # EV-PAIR-A2 §1: did the WHOLE run get zero model responses? (every probe errored). Computed
     # here so the guard can shout at the top + exit non-zero, rather than leaving the only clue
     # in each indicator's `N error(s) excluded` notes.
     all_errored = active.probe_count > 0 and active.error_count == active.probe_count
 
-    # EV-PIN: a run is PINNED only when the operator supplied BOTH window bounds — that is
-    # the reproducibility claim (same WAL + same bounds ⇒ same records ⇒ same n and value).
-    raw_from = getattr(args, "window_from_ns", None)
-    raw_to = getattr(args, "window_to_ns", None)
-    window_from: int | None = int(raw_from) if raw_from is not None else None
-    window_to: int | None = int(raw_to) if raw_to is not None else None
+    # The window bounds were parsed + validated (C15 / exclusivity) at the top, before probing.
     pinned = window_from is not None and window_to is not None
 
     # Passive (EV-5): read the same WAL the probes wrote under. GATEWAY-only — a raw_model /
@@ -414,6 +466,16 @@ def run_collect(args: argparse.Namespace) -> int:
     )
     passive = scan.measurements
     measurements = active.measurements + passive
+
+    # C13: --pin-observed-window is an EXPLICIT operator declaration ("口径就是这一跑") — pin to the
+    # window the passive scan actually covered. It stays an OWNED claim (NOT auto-pin, C12: the
+    # operator named the flag). 🔴 C15 cannot wrongly fire because generated_at_ns is stamped AFTER
+    # this scan (below), so it is >= every observed record — NOT because "the records already exist":
+    # with --gateway the probes CREATE those records DURING the run (after the source-side now_ns).
+    # Combinable with --gateway: the probes run ONCE, then the run pins to that observed passive window.
+    if pin_observed and scan.observed_window is not None:
+        pinned = True
+        window_from, window_to = scan.observed_window
 
     # The window we RECORD: the pinned bounds when given, else the window actually observed
     # (half-open). Never (0,0) — a report that does not state its own window cannot be
@@ -434,11 +496,15 @@ def run_collect(args: argparse.Namespace) -> int:
             "snapshot — do NOT cite these numbers in external documents (EV-PIN §1.4)"
         )
 
-    # EV-PAIR §2: host:port only — 🔴 never the full URL (path/query), never the api_key.
+    # EV-PAIR §2: host:port only — 🔴 never the full URL (path/query), never the api_key. A
+    # passive-only run probed nothing ⇒ no host to record (None).
     from urllib.parse import urlparse
 
     parsed = urlparse(target_url)
-    target_url_host = parsed.netloc or target_url
+    target_url_host = parsed.netloc or target_url or None
+
+    # C13: the run口径 — "passive" when nothing was probed, else the existing active(+passive) split.
+    mode = "passive" if passive_only else ("active+passive" if passive else "active")
 
     # C12: the window the records occupy, for provenance. Normally the scan's own span; but if a
     # PINNED window caught NOTHING, an unfiltered read finds where the records really are — so the
@@ -447,11 +513,17 @@ def run_collect(args: argparse.Namespace) -> int:
     if pinned and scan.record_count == 0 and args.wal:
         prov_observed = _observed_window_unfiltered(args.wal, args.tenant)
 
+    # 🔴 C15: generated_at_ns is the moment the product is GENERATED — read AFTER the scan, so it is
+    # >= every record the window can cover. With --gateway --pin-observed-window the probes CREATE
+    # records DURING this run (at times after the source-side now_ns); stamping now_ns instead would
+    # make the just-observed window look "in the future" and wrongly block a legitimate citable run.
+    generated_at_ns = time.time_ns()
+
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
         window=window,
-        mode="active+passive" if passive else "active",
+        mode=mode,
         target_kind=target_kind,  # EV-FWD/R1: records WHAT was evaluated (drives availability)
         model=model,  # EV-PAIR §2: the config that determined the numbers, recorded WITH them
         temperature=0.0,  # pinned for the statistical verticals — recorded, not assumed
@@ -465,6 +537,7 @@ def run_collect(args: argparse.Namespace) -> int:
             tenant_id=args.tenant,
             record_count=scan.record_count,
             observed_window=prov_observed,
+            generated_at_ns=generated_at_ns,  # C15: stamped AFTER the scan (see above)
         ),
     )
     out = args.out or "bundle.json"

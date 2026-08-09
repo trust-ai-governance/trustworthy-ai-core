@@ -19,6 +19,34 @@
 
 ---
 
+## 0. 起点核对（2026-08-07，按 UI-3a 已合并的实况重刷）
+
+**本单不是从零开始** —— UI-3a 已经把"人怎么进来"这一层建好了。**先钉住哪些已在、哪些没有**，
+免得实现者重造已有的东西、或以为已有的东西已经够。
+
+| | 状态 | 落点 |
+|---|---|---|
+| 访问页（不是浏览器弹框） | ✅ **已在** | `cases_app.py` `_access_page` |
+| `POST /session` + HttpOnly·SameSite=Strict cookie | ✅ **已在** | `_COOKIE`（🔴 **cookie 里就是那把共享密钥本身，没有服务端会话** —— 与 §1.1 一致） |
+| 退出 | ✅ **已在** | `GET /logout` · 模板 `show_logout` |
+| Basic（`curl -u :key`）/ header / Bearer | ✅ **已在** | 脚本与 CI 通道 |
+| 深链回跳 `?next=` + 开放重定向净化 | ✅ **已在** | `_safe_next` |
+| 凭据 → 租户作用域（403 越权 / 404 不确认存在） | ✅ **已在** | `cases_auth.py` |
+| **密钥有名字 / 有效期 / 可撤销** | ❌ **没有** —— 映射仍是 `{裸串: 租户}` | 件 A · 件 B |
+| **热生效** | ❌ **没有** —— `create_cases_app` **只在启动时读一次**映射 | 件 B |
+| 🔴 **访问留痕** | ❌ **一条都没有** | **件 C（本单主体）** |
+| 失败恒定延迟 / 不可枚举 | ❌ 没有 | 件 D |
+
+🔴 **两条因此发生的变化（相对本单初稿）：**
+
+1. **件 A 的 UI 工作量下调** —— 是"往一个已有的页面上加身份显示"，不是"建一个登录面"；
+2. 🔴 **有效期能自动生效，不用额外机制** —— 作用域是**每请求**用 `scope_for_token(token_map, supplied)`
+   现查的（`_supplied` 只取出密钥、不缓存判定），所以把 `expires_at` 加进这一步，
+   **已签发的 cookie 会在到期的下一次请求上失效**。
+   **不要为此引入会话存储** —— 那正是 §1.1 禁掉的东西。
+
+---
+
 ## 1. 🔴 范围先划死（这一节是硬边界，不许在实现时松动）
 
 ### 1.1 **不做**（越过即打回，不接受"顺手"）
@@ -89,6 +117,11 @@
 
 **`label` 永远不许显示密钥本身**（回归：断言页面 HTML 里搜不到任何密钥串）。
 
+**落点已存在**（§0）：`cases_base.html` 顶部已有分级带与 `show_logout`，
+本件是**往那一行加身份**，不是新建一个面。
+🔴 **位置在分级带之下** —— 分级带说"这是什么级别的数据"，身份说"你是谁"，
+**两句不许互相挤掉**（分级带永远在最上，它是跟着截图走的那一句）。
+
 ---
 
 ## 3. 件 B — 生命周期
@@ -108,7 +141,12 @@
 
 ### 3.3 热生效
 
+**今天没有** —— `create_cases_app` 在**启动时读一次**映射，之后改文件不生效（§0）。
+
 映射文件按 **mtime + size** 判变更，变了就重读（每次请求最多 `stat` 一次，不加缓存层）。
+
+🔴 **不要顺手引入会话存储来"记住"已登录的人** —— 作用域本来就是每请求现查的（§0-2），
+热重读之后**下一次请求自动按新映射判**，撤销与到期都因此自动成立。**这是既有设计给的便宜，别丢掉。**
 
 - 重读**失败**（文件损坏/JSON 错）⇒ 🔴 **保留上一份可用映射并打 ERROR**，
   **不是**清空成"谁都进不来"，也**不是**回落成"谁都能进"。
@@ -223,6 +261,7 @@
 | **A3** | 访问记录页 + 不可枚举 | `treval/web/cases_app.py`（`GET /access-log`）、新模板 `cases_access_log.html`、`treval/web/cases_auth.py`（常数时间比较 + 递增延迟）、`tests/test_cases_app.py` | 验收 11–12 |
 
 **顺序**：A1 是 A2 的前提（要先有 `label` 才能记 `label`）。
+**A1 的 UI 半边比初稿估的小** —— 访问页/会话/退出都已在（§0），只是往既有那一行加身份。
 🔴 **A2 单独成一个纯 stdlib 模块** —— 它是本单唯一新增的**数据落盘**路径，
 必须能脱离 HTTP 单测，且**不得 import 引擎或 WAL reader**（同 [UI-3 §5.1](UI-3.md) 的切法）。
 
@@ -239,15 +278,123 @@ EOF
 TREVAL_CASES_TOKENS=~/cases-tokens.json TREVAL_CASE_STORE=~/casestore python -m treval.web.cases
 ```
 
-**必须看到：**
+**准备 —— 生成密钥、写映射、起服务**（初版只给了三个变量名、没给密钥怎么配，Live 时卡在这里）：
 
-1. 登录后顶部：`以 auditor-acme 身份查看 · 租户 __eval__ · 有效至 2026-12-31 · 退出`；
-2. 🔴 `grep -c '<key-a>' <页面 HTML>` ⇒ **0**；
-3. 🔴 `tail -1 ~/casestore/access.jsonl` ⇒ 刚才那次访问，含 `label` 与 `run_key`；
-4. 把 `expires_at` 改成过去 ⇒ **同一句** `访问密钥无效`（与乱敲一个密钥**逐字一样**）；
-5. 把映射文件改成非法 JSON ⇒ **已登录的会话照常用**，日志有 ERROR；
-6. `chmod -w ~/casestore` ⇒ 访问**被拒**，不是静默不记；
-7. admin 登录 ⇒ 顶部出现 **`全部租户（admin）`**；`/access-log` 能看到两个租户的行。
+```bash
+export PYTHONPATH=$PWD
+S=~/casestore ; TOK=~/cases-tokens.json ; B=http://127.0.0.1:8091
+KEY_A=$(python -c "import secrets;print(secrets.token_hex(32))")
+KEY_ADMIN=$(python -c "import secrets;print(secrets.token_hex(32))")
+
+cat > $TOK <<EOF          # 🔴 用 <<EOF 不是 <<'EOF' —— 要让 $KEY_* 展开
+{ "$KEY_A":     {"label":"auditor-acme",  "scope":"__eval__","expires_at":"2026-12-31T00:00:00Z"},
+  "$KEY_ADMIN": {"label":"platform-admin","scope":"*",       "expires_at":"2026-12-31T00:00:00Z"} }
+EOF
+chmod 600 $TOK            # 它就是密钥本体
+
+# 先自检再起服务（映射有问题时，这里比 HTTP 更早、更清楚地报出来）
+python -c "
+from treval.web.cases_auth import load_token_map
+for v in load_token_map('$TOK').values():
+    print(f'{v.label:16s} scope={v.scope:10s} 到期={v.expires_at} legacy={v.legacy}')"
+
+TREVAL_CASES_TOKENS=$TOK TREVAL_CASE_STORE=$S python -m treval.web.cases &
+sleep 2
+```
+
+| 必填/易错 | 说明 |
+|---|---|
+| `label` · `scope` · `expires_at` | **三个都必填**；`expires_at` **不许 `null`**（§3.1：没有永久密钥） |
+| `scope` | 必须等于案级契约里的 `tenant_id`；`"*"` = admin，**必须显式一行** |
+| `label` | **全局唯一**，重名即拒绝启动 |
+| 🔴 报错措辞 | 只报 **label 或行号**，**永不报 token** —— 报文里出现密钥 = 把密钥写进日志 |
+
+🔴 **收尾必做**：`shred -u $TOK 2>/dev/null || rm -f $TOK` ——
+Live 用过的密钥已进入**终端历史**，**不得用于任何真环境**。
+
+### 10.1 件 A —— 密钥有身份（验收 1、2）
+
+浏览器开 `$B/`，密钥填 `KEY_A`。
+
+1. 顶部出现 **`以 auditor-acme 身份查看 · 租户 __eval__ · 有效至 2026-12-31 · 退出`**；
+   🔴 **它在分级带之下** —— 分级带说"这是什么级别的数据"，身份说"你是谁"，两句都在。
+   命令行核（**模板里 label 外包着 `<strong>`，模式必须允许标签**）：
+   ```bash
+   curl -s -u ":$KEY_A" $B/ | grep -o "以 <strong>[^<]*</strong> 身份查看[^<]*"
+   ```
+   > ⚠️ 初版写的是 `grep -o "以 [^<·]*身份查看"` —— 它**排除了 `<`，永远匹配不上**，
+   > 于是"页面没渲染身份"和"我的正则写错了"分不开。**Live 时误报过一次。**
+2. 🔴 **页面里搜不到密钥本身**：
+   ```bash
+   curl -s -u ":$KEY_A" $B/ | grep -c "$KEY_A"        # 期望 0
+   ```
+3. admin（`KEY_ADMIN`）登录 ⇒ 顶部**显式**出现 **`全部租户（admin）`**
+   （🔴 一个能看所有租户绕过地图的会话，必须一直说出来）。
+
+### 10.2 件 B —— 生命周期（验收 3–6、14）
+
+4. **过期**：把 `KEY_A` 的 `expires_at` 改成过去的日期 ⇒ 再访问被拒，
+   🔴 **文案与乱敲一个密钥逐字相同**：
+   ```bash
+   curl -s -u ":$KEY_A" $B/ | md5sum ; curl -s -u ":nonsense" $B/ | md5sum   # 🔴 两个 md5 必须一致
+   ```
+   🔴 **验完立刻把 `expires_at` 改回未来** —— 否则后面每一条用 `KEY_A` 的检查都会
+   **因为"钥匙已死"而返回期望值**，而不是因为被测的那件事。
+   **Live 时就这么空洞通过过两条**（见 10.3-11、10.4-14 的注）。
+5. **撤销**：把那一行从映射里删掉 ⇒ **下一次请求**即失效，**不用重启**；
+6. **热生效**：把 `scope` 从 `__eval__` 改成别的 ⇒ 下一次请求按新 scope 判；
+7. 🔴 **坏文件不改变现状**：把 `$TOK` 写成非法 JSON ⇒
+   **已登录的会话照常用**、新登录按**上一份**映射判、日志有 ERROR
+   —— **既不清空（谁都进不来）也不放行（谁都能进）**；
+8. **遗留格式宽限**：把 `$TOK` 换回旧的 `{"tok-a": "__eval__"}` 串→串格式 ⇒
+   **仍能启动**，且**打 WARN 指名那一行**（🔴 fail-closed 的升级会被"退回旧版本"绕过）。
+
+### 10.3 件 C —— 🔴 访问留痕（本单主体，验收 7–10、13）
+
+9. 一次成功访问 ⇒ `access.jsonl` **多一行**且含 `label` / `action` / `tenant`：
+   ```bash
+   grep '"ok": true' $S/access.jsonl | tail -1 | python -m json.tool
+   ```
+   > 🔴 **必须 grep `ok: true`，不能直接 `tail -1`** —— 最后一行很可能是刚才那次**失败**，
+   > 而失败**按设计只记 `{at, ok:false, reason}`**（不记密钥、不记细分原因）。
+   > **Live 时看错行，误以为留痕没带 `label`。**
+   > `run_key` 在列表页是 `null`（`action:"list"`），看某一次跑时才有值 —— **正常**。
+10. 🔴 **留痕里没有密钥**：用一把哨兵密钥登录并**失败**若干次 ⇒
+    ```bash
+    grep -c "$SENTINEL_KEY" $S/access.jsonl        # 期望 0
+    ```
+    （失败只记"有一次失败尝试"——记下失败密钥等于把一份密钥字典写进日志）
+11. 🔴 **写不进去就拒服务**：
+    ```bash
+    chmod -w $S/access.jsonl                                   # 🔴 chmod 的是【文件】
+    curl -s -o /dev/null -w "%{http_code}\n" -u ":$KEY_A" $B/   # 期望 503（实测值）
+    chmod +w $S/access.jsonl
+    ```
+    **必须是拒绝**，**不是**"看得到但没记上" —— 后者正是本单要消灭的状态。
+    > ⚠️ 初版写的是 `chmod -w $S`（**目录**）—— 对目录去写权限**挡不住往已存在的文件追加**，
+    > 它挡的是建/删条目。**Live 时因此返回 200，被误读成缺陷。**
+    > 等价的更干净做法：起服务时 `TREVAL_CASES_ACCESS_LOG=/proc/nonexistent/x.jsonl`；
+12. **效力边界自述**：`head -1 $S/access.jsonl` 含 `_note`，
+    逐字写着**它不是哈希链、不能证明无人访问**
+    （🔴 一份"访问记录"迟早被当成"审计证据"引用 —— 让它自己先说清）；
+13. **隔离未破**：
+    ```bash
+    python -c "from treval.report_store import ReportStore;print(ReportStore('$S').list())"   # 期望 []
+    ```
+
+### 10.4 件 D + 记录页（验收 11、12）
+
+14. `$B/access-log` 租户隔离 —— 🔴 **两条一起跑，缺一条就是空洞验证**：
+    ```bash
+    curl -s -u ":$KEY_ADMIN" $B/ >/dev/null                            # 先让 admin 留一行
+    curl -s -u ":$KEY_A" $B/access-log | grep -c "platform-admin"      # 期望 0（看不到别人）
+    curl -s -u ":$KEY_A" $B/access-log | grep -c "auditor-acme"        # 🔴 期望 ≥1（页面确实出了内容）
+    ```
+    > 🔴 **第二条是关键**：只查"搜不到别人"时，**"页面什么都没出"也会通过**。
+    > **Live 时 `KEY_A` 已过期，返回的是访问页，于是这条空洞通过了。**
+    > **先证明页面出了东西，再说它没出别人的东西。**
+    `KEY_ADMIN` 查同一个页面 ⇒ **两个租户的行都能看到**；
+15. 🔴 **不可枚举**：未知 / 过期 / 撤销三种输入的**状态码与文案逐字相同**（第 4 步已验其一）。
 
 ---
 

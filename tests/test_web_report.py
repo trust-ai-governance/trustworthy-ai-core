@@ -154,6 +154,74 @@ def test_citability_bar_shows_both_states(tmp_path):
     )  # the citable state IS shown
 
 
+def test_web_shows_both_verdicts_when_criteria_drifted_C16(tmp_path):
+    """🔴 C16: when the STORED citable disagrees with a fresh report_citability on the SAME immutable
+    bundle (pure criteria drift — the data can't have changed), the dashboard shows BOTH verdicts +
+    '判据已变', never silently swapping the stored one. Mirrors the stored __eval__ report: stored true
+    (old gate) vs current false (the fail-closed no-stamp rule). RED before C16: with no recompute the
+    page showed only the stale stored verdict."""
+    pytest.importorskip("fastapi")
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from treval import load_registry
+    from treval.models import EvidenceRef, IntegrityStatus, Measurement
+    from treval.rubric.engine import evaluate
+    from treval.rubric.serialize import serialize_self_contained_bundle
+    from treval.stats import wilson_interval
+    from treval.web import create_app
+    from treval.web.view import build_context
+
+    reg = load_registry()
+    lo, _p, hi = wilson_interval(25, 28)
+    ms = [
+        Measurement(
+            "injection_catch_rate",
+            "robustness",
+            25 / 28,
+            "ratio",
+            28,
+            (EvidenceRef("wal:t", 1),),
+            integrity=IntegrityStatus.VERIFIED,
+            ci_low=lo,
+            ci_high=hi,
+        )
+    ]
+    report = evaluate(reg, ms, [], window=(100, 200), tenant_id="acme")
+    # NOT citable under the CURRENT gate: pinned + wal_dir but NO generated_at_ns (fail-closed no-stamp)
+    prov = {
+        "pinned": True,
+        "wal_dir": "/w",
+        "record_count": 5,
+        "window": [100, 200],
+        "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        "data_source": "measured",
+    }
+    bundle = serialize_self_contained_bundle(
+        report, ms, reg, prov, target_kind="gateway"
+    )
+    assert bundle["citable"] is False  # current gate blocks it (no stamp)
+
+    # simulate a bundle STORED under the OLD gate: verdict true, and no version field (pre-C16)
+    bundle["citable"] = True
+    del bundle["citability_criteria"]
+
+    ctx = build_context(bundle)["citability"]
+    assert ctx["changed"] is True
+    assert ctx["stored_citable"] is True and ctx["current_citable"] is False
+
+    write_bundle(tmp_path, json.dumps(bundle, ensure_ascii=False), generated_at_ns=5)
+    page = TestClient(create_app(store_dir=tmp_path)).get("/").text
+    assert "判据已变" in page  # the drift banner
+    assert (
+        "as-generated" in page and "旧判据·未版本化" in page
+    )  # stored verdict, unversioned
+    assert (
+        "按当前判据 v1" in page and "不可引" in page
+    )  # the recompute under current criteria
+
+
 def test_no_drilldown_wording_anywhere(client):
     """🔴 P2: the word 「下钻」 must not appear on the report pages — the case service is a peer view
     ('用例明细'), not a drill-down of the report."""

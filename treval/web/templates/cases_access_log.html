@@ -1,0 +1,29 @@
+{% extends "cases_base.html" %}
+{% block title %}访问记录 · {{ banner_tenant }}{% endblock %}
+{% block content %}
+<h2>访问记录 —— {% if scope == '*' %}admin（可见全部租户）{% else %}tenant <code>{{ scope }}</code>{% endif %}</h2>
+
+{# 🔴 §4.3 — the artifact carries its own effect-boundary: this is NOT an audit chain. #}
+<p class="case-note">{{ note }}</p>
+
+{% if not records %}
+<p class="case-empty">（还没有访问记录。）</p>
+{% else %}
+  <table class="case-table">
+    <thead><tr><th>at (UTC)</th><th>label</th><th>scope</th><th>action</th><th>run_key</th><th>tenant</th><th>ok</th></tr></thead>
+    <tbody>
+    {% for r in records %}
+      <tr>
+        <td class="mono">{{ r.at }}</td>
+        <td>{{ r.label if r.label is not none else '—' }}</td>
+        <td class="mono">{{ r.scope if r.scope is not none else '—' }}</td>
+        <td>{{ r.action if r.action is not none else '—' }}</td>
+        <td class="mono">{{ r.run_key if r.run_key is not none else '—' }}</td>
+        <td>{{ r.tenant if r.tenant is not none else '—' }}</td>
+        <td>{{ 'yes' if r.ok else 'no' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
+{% endblock %}

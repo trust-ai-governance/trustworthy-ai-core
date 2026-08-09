@@ -44,6 +44,26 @@ python -m treval.cli report  --measurement-bundle bundle.json \
 python -m treval.cli report --measurement-bundle their_bundle.json --format json --out report.json
 ```
 
+### D. Produce a **citable** bundle in one command (EV-CITE)
+A citable run needs a **frozen** window (`pinned`): same WAL + same bounds ⇒ same records ⇒ same
+number. Two ways, no wasted probes:
+```bash
+# ① probe ONCE, then pin to the window the passive scan actually covered (window correct by
+#    construction; it is still an owned口径 declaration — "口径就是这一跑", not an auto-pin):
+python -m treval.cli collect --gateway $GW --wal $WAL --pin-observed-window --out bundle.json
+
+# ② read the WAL and send NO probes at all — re-pin/re-read a passive result without re-paying
+#    the whole active side (needs --wal; give bounds, or --pin-observed-window):
+python -m treval.cli collect --passive-only --wal $WAL \
+      --window-from-ns $FROM --window-to-ns $TO --out bundle.json
+```
+🔴 `--window-to-ns` **must be in the past** — a window whose upper bound has not passed is *not*
+frozen (re-reading the WAL later returns more records, so the number moves), and `collect` **refuses
+it at the source**. `--pin-observed-window` is mutually exclusive with `--window-from-ns/--window-to-ns`
+(it pins to the scan it would otherwise filter). A **pure-active** run (`--target-kind raw_model`, or a
+gateway run with no `--wal`) is anchored by `corpus_sha` + per-probe evidence, **not** a window — its
+citability skips the window checks (a re-run draws a new sample regardless).
+
 ## Inputs & outputs (where things go)
 
 | Thing | Where | Notes |

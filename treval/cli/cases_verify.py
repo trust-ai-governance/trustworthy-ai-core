@@ -34,11 +34,30 @@ EXIT_IO = 3
 # 🔴 Printed because an auditor reads green in their OWN terminal and slides "self-consistent" into
 # "verified true" — the exact "don't let a self-check masquerade as end-to-end" discipline, so the
 # two layers are written into the output, not left to memory.
-_SCOPE_DECLARATION = """🔴 WHAT THIS CHECK COVERS — read before quoting it:
+# 🔴 §12.1 件二 — TWO parts, each defined ONCE, composed for the CLI. They are different TEXTS (zh
+# and en), not two copies of one text, so this is not the `_is_not_measured` second-definition
+# disease: editing either part reds both the CLI and the web assertion, which is the property the
+# rule is actually protecting.
+#   • the WEB renders the CHINESE part only — the operators reading this deployment read Chinese, and
+#     an English block they skip is a warning that did not happen;
+#   • the CLI prints BOTH — `treval cases verify` is what an external auditor runs, and this repo is
+#     public and English-first.
+# CHINESE FIRST in the CLI too: this sentence exists to stop someone reading "self-consistent" as
+# "verified", so it goes first to whoever would misread it.
+_SCOPE_DECLARATION_ZH = """🔴 这项检查覆盖什么 —— 引用前请先读：
+   它只证明：本文件中的逐案行相加，等于本文件中声明的聚合数。
+   它不证明：探针真的跑过，也不证明这些数字为真。
+   要证明那两件事，请顺着每条 evidence_ref 进入审计日志，自己验哈希链：
+       python tools/wal_verify.py <audit-log>"""
+
+_SCOPE_DECLARATION_EN = """🔴 WHAT THIS CHECK COVERS — read before quoting it:
    It proves ONLY that the rows in this file sum to the aggregates in this file.
    It does NOT prove the probes ever ran, nor that the numbers are true.
    For that, follow each evidence_ref into the audit log and verify the hash chain
    yourself:   python tools/wal_verify.py <audit-log>"""
+
+# What the CLI prints. The web imports `_SCOPE_DECLARATION_ZH` directly (never a literal copy).
+_SCOPE_DECLARATION = _SCOPE_DECLARATION_ZH + "\n\n" + _SCOPE_DECLARATION_EN
 
 # The cell display order — 🔴 §9.3(d): label WHICH cell each case landed in; never a `!= hard_blocked`
 # binary (that "good cell" framing is injection-specific and does not generalise). The got-through /

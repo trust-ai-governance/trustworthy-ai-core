@@ -11,6 +11,7 @@
     "evidence_basis",
     "citable",
     "citable_blockers",
+    "citability_criteria",
     "registry_fingerprint",
     "provenance",
     "report",
@@ -32,6 +33,11 @@
       "items": {
         "type": "string"
       }
+    },
+    "citability_criteria": {
+      "description": "EV-CITE C16: the citability criteria VERSION the stored `citable`/`citable_blockers` verdict was judged under. The gate tightens over time (e.g. C15's fail-closed no-stamp rule), so a stored verdict is only falsifiable against the version that produced it — recompute report_citability under the current version to re-judge, and regenerate the bundle to refresh the stored verdict. Bumped only when the set of blocker IDENTITIES changes, never for a message wording edit.",
+      "type": "integer",
+      "minimum": 1
     },
     "target_kind": {
       "description": "R1: what was evaluated. raw_model = bare-model baseline · gateway = governed (WAL-anchored) · moderation_api = third-party moderation API. Default gateway.",
@@ -123,6 +129,13 @@
           },
           "minItems": 2,
           "maxItems": 2
+        },
+        "generated_at_ns": {
+          "description": "EV-CITE C15: the wall clock at collect time (read AFTER the scan, so it is >= every record the window covers), stamped into the product. Citability judges an unclosed window as `window[1] > generated_at_ns` — from data INSIDE the bundle, never by reading the clock at report time. null on a PINNED run is fail-CLOSED: the pin's closure is unverifiable, so it blocks (a pre-C15 bundle must be regenerated to become citable).",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "wal_segments": {
           "type": [

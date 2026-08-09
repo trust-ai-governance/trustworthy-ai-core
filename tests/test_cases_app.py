@@ -6,8 +6,10 @@ fastapi is required to exercise the routes; where it is absent these skip (like 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -21,7 +23,7 @@ from test_case_store import module_imports_wal_reader  # noqa: E402
 from test_ev_r2 import _case, _probe  # noqa: E402
 from treval.active_eval import serialize_case_contract  # noqa: E402
 from treval.case_store import CaseStore, write_case_bundle  # noqa: E402
-from treval.cli.cases_verify import _SCOPE_DECLARATION  # noqa: E402
+from treval.cli.cases_verify import _SCOPE_DECLARATION_ZH  # noqa: E402
 from treval.web.cases_app import create_cases_app  # noqa: E402
 from treval.web.cases_auth import CasesAuthError  # noqa: E402
 
@@ -85,11 +87,13 @@ def _is_listing(text: str) -> bool:
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
-    """Every file under a store, path→bytes — for the acceptance-10 'teeth' (byte-for-byte unchanged)."""
+    """Every CONTRACT/index file under a store, path→bytes — for the acceptance-10 'teeth' (byte-for-
+    byte unchanged). Excludes `access.jsonl`: 件C access logging is a NEW, legitimate write to the
+    case-store side (UI-3-AUTH §4), separate from the contracts and index this snapshot protects."""
     return {
         str(p.relative_to(root)): p.read_bytes()
         for p in sorted(root.rglob("*"))
-        if p.is_file()
+        if p.is_file() and p.name != "access.jsonl"
     }
 
 
@@ -189,9 +193,10 @@ def test_cases_json_is_stored_bytes_verbatim(client, store_dir):
 
 
 def test_run_page_carries_the_scope_declaration_constant(client, store_dir):
-    """🔴 acceptance 11: the recompute page contains the four scope lines — and the test uses the
-    CONSTANT itself, so editing cases_verify._SCOPE_DECLARATION (or dropping it from the page) reds
-    this. A copied literal would not be caught."""
+    """🔴 acceptance 11: the recompute page contains the scope declaration — and the test uses the
+    CONSTANT itself, so editing cases_verify._SCOPE_DECLARATION_ZH (or dropping it from the page)
+    reds this. A copied literal would not be caught. §12.1 件二: the PAGE carries the 中文 part only
+    (the CLI still prints both); an English block operators skip is a warning that did not happen."""
     from markupsafe import (
         escape,
     )  # Jinja escapes `<audit-log>` → `&lt;…&gt;` (correct for display)
@@ -199,10 +204,10 @@ def test_run_page_carries_the_scope_declaration_constant(client, store_dir):
     key = _key_for(store_dir, "acme")
     html = client.get(f"/run?key={key}", headers=_h("tok-a")).text
     # derived FROM the constant, so editing _SCOPE_DECLARATION (or dropping it) still reds this
-    assert str(escape(_SCOPE_DECLARATION)) in html
-    assert (
-        "does NOT prove the probes ever ran" in html
-    )  # the honest boundary is on the page
+    assert str(escape(_SCOPE_DECLARATION_ZH)) in html
+    assert "它不证明：探针真的跑过" in html  # the honest boundary is on the page
+    # 🔴 §12.1 件二: the English block is NOT on the page (it is CLI-only)
+    assert "WHAT THIS CHECK COVERS" not in html
 
 
 def test_run_page_splits_by_denominator_block_b_is_invisible(client, store_dir):
@@ -216,6 +221,27 @@ def test_run_page_splits_by_denominator_block_b_is_invisible(client, store_dir):
     )  # the detection-only miss sits in block B
     # the declared four_cell (marker subset) does not count it: declined_by_model = 0
     assert "declined_by_model=0" in html
+
+
+def test_run_banner_ticket_ref_not_in_visible_body(client, store_dir):
+    """🔴 §12.1 ②: the internal ticket ref (EV-CIGATE F1 / §9.1) lives in the banner's title=
+    attribute ONLY — never the visible 正文. RED input: put `（EV-CIGATE F1 / §9.1）` back in the body."""
+    import re
+
+    key = _key_for(store_dir, "acme")
+    html = client.get(f"/run?key={key}", headers=_h("tok-a")).text
+    visible = re.sub(r"<[^>]+>", "", html)  # strips tags AND their attributes
+    assert "EV-CIGATE" not in visible and "§9.1" not in visible  # not in the 正文
+    assert "EV-CIGATE" in html  # but retained in the title attribute (not lost)
+
+
+def test_run_banner_first_line_names_the_reference(client, store_dir):
+    """🔴 §12.1 ③: the banner's first line NAMES 「成熟度报告」 (someone opening /cases/ directly may
+    never have seen it) and drops the reference-less 「另一次」. RED input: the old 「另一次评测运行」 banner."""
+    key = _key_for(store_dir, "acme")
+    html = client.get(f"/run?key={key}", headers=_h("tok-a")).text
+    assert "本页与「成熟度报告」不是同一次评测" in html
+    assert "另一次" not in html
 
 
 def test_no_drilldown_wording_on_the_case_page(client, store_dir):
@@ -436,3 +462,188 @@ def test_cases_not_reachable_without_mount(store_dir):
 
     c = TestClient(create_app(store_dir=store_dir, token=None))
     assert c.get("/cases/").status_code == 404
+
+
+# =========================================================================== #
+# UI-3-AUTH — 件A 密钥有身份 · 件C 访问留痕 · 件D 不可枚举 (acceptance 1,2,3,7,8,9,11,12)
+# =========================================================================== #
+
+# distinctive keys so "the page HTML contains no token" (acceptance 1) is a MEANINGFUL grep
+_KEY_A = "sentinel-acme-0a0a0a0a"
+_KEY_B = "sentinel-beta-0b0b0b0b"
+_KEY_ADMIN = "sentinel-admin-0d0d0d0d"
+_KEY_EXPIRED = "sentinel-expired-0e0e0e"
+
+
+@pytest.fixture()
+def obj_tokens(tmp_path):
+    """The UI-3-AUTH object-format map: label / scope / expires_at per key."""
+    p = tmp_path / "tok_obj.json"
+    p.write_text(
+        json.dumps(
+            {
+                _KEY_A: {
+                    "label": "auditor-acme",
+                    "scope": "acme",
+                    "expires_at": "2099-12-31T00:00:00Z",
+                },
+                _KEY_B: {
+                    "label": "auditor-beta",
+                    "scope": "beta",
+                    "expires_at": "2099-12-31T00:00:00Z",
+                },
+                _KEY_ADMIN: {
+                    "label": "platform-admin",
+                    "scope": "*",
+                    "expires_at": "2099-12-31T00:00:00Z",
+                },
+                _KEY_EXPIRED: {
+                    "label": "expired-acme",
+                    "scope": "acme",
+                    "expires_at": "2000-01-01T00:00:00Z",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+@pytest.fixture()
+def obj_client(store_dir, obj_tokens):
+    return TestClient(create_cases_app(store_dir=store_dir, tokens_path=obj_tokens))
+
+
+def test_identity_is_visible_and_carries_no_key(obj_client):
+    """🔴 acceptance 1: a signed-in page shows `以 <label> 身份查看` — and the page HTML contains NO
+    token string. RED input: render the token, or drop the identity line."""
+    html = obj_client.get("/", headers=_h(_KEY_A)).text
+    assert "以" in html and "身份查看" in html and "auditor-acme" in html
+    assert (
+        _KEY_A not in html
+    )  # 🔴 the key is never on the page (cookie is HttpOnly; ctx has no token)
+    assert "有效至 2099-12-31" in html  # the expiry is shown
+
+
+def test_admin_identity_is_explicit(obj_client):
+    """🔴 acceptance 2: an admin (`scope="*"`) session says `全部租户（admin）` on the page. RED input:
+    delete the admin marker — a session that can see every tenant's bypass map must say so."""
+    html = obj_client.get("/", headers=_h(_KEY_ADMIN)).text
+    assert "全部租户（admin）" in html and "platform-admin" in html
+
+
+def test_rotation_reminder_within_14_days(store_dir, tmp_path):
+    """§3.1: a key expiring in ≤14 days shows a rotation reminder (give ops time to rotate)."""
+    soon = (datetime.now(timezone.utc) + timedelta(days=7)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    p = tmp_path / "tok_soon.json"
+    p.write_text(
+        json.dumps(
+            {_KEY_A: {"label": "auditor-acme", "scope": "acme", "expires_at": soon}}
+        ),
+        encoding="utf-8",
+    )
+    c = TestClient(create_cases_app(store_dir=store_dir, tokens_path=p))
+    assert "请轮换" in c.get("/", headers=_h(_KEY_A)).text
+
+
+def test_expired_key_is_rejected_like_an_unknown_one(obj_client):
+    """🔴 acceptance 3: an expired key is refused, and its rejection is byte-identical to an unknown
+    key's — no 'expired' hint. RED input: a distinct message/status for the expired key."""
+    # both land on the access page (no data), never a listing
+    assert _is_access(obj_client.get("/", headers=_h(_KEY_EXPIRED)).text)
+    assert _is_access(obj_client.get("/", headers=_h("totally-unknown")).text)
+
+
+def test_access_log_gains_a_line_on_a_view(obj_client, store_dir):
+    """🔴 acceptance 7: one successful /run ⇒ access.jsonl gains a line with `label` and `run_key`.
+    RED input: delete the `_log_success` call in the /run route — this test goes red."""
+    key = _key_for(store_dir, "acme")
+    obj_client.get(f"/run?key={key}", headers=_h(_KEY_A))
+    lines = (store_dir / "access.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any(
+        '"view_run"' in ln and "auditor-acme" in ln and key in ln and '"ok": true' in ln
+        for ln in lines
+    )
+
+
+def test_failed_login_never_writes_the_key(obj_client, store_dir):
+    """🔴 acceptance 8: failing to log in with a sentinel key several times ⇒ the key appears 0 times
+    in the log. RED input: log the submitted key (a key dictionary on disk)."""
+    for _ in range(4):
+        obj_client.post(
+            "/session",
+            data={"key": _KEY_A + "-wrong", "next": "/"},
+            follow_redirects=False,
+        )
+    raw = (store_dir / "access.jsonl").read_text(encoding="utf-8")
+    assert (_KEY_A + "-wrong") not in raw
+    assert (
+        '"ok": false' in raw and '"reason": "rejected"' in raw
+    )  # but the failures ARE recorded
+
+
+def test_write_failure_refuses_to_serve(obj_client, store_dir, tmp_path, monkeypatch):
+    """🔴 acceptance 9: if the access line cannot be written, the request is REFUSED (503) — not served
+    untraced. RED input: serve the run page anyway. Point the log at a directory so the append fails
+    regardless of the running user."""
+    key = _key_for(store_dir, "acme")
+    a_dir = tmp_path / "logdir"
+    a_dir.mkdir()
+    monkeypatch.setenv("TREVAL_CASES_ACCESS_LOG", str(a_dir))
+    r = obj_client.get(f"/run?key={key}", headers=_h(_KEY_A))
+    assert r.status_code == 503
+    assert "复算" not in r.text  # the bypass map was NOT rendered
+
+
+def test_access_log_page_is_tenant_scoped(obj_client, store_dir):
+    """🔴 acceptance 11: `/access-log` — a scoped tenant sees ONLY its own rows; admin sees all. RED
+    input: show tenant B's access rows to tenant A."""
+    ka, kb = _key_for(store_dir, "acme"), _key_for(store_dir, "beta")
+    obj_client.get(f"/run?key={ka}", headers=_h(_KEY_A))  # an acme view
+    obj_client.get(f"/run?key={kb}", headers=_h(_KEY_B))  # a beta view
+    acme = obj_client.get("/access-log", headers=_h(_KEY_A)).text
+    beta = obj_client.get("/access-log", headers=_h(_KEY_B)).text
+    admin = obj_client.get("/access-log", headers=_h(_KEY_ADMIN)).text
+    assert "auditor-acme" in acme and "auditor-beta" not in acme and kb not in acme
+    assert "auditor-beta" in beta and ka not in beta
+    assert "auditor-acme" in admin and "auditor-beta" in admin  # admin sees both
+
+
+def test_invalid_keys_are_not_enumerable(obj_client, store_dir, tmp_path):
+    """🔴 acceptance 12: unknown / expired / revoked all yield the SAME message and status — byte-
+    identical, no 'expired' or 'revoked' hint. RED input: a kind-specific message for any of them."""
+    unknown = obj_client.post(
+        "/session", data={"key": "totally-unknown", "next": "/"}, follow_redirects=False
+    )
+    expired = obj_client.post(
+        "/session", data={"key": _KEY_EXPIRED, "next": "/"}, follow_redirects=False
+    )
+    # revoke _KEY_A by deleting its row, then attempt it (hot reload picks up the change)
+    obj_tokens_path = tmp_path / "tok_obj.json"
+    obj_tokens_path.write_text(
+        json.dumps(
+            {
+                _KEY_ADMIN: {
+                    "label": "platform-admin",
+                    "scope": "*",
+                    "expires_at": "2099-12-31T00:00:00Z",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    os.utime(
+        obj_tokens_path, ns=(obj_tokens_path.stat().st_mtime_ns + 1_000_000_000,) * 2
+    )
+    revoked = obj_client.post(
+        "/session", data={"key": _KEY_A, "next": "/"}, follow_redirects=False
+    )
+    assert unknown.status_code == expired.status_code == revoked.status_code == 200
+    assert unknown.text == expired.text == revoked.text  # 🔴 byte-identical
+    for r in (unknown, expired, revoked):
+        assert "访问密钥无效" in r.text
+        assert (
+            "过期" not in r.text and "expired" not in r.text.lower()
+        )  # no leak of the KIND

@@ -18,6 +18,10 @@
     <div class="titles">
       <h1>案级 Tier-0 复算服务 <span class="en">Case-level recompute · bypass map — DO NOT DISTRIBUTE</span></h1>
       <p class="subtitle case-warn">🔒 operator_only · tenant={{ banner_tenant }} · 租户内部物，勿贴入工单、群聊、厂商支持或任何对外材料</p>
+      {# §2.2: identity BELOW the classification band — 分级带说“这是什么级别的数据”，身份说“你是谁”，两句不互相挤掉，分级带永远在最上。🔴 NEVER the key itself. #}
+      {% if identity %}
+      <p class="subtitle case-identity">以 <strong>{{ identity.label }}</strong> 身份查看 · {% if identity.is_admin %}<strong>全部租户（admin）</strong>{% else %}租户 <code>{{ identity.scope }}</code>{% endif %}{% if identity.expires %} · 有效至 {{ identity.expires }}{% endif %}{% if identity.rotate_soon %} · <span class="case-rotate">⚠ 剩 {{ identity.days_left }} 天，请轮换</span>{% endif %} · <a href="{{ base }}/logout" class="case-logout">退出</a></p>
+      {% endif %}
     </div>
   </div>
 </header>

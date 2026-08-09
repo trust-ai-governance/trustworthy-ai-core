@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import pytest
+from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
+import walgen
 from treval.active_eval import EVIDENCE_REQUIREMENTS
 from treval.active_eval.target import ProbeResult
 from treval.cli.bundle import build_bundle, load_bundle
@@ -469,3 +472,233 @@ def test_output_side_notes_carry_the_cross_model_caveat():
         (m,) = factory().measure(probes)
         assert "cross-model" in m.notes and "capability" not in m.notes.split(";")[0]
         assert "EV-PAIR-A2" in m.notes
+
+
+# --------------------------------------------------------------------------- #
+# EV-CITE 收尾 — T4 (C15: reject a future upper bound at the source) and
+# T5 (C13: --passive-only / --pin-observed-window make "citable" reachable in one command).
+# --------------------------------------------------------------------------- #
+
+_TENANT = "__eval__"
+
+
+def _record(seq: int, received_at_ns: int) -> bytes:
+    ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_DECISION_MADE  # type: ignore[assignment]
+    ctx.envelope.request_id = f"req-{seq:04d}"
+    ctx.envelope.tenant_id = _TENANT
+    ctx.envelope.received_at_ns = received_at_ns
+    ctx.decision.final_decision = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW  # type: ignore[assignment]
+    return ctx.SerializeToString()
+
+
+@pytest.fixture
+def wal(tmp_path):
+    """A 2-segment WAL of __eval__ records at received_at_ns = 1000..1500 (all in the PAST) — so
+    the observed window is [1000, 1501) and a future upper bound is unambiguously distinguishable."""
+    directory = tmp_path / "wal"
+    directory.mkdir()
+    payloads = [_record(i, 1000 + i * 100) for i in range(6)]
+    head = walgen.write_v2_segment(
+        directory / walgen.NAME.format(0), 0, payloads[:3], walgen.GENESIS
+    )
+    walgen.write_v2_segment(directory / walgen.NAME.format(3), 3, payloads[3:], head)
+    return directory
+
+
+def test_future_window_to_ns_is_refused_at_the_source(
+    tmp_path, wal, monkeypatch, capsys
+):
+    """🔴 C15 / acceptance 24: `collect --window-to-ns <future>` is REFUSED at the source (non-zero
+    exit + a stderr reason), NOT quietly turned into a fake-pinned bundle for a downstream gate to
+    catch. --passive-only so the point is proved without spending a single probe. RED input: a
+    window-to-ns beyond now (before C15 the run would produce a bundle with a green but unclosed pin)."""
+    monkeypatch.delenv("TREVAL_EVAL_GATEWAY_URL", raising=False)
+    future = time.time_ns() + 10**15  # ~11.6 days ahead — unambiguously in the future
+    out = tmp_path / "nope.json"
+    rc = main(
+        [
+            "collect",
+            "--passive-only",
+            "--wal",
+            str(wal),
+            "--window-from-ns",
+            "1000",
+            "--window-to-ns",
+            str(future),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "future" in err and "NOT frozen" in err  # names WHY
+    assert not out.exists()  # refused BEFORE producing any bundle
+
+
+def test_passive_only_reads_the_wal_without_a_gateway(tmp_path, wal, monkeypatch):
+    """🔴 C13 / acceptance 26: `collect --passive-only --wal ... --window-from-ns X --window-to-ns Y`
+    (NO --gateway) succeeds and emits passive measurements. RED input: that same command today is
+    `error: need --gateway` (collect hard-requires a target)."""
+    monkeypatch.delenv("TREVAL_EVAL_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("TREVAL_EVAL_WAL_DIR", raising=False)
+    out = tmp_path / "passive.json"
+    rc = main(
+        [
+            "collect",
+            "--passive-only",
+            "--wal",
+            str(wal),
+            "--tenant",
+            _TENANT,
+            "--window-from-ns",
+            "1000",
+            "--window-to-ns",
+            "1501",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["mode"] == "passive"  # no active half
+    assert doc["pinned"] is True and doc["window"] == [1000, 1501]
+    assert doc["provenance"]["record_count"] == 6
+    assert len(doc["measurements"]) > 0  # the passive indicators measured over the WAL
+
+
+def test_passive_only_requires_wal(monkeypatch, capsys):
+    """--passive-only sends no probes, so it needs no target — but it DOES need a --wal to read."""
+    from treval.cli.collect import run_collect
+
+    monkeypatch.delenv("TREVAL_EVAL_WAL_DIR", raising=False)
+    rc = run_collect(_collect_args(passive_only=True, wal=None))
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "--passive-only" in err and "requires --wal" in err
+
+
+def test_pin_observed_window_produces_a_citable_bundle_in_one_command(
+    tmp_path, wal, monkeypatch
+):
+    """🔴 C13 / acceptance 25 — the point of the收尾: `collect --gateway ... --pin-observed-window`
+    yields a bundle that is pinned=true, record_count>0, window==observed_window, AND citable=true,
+    in ONE command with the probes run only ONCE (no second collect to fix the window). Before it,
+    citable=true was unreachable in normal use (the only one-command path was C15's unclosed hole)."""
+    _fake_openai(
+        monkeypatch, _COMPLIANT
+    )  # gateway probes hit the fake; passive reads the wal
+    out = tmp_path / "pinned.json"
+    rc = main(
+        [
+            "collect",
+            "--gateway",
+            "http://fake:8080",
+            "--wal",
+            str(wal),
+            "--tenant",
+            _TENANT,
+            "--pin-observed-window",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["pinned"] is True
+    assert doc["provenance"]["record_count"] > 0
+    assert doc["window"] == doc["provenance"]["observed_window"] == [1000, 1501]
+
+    # grade into the delivery bundle and confirm it is actually CITABLE (the whole aim)
+    from treval.cli.main import run_self_contained
+    from treval.report_store import ReportStore
+
+    entry, _ = run_self_contained(out, None, tmp_path / "store", generated_at_ns=1)
+    delivered = json.loads(ReportStore(tmp_path / "store").read_bytes(entry))
+    assert delivered["citable"] is True, delivered["citable_blockers"]
+
+
+def test_pin_observed_window_stays_citable_with_realtime_records(tmp_path, monkeypatch):
+    """🔴 REGRESSION — the real-data bug the synthetic acc-25 test (records at ~1000-1500) masked.
+    With --gateway --pin-observed-window the PROBES create WAL records DURING the run, at timestamps
+    AFTER run_collect's start clock. If generated_at_ns were stamped at the START (the bug), the
+    observed window's upper bound would land 'in the future' relative to it and C15 would wrongly
+    block ⇒ citable=false, defeating T5's whole promise. generated_at_ns must be read AFTER the scan.
+
+    🔴 RED input: a WAL whose records sit at time.time_ns() written mid-run (when the first probe
+    fires) — NOT the synthetic small timestamps, which are astronomically below time.time_ns() and
+    so hid the bug. Before the fix: generated_at_ns (start) < window[1] ⇒ citable=false; the
+    invariant assert below also fails. After: generated_at_ns (post-scan) >= window[1] ⇒ citable=true."""
+    import httpx
+
+    wal_dir = tmp_path / "wal"
+    wal_dir.mkdir()
+    written = {"done": False}
+
+    def fake_post(url, *, headers=None, json=None, timeout=None):
+        # simulate the external gateway writing governed decision records NOW (during the run), so
+        # the observed window's upper bound is > run_collect's start clock, exactly as on real data.
+        if not written["done"]:
+            now = time.time_ns()
+            payloads = [_record(i, now + i) for i in range(6)]
+            head = walgen.write_v2_segment(
+                wal_dir / walgen.NAME.format(0), 0, payloads[:3], walgen.GENESIS
+            )
+            walgen.write_v2_segment(
+                wal_dir / walgen.NAME.format(3), 3, payloads[3:], head
+            )
+            written["done"] = True
+        return _FakeResp(_COMPLIANT)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.delenv("TREVAL_EVAL_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("TREVAL_EVAL_WAL_DIR", raising=False)
+
+    out = tmp_path / "pinned.json"
+    rc = main(
+        [
+            "collect",
+            "--gateway",
+            "http://fake:8080",
+            "--wal",
+            str(wal_dir),
+            "--tenant",
+            _TENANT,
+            "--pin-observed-window",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    prov = doc["provenance"]
+    assert prov["record_count"] == 6
+    # 🔴 the invariant the bug violated: the product-generation clock is at/after every record the
+    # window covers, so a legitimately-past window can never read as "in the future".
+    assert prov["generated_at_ns"] >= doc["window"][1], (
+        prov["generated_at_ns"],
+        doc["window"],
+    )
+
+    # end-to-end: the delivered bundle is CITABLE (the T5 promise) — false before the fix
+    from treval.cli.main import run_self_contained
+    from treval.report_store import ReportStore
+
+    entry, _ = run_self_contained(out, None, tmp_path / "store", generated_at_ns=1)
+    delivered = json.loads(ReportStore(tmp_path / "store").read_bytes(entry))
+    assert delivered["citable"] is True, delivered["citable_blockers"]
+
+
+def test_pin_observed_window_is_mutually_exclusive_with_explicit_bounds(capsys):
+    """--pin-observed-window pins to the scan it would otherwise filter — passing explicit bounds
+    too is contradictory and refused."""
+    from treval.cli.collect import run_collect
+
+    rc = run_collect(
+        _collect_args(
+            gateway="http://gw", wal="/w", pin_observed_window=True, window_from_ns=1
+        )
+    )
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "--pin-observed-window" in err and "do not also pass" in err

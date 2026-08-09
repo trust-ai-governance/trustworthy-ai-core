@@ -69,6 +69,16 @@ def test_pass_prints_the_scope_declaration_verbatim(tmp_path):
     assert "wal_verify.py" in out  # points the reader at the real end-to-end check
 
 
+def test_scope_declaration_is_bilingual_chinese_first():
+    """🔴 §12.1 件二: the scope declaration is ONE bilingual constant, CHINESE FIRST (谁会误读，先给谁看)
+    — asserted on the constant itself, so it stays same-source with the page. RED input: English-only,
+    or Chinese placed after the English block."""
+    cn = "这项检查覆盖什么"
+    en = "WHAT THIS CHECK COVERS"
+    assert cn in _SCOPE_DECLARATION and en in _SCOPE_DECLARATION
+    assert _SCOPE_DECLARATION.index(cn) < _SCOPE_DECLARATION.index(en)  # 中文在前
+
+
 def test_per_case_list_labels_the_cell_not_a_binary(tmp_path):
     """🔴 §9.3(d)/§9.8(d): the per-case list names the cell each case landed in; the void
     `!= hard_blocked` binary appears nowhere."""
