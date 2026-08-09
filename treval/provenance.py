@@ -100,6 +100,7 @@ def build_provenance(
     tenant_id: str,
     record_count: int,
     observed_window: tuple[int, int] | None = None,
+    generated_at_ns: int | None = None,
 ) -> dict[str, Any]:
     """The run's pin artifact, embedded in the collect bundle (EV-PIN §1.3).
 
@@ -127,4 +128,9 @@ def build_provenance(
         # supplies the UNFILTERED span so the citability blocker can hand the operator a window to
         # re-pin (they must never have to compute nanoseconds themselves). None ⇒ no records to point at.
         "observed_window": list(observed_window) if observed_window else None,
+        # EV-CITE C15 — the wall clock at collect time, stamped INTO the product. citability judges an
+        # unclosed (future-upper-bound) window from this field, never by reading the clock at report
+        # time — a bundle carries its own basis so it stays judgeable after it changes hands. None ⇒
+        # a pre-C15 bundle with no stamp; the future-upper-bound blocker then skips (no clock fallback).
+        "generated_at_ns": generated_at_ns,
     }

@@ -288,6 +288,38 @@ def objective_rows(bundle: dict) -> list[dict[str, Any]]:
     return rows
 
 
+def _citability_view(bundle: dict) -> dict[str, Any]:
+    """The citability bar's data (EV-CITE 件一 §1.5 + C16 versioning).
+
+    The STORED verdict (`citable`/`citable_blockers`) was baked in at generation time under
+    `citability_criteria`; the gate has since tightened (C15 + the fail-closed no-stamp rule). So we
+    RECOMPUTE report_citability on the loaded bundle under the CURRENT criteria and compare. 🔴 On one
+    immutable bundle a stored-vs-recompute disagreement is PURELY criteria drift (the data can't have
+    changed) — so BOTH are surfaced, the stored one as "as-generated" and the recompute as "current
+    criteria"; the stored verdict is NEVER silently replaced (that would make one product show
+    different conclusions over time with no signal to the reader). Agree ⇒ one verdict."""
+    from treval.citability import CRITERIA_VERSION, report_citability
+
+    stored_citable = bundle.get("citable")
+    current_citable, current_blockers = report_citability(bundle)
+    changed = stored_citable is not None and stored_citable != current_citable
+    return {
+        # the single-verdict bar (when stored and recompute agree) reads these — the STORED verdict,
+        # never a silent swap for the recompute.
+        "citable": stored_citable,
+        "blockers": list(bundle.get("citable_blockers", [])),
+        # C16 — the drift signal + both verdicts (the template shows both only when `changed`).
+        "changed": changed,
+        "stored_citable": stored_citable,
+        "stored_criteria": bundle.get(
+            "citability_criteria"
+        ),  # None ⇒ pre-C16, unversioned
+        "current_citable": current_citable,
+        "current_blockers": current_blockers,
+        "current_criteria": CRITERIA_VERSION,
+    }
+
+
 def build_context(bundle: dict) -> dict[str, Any]:
     """Everything both views need from one stored bundle."""
     from treval.web.radar import radar_points
@@ -312,13 +344,8 @@ def build_context(bundle: dict) -> dict[str, Any]:
         # EV-PIN §1.5-2/3: is this report reproducible (⇒ citable), and the window rendered
         # for humans. The raw ns stays the selector's value elsewhere — this is label only.
         "pin": pin_status(bundle),
-        # EV-CITE 件一 §1.5: the report-level citability verdict, read straight off the bundle (the
-        # engine already decided it). Shown BOTH ways — a green "可引用" as well as the red blockers —
-        # so "citable" is never the silent default.
-        "citability": {
-            "citable": bundle.get("citable"),
-            "blockers": list(bundle.get("citable_blockers", [])),
-        },
+        # EV-CITE 件一 §1.5 + C16: the report-level citability verdict, versioned so it is falsifiable.
+        "citability": _citability_view(bundle),
         "window_label": window_label(report.get("window", [0, 0])),
         "STATUS_LABEL": STATUS_LABEL,
         "STATUS_HELP": STATUS_HELP,

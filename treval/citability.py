@@ -46,6 +46,42 @@ _INTEGRITY_FIX = (
     "完整性破损（integrity_summary.broken > 0）：链断则其下所有结论不成立 —— 先用 wal_verify.py 查 "
     "WAL、修复链后重出报告"
 )
+_FUTURE_UPPER_FIX = (
+    "固定窗口的上界在未来（window[1] 晚于本报告的生成时刻 generated_at_ns）：未闭合的窗口锚不住任何数 "
+    "—— 明天重读同一份 WAL 会返回更多记录，数就变了。用一个已闭合的、过去的上界重新 pin"
+    "（--window-to-ns 取一个已过去的时刻）"
+)
+_NO_STAMP_FIX = (
+    "这份产物没有生成时刻 generated_at_ns，无法判断固定窗口是否已闭合 —— 用当前版本重新采集（collect）"
+    "并重出报告，使其带上生成时刻；仅重跑 report 补不上这个采集期的数据"
+)
+
+# --------------------------------------------------------------------------- #
+# 🔴 C16 — a citability verdict is a serialized boolean baked in at generation time, so on its own it
+# is UNFALSIFIABLE: a reader cannot tell WHICH criteria produced it. The gate has already tightened
+# once (C15 + the fail-closed no-stamp rule), so a stored `citable=true` (old gate) can disagree with
+# a fresh report_citability on the SAME immutable bundle — pure criteria drift, otherwise invisible.
+# So the verdict must travel WITH a version, and the version is bound to the IDENTITY of the blockers
+# this gate can emit — not to their message wording.
+# --------------------------------------------------------------------------- #
+CRITERIA_VERSION = 1
+
+# The stable identity keys this version's gate can emit — one per blocker-append site in
+# report_citability. 🔴 add / remove / repurpose any entry ⇒ BUMP CRITERIA_VERSION (a stricter OR a
+# looser gate is a DIFFERENT gate, and any verdict judged under the old set must be re-judged).
+# Editing only a message VALUE (文案) of a `_*_FIX` string is NOT a criteria change and does NOT bump
+# — what would have changed is the prose, not the identity set below.
+CRITERIA_BLOCKERS: frozenset[str] = frozenset(
+    {
+        "integrity_broken",  # _INTEGRITY_FIX
+        "pinned_empty_window",  # C12 empty-window blocker
+        "future_upper_bound",  # _FUTURE_UPPER_FIX (C15)
+        "no_generated_at_ns",  # _NO_STAMP_FIX (C15, fail-closed)
+        "unpinned",  # _UNPINNED_FIX
+        "missing_segment_hash",  # _SEGHASH_FIX
+        "not_wal_anchored",  # _EVIDENCE_FIX
+    }
+)
 
 
 def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -64,24 +100,55 @@ def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
         blockers.append(
             _INTEGRITY_FIX
         )  # FIRST — a broken chain voids all conclusions beneath it
-    # 🔴 C12 — a pin over an EMPTY window: "运营方声明了窗口 W" is a claim someone must stand behind, so
-    # we never auto-pin; but the claim is machine-checked. A pinned window with 0 records anchors
-    # NOTHING (a proxy — "人传了参" ≠ "参对得上数"). The report hands over the ACTUAL observed window so
-    # the operator re-pins by copying, never by computing nanoseconds (acceptance 21).
-    if prov.get("pinned") and prov.get("record_count") == 0:
-        ow = prov.get("observed_window")
-        where = (
-            f"本次实际观测到的窗口是 [{ow[0]}, {ow[1]})，用它重新 pin。"
-            if isinstance(ow, (list, tuple)) and len(ow) == 2
-            else "该 WAL 内也没有该租户的任何记录 —— 先确认 --wal 目录与 --tenant。"
-        )
-        blockers.append(
-            f"固定窗口内没有任何 WAL 记录 —— 该窗口锚不住本报告的任何数字。{where}"
-        )
-    if not prov.get("pinned", False):
-        blockers.append(_UNPINNED_FIX)
-    if not segments.get("sha256"):
-        blockers.append(_SEGHASH_FIX)
+    # 🔴 C14 — the WINDOW-FAMILY blockers (C12 / C15 / unpinned / segment-hash) apply when this run
+    # DECLARED a WAL evidence source (provenance.wal_dir set), OR when it carries NO provenance at
+    # all. The trigger is INTENT ("a WAL source was named"), NOT a RESULT: keying on `mode`/
+    # record_count would exempt a pinned-EMPTY-window run (record_count==0 ⇒ the C12 symptom) from
+    # the very C12 blocker built to catch it — "代理不是判据". The exemption (skip these) is ONLY the
+    # genuine pure-active case: a PRESENT provenance that explicitly names no WAL source (wal_dir
+    # None) — a raw_model run, or a gateway run given no --wal — where a window pins nothing and
+    # reproducibility rests on corpus_sha + evidence_refs. A run that named --wal but read 0 records
+    # keeps wal_dir SET ⇒ NOT exempt. 🔴 A bundle with provenance ABSENT (null — a pre-EV-PIN or
+    # unknown bundle) is NOT that declaration; it made no active-anchoring claim either, so it must
+    # fail closed (window-family applies ⇒ unpinned blocks it), never slip through the exemption.
+    if bundle.get("provenance") is None or prov.get("wal_dir"):
+        # 🔴 C12 — a pin over an EMPTY window: "运营方声明了窗口 W" is a claim someone must stand
+        # behind, so we never auto-pin; but the claim is machine-checked. A pinned window with 0
+        # records anchors NOTHING (a proxy — "人传了参" ≠ "参对得上数"). The report hands over the
+        # ACTUAL observed window so the operator re-pins by copying, never by computing nanoseconds
+        # (acceptance 21). 🔴 C15: it also tells them NOT to widen into the future — else the report
+        # itself teaches踩洞 (the fix invites the unclosed-window hole).
+        if prov.get("pinned") and prov.get("record_count") == 0:
+            ow = prov.get("observed_window")
+            where = (
+                f"本次实际观测到的窗口是 [{ow[0]}, {ow[1]})，用它重新 pin。"
+                if isinstance(ow, (list, tuple)) and len(ow) == 2
+                else "该 WAL 内也没有该租户的任何记录 —— 先确认 --wal 目录与 --tenant。"
+            )
+            blockers.append(
+                f"固定窗口内没有任何 WAL 记录 —— 该窗口锚不住本报告的任何数字。{where}"
+                "🔴 不要把上界放宽到未来 —— 未闭合的窗口锚不住任何数。"
+            )
+        # 🔴 C15 — an UNCLOSED pin is not a pin. The judgement uses data INSIDE the product
+        # (generated_at_ns), NEVER the wall clock at read time, so the verdict survives the bundle
+        # changing hands. A PINNED run MUST carry generated_at_ns (a collect-time datum): MISSING it
+        # is fail-CLOSED — the pin's closure is unverifiable, so it blocks (same repo posture as C12:
+        # an unverifiable claim ⇒ refuse). "不在读取时取时钟" is about the datum's SOURCE, not "skip
+        # when absent". 🔴 口径: this makes ALL pre-C15 pinned bundles NOT citable until regenerated
+        # (incl. the stored __eval__ report, wal_dir set + generated_at_ns=None) — intended, they
+        # genuinely cannot prove the window is closed. window[1] > generated_at_ns ⇒ the upper bound
+        # has not passed: re-reading later returns MORE records and the number moves.
+        if prov.get("pinned"):
+            gen = prov.get("generated_at_ns")
+            window = prov.get("window")
+            if gen is None:
+                blockers.append(_NO_STAMP_FIX)
+            elif window and window[1] > gen:
+                blockers.append(_FUTURE_UPPER_FIX)
+        if not prov.get("pinned", False):
+            blockers.append(_UNPINNED_FIX)
+        if not segments.get("sha256"):
+            blockers.append(_SEGHASH_FIX)
     if bundle.get("evidence_basis") != WAL_ANCHORED:
         blockers.append(_EVIDENCE_FIX)
     return (not blockers, blockers)

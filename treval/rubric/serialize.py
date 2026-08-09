@@ -18,7 +18,7 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from treval.citability import citation_form, report_citability
+from treval.citability import CRITERIA_VERSION, citation_form, report_citability
 from treval.models import (
     DimensionReport,
     EvidenceRef,
@@ -372,6 +372,10 @@ def serialize_self_contained_bundle(
         "evidence_basis": base["evidence_basis"],
         "citable": citable,
         "citable_blockers": citable_blockers,
+        # 🔴 C16 — the criteria version the verdict above was judged under, written in the SAME dict
+        # so a verdict can never be serialized without it. A reader (and the web view) recompute
+        # under the CURRENT version and, on disagreement, know it is criteria drift, not data change.
+        "citability_criteria": CRITERIA_VERSION,
         "registry_fingerprint": _fingerprint_of(registry_dict),
         # EV-PIN §1.5-1: the pin stamp must reach the DELIVERY artifact, not stop at the
         # collect bundle. Without it a `window=0-0` snapshot is indistinguishable from a
