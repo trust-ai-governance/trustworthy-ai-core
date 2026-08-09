@@ -22,26 +22,40 @@ import base64
 import hashlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from treval.case_access_log import (
+    ACCESS_LOG_NOTE,
+    AccessLogError,
+    log_access,
+    read_access,
+)
 from treval.case_contract import compare_cases_to_aggregates, recompute_from_cases
 from treval.case_store import CaseStore
 from treval.cli.cases_verify import (
-    _SCOPE_DECLARATION,
-)  # verbatim reuse (§6.2 ②); pure module
+    _SCOPE_DECLARATION_ZH,
+)  # verbatim reuse (§6.2 ② / §12.1 件二); pure module — the page shows the 中文 part only
 from treval.web.cases_auth import (
     CasesAuthError,
     Forbidden,
+    TokenInfo,
+    TokenMap,
     can_see_tenant,
-    load_token_map,
+    failure_delay_seconds,
     resolve_query_tenant,
     scope_for_token,
 )
@@ -111,12 +125,90 @@ def create_cases_app(
             "🔴 no TREVAL_CASES_TOKENS — refusing to start. A case (bypass-map) service has no "
             "'no token = allow' loopback posture; a credential→tenant map is mandatory (§4)."
         )
-    token_map = load_token_map(
+    token_map = TokenMap(
         tokens
-    )  # fail-closed on unreadable / not-object / bad value
+    )  # fail-closed at startup; re-reads the file on change (§3.3 hot reload)
     store = CaseStore(store_path)
     templates = Jinja2Templates(directory=str(_TEMPLATES))
     static_v = _static_version(_STATIC)
+    # §5 件D — consecutive-failure counts per source, for the incrementing delay. In-process and
+    # ephemeral (NOT a session store, NOT a ban): a good credential clears its source's count.
+    fail_counts: dict[str, int] = {}
+
+    def _current_map(request: Request) -> dict[str, TokenInfo]:
+        # 🔴 §3.3 — read the (possibly reloaded) map ONCE per request (at most one stat), memoized on
+        # request.state so multiple lookups in one request don't re-stat. NOT a cross-request cache.
+        cached = getattr(request.state, "token_map", None)
+        if cached is None:
+            cached = token_map.current()
+            request.state.token_map = cached
+        return cached
+
+    def _lookup(request: Request) -> tuple[str | None, TokenInfo | None]:
+        """(scope, info) for the request's credential, or (None, None). Expiry auto-applies because
+        the scope is re-queried per request; `info` is exposed ONLY when the scope resolved (so an
+        expired/unknown key never surfaces an identity)."""
+        supplied = _supplied(request)
+        current = _current_map(request)
+        scope = scope_for_token(current, supplied)
+        info = current.get(supplied) if (supplied and scope is not None) else None
+        return scope, info
+
+    def _note_failure(request: Request) -> None:
+        # 🔴 §4.1/§5 — a SUPPLIED-but-invalid credential: log ONE opaque failure line (never the key),
+        # then wait the incrementing, kind-independent delay. Failure-logging is best-effort — the
+        # request is already denied, so a failed FAILURE-log must not upgrade into serving data.
+        src = request.client.host if request.client else "?"
+        n = fail_counts.get(src, 0) + 1
+        fail_counts[src] = n
+        try:
+            log_access(store_path, ok=False)
+        except AccessLogError:
+            pass
+        time.sleep(failure_delay_seconds(n))
+
+    def _log_success(
+        request: Request,
+        info: TokenInfo | None,
+        *,
+        action: str,
+        run_key: str | None,
+        tenant: str | None,
+    ) -> None:
+        # 🔴 §4.1/§4.5 — trace the access BEFORE serving. Fail-closed: a write error raises
+        # AccessLogError, caught by the handler as a 503 (never "visible but untraced").
+        src = request.client.host if request.client else "?"
+        fail_counts.pop(src, None)  # a good credential clears the incrementing delay
+        label = info.label if info is not None else None
+        scope = info.scope if info is not None else None
+        log_access(
+            store_path,
+            ok=True,
+            label=label,
+            scope=scope,
+            action=action,
+            run_key=run_key,
+            tenant=tenant,
+        )
+
+    def _identity(info: TokenInfo | None) -> dict[str, Any] | None:
+        # §2.2 — the page identity: label / scope / expiry / a rotation nudge at ≤14 days (§3.1).
+        # 🔴 NEVER the key itself. None ⇒ the header shows no identity line (e.g. the access page).
+        if info is None:
+            return None
+        expires = None
+        days_left = None
+        if info.expires_at is not None:
+            expires = info.expires_at.strftime("%Y-%m-%d")
+            days_left = (info.expires_at - datetime.now(timezone.utc)).days
+        return {
+            "label": info.label,
+            "scope": info.scope,
+            "is_admin": info.scope == "*",
+            "expires": expires,
+            "days_left": days_left,
+            "rotate_soon": days_left is not None and 0 <= days_left <= 14,
+        }
 
     def _supplied(request: Request) -> str | None:
         # The COOKIE is the human channel (§3.4); the header/Basic channels are for scripts/CI.
@@ -139,11 +231,15 @@ def create_cases_app(
         return tok or None
 
     def _optional_scope(request: Request) -> str | None:
-        return scope_for_token(token_map, _supplied(request))
+        return _lookup(request)[0]
 
     def require_scope(request: Request) -> str:
         s = _optional_scope(request)
         if s is None:
+            if _supplied(request):
+                _note_failure(
+                    request
+                )  # a SUPPLIED-but-invalid credential on a data route
             q = request.url.query
             raise _NeedsLogin(request.url.path + (f"?{q}" if q else ""))
         return s
@@ -162,6 +258,15 @@ def create_cases_app(
         base = _base(request)
         return RedirectResponse(
             url=f"{base}/?next={quote(exc.next_url, safe='')}", status_code=303
+        )
+
+    @app.exception_handler(AccessLogError)
+    async def _access_log_failed(request: Request, exc: AccessLogError) -> Response:
+        # 🔴 §4.5 — the access trace could not be written ⇒ fail-closed: refuse to serve. "visible but
+        # no trace" is exactly what this ticket kills; never degrade to "couldn't log, oh well".
+        return PlainTextResponse(
+            "访问留痕写入失败，拒绝服务（fail-closed §4.5）—— access could not be traced, refused.",
+            status_code=503,
         )
 
     @app.middleware("http")
@@ -206,14 +311,19 @@ def create_cases_app(
         request: Request, tenant: str | None = None, next: str | None = None
     ) -> Any:
         # §3.4: no credential ⇒ the ACCESS PAGE (200), not a 401 — the human's entry point.
-        scope_tenant = _optional_scope(request)
+        scope_tenant, info = _lookup(request)
         if scope_tenant is None:
+            if _supplied(request):
+                _note_failure(
+                    request
+                )  # SUPPLIED-but-invalid ⇒ trace + throttle, then access page
             return _access_page(request, next_url=next or "", error=None)
         try:
             want = resolve_query_tenant(scope_tenant, tenant)
         except Forbidden as e:
             raise HTTPException(status_code=403, detail=str(e)) from e
         entries = _visible(scope_tenant, want)
+        _log_success(request, info, action="list", run_key=None, tenant=want)
         return templates.TemplateResponse(
             request,
             "cases_index.html",
@@ -223,6 +333,7 @@ def create_cases_app(
                 "scope": scope_tenant,
                 "banner_tenant": want
                 or ("* (all tenants)" if scope_tenant == "*" else scope_tenant),
+                "identity": _identity(info),
                 "show_logout": True,
                 "base": _base(request),
                 "static_v": static_v,
@@ -237,11 +348,15 @@ def create_cases_app(
         form = parse_qs((await request.body()).decode("utf-8"))
         key = (form.get("key") or [""])[0]
         next_url = _safe_next((form.get("next") or [""])[0], base)
-        if scope_for_token(token_map, key) is None:
-            # wrong key ⇒ stay on the access page with a readable error, NOT a 401 JSON.
+        if scope_for_token(_current_map(request), key) is None:
+            # 🔴 §5 — unknown / expired / revoked / malformed ALL land here: one message, one status,
+            # a kind-independent incrementing delay, and one opaque failure line (never the key).
+            _note_failure(request)
             return _access_page(
                 request, next_url=next_url, error="访问密钥无效 —— 请重试。"
             )
+        src = request.client.host if request.client else "?"
+        fail_counts.pop(src, None)  # a good credential clears the incrementing delay
         resp = RedirectResponse(url=next_url, status_code=303)
         resp.set_cookie(
             _COOKIE,
@@ -261,16 +376,29 @@ def create_cases_app(
         return resp
 
     @app.get("/cases.json")
-    def cases_json(key: str, scope_tenant: str = Depends(require_scope)) -> Response:
+    def cases_json(
+        request: Request, key: str, scope_tenant: str = Depends(require_scope)
+    ) -> Response:
         """🔴 §6.1 主承重物 — the STORED bytes, verbatim (never re-serialized)."""
         entry = _entry_or_404(scope_tenant, key)
+        _log_success(
+            request,
+            _lookup(request)[1],
+            action="download",
+            run_key=key,
+            tenant=entry.tenant_id,
+        )
         return Response(content=store.read_bytes(entry), media_type="application/json")
 
     @app.get("/run", response_class=HTMLResponse)
     def run(
         request: Request, key: str, scope_tenant: str = Depends(require_scope)
     ) -> Any:
+        info = _lookup(request)[1]
         entry = _entry_or_404(scope_tenant, key)
+        _log_success(
+            request, info, action="view_run", run_key=key, tenant=entry.tenant_id
+        )
         doc = json.loads(store.read_bytes(entry))
         cases = doc.get("cases", [])
         aggregates = doc.get("aggregates", {})
@@ -299,7 +427,7 @@ def create_cases_app(
                 "mismatches": mismatches,
                 "block_a": block_a,
                 "block_b": block_b,
-                "scope_declaration": _SCOPE_DECLARATION,
+                "scope_declaration": _SCOPE_DECLARATION_ZH,
                 "verify_command": VERIFY_COMMAND,
                 "key": key,
                 "banner_tenant": entry.tenant_id,
@@ -308,6 +436,36 @@ def create_cases_app(
                     entry.generated_at_ns / 1e9, tz=timezone.utc
                 ).strftime("%Y-%m-%d %H:%M:%SZ"),
                 "corpus_sha8": entry.corpus_sha.replace("sha256:", "")[:8],
+                "identity": _identity(info),
+                "show_logout": True,
+                "base": _base(request),
+                "static_v": static_v,
+            },
+        )
+
+    @app.get("/access-log", response_class=HTMLResponse)
+    def access_log(request: Request, scope_tenant: str = Depends(require_scope)) -> Any:
+        """🔴 §4.4 — who read this bypass map. admin (`*`) sees ALL lines; a scoped tenant sees ONLY
+        its own tenant's rows (a tenant seeing "who viewed my bypass map" is itself the value)."""
+        info = _lookup(request)[1]
+        records = [
+            r
+            for r in read_access(store_path)
+            if scope_tenant == "*" or r.get("tenant") == scope_tenant
+        ]
+        records.reverse()  # newest first
+        _log_success(request, info, action="view_access_log", run_key=None, tenant=None)
+        return templates.TemplateResponse(
+            request,
+            "cases_access_log.html",
+            {
+                "records": records,
+                "scope": scope_tenant,
+                "note": ACCESS_LOG_NOTE,
+                "banner_tenant": (
+                    "* (all tenants)" if scope_tenant == "*" else scope_tenant
+                ),
+                "identity": _identity(info),
                 "show_logout": True,
                 "base": _base(request),
                 "static_v": static_v,
