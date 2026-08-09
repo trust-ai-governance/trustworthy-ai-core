@@ -174,6 +174,89 @@ docstring 逐字写着 `observed_window` 是
 2. 🔴 **但声明必须被机械校验** —— 见 §1.3 新增的那条 blocker。
    **报文里直接把观测窗口给出来**，操作者照抄即可。
 
+### 1.6.1 🔴 C15 — **未闭合的 pin 不是 pin**（2026-08-07 实核，C12 之后发现）
+
+**实测**（直接打 `report_citability`）：
+
+```python
+window: [1786019882041459593, 9999999999999999999]   # 上界 ≈ 公元 2286 年
+record_count: 867, pinned: True
+⇒ (True, [])                                          # 🔴 可引用，零 blocker
+```
+
+**上界在未来的窗口根本没有冻结** —— 明天再读同一份 WAL，它会返回**更多**记录，数就变了。
+而"同一份 WAL + 同一组边界 ⇒ 同一批记录"**正是 `pinned` 唯一要保证的事**。
+
+🔴 **而 C12 的报错正好在鼓励这么干**：操作者被告知"窗口里没记录"，
+最自然的反应就是**把窗口放宽** —— 放到未来，闸就绿了。
+**⇒ C12 拦住了诚实的错误（空窗口），放行了不诚实的那个（开口窗口）。**
+
+**⇒ 判据（两处，都小）：**
+
+| 落点 | 规则 |
+|---|---|
+| **`collect`（源头，主）** | `--window-to-ns` 在**未来** ⇒ **拒绝执行**并说明理由。时钟在这里是合法的 |
+| **`citability`（纵深，副）** | `provenance` 增补 `generated_at_ns`；`window[1] > generated_at_ns` ⇒ **blocker**。🔴 **判据用产物内的数据，不在读取时取时钟** —— 一个自己带着判据依据的产物，转手之后仍然可判 |
+
+🔴 **C12 的报文措辞同时要改**：现在那句"用观测窗口重新 pin"必须**明说不要放宽到未来** ——
+**否则报错本身在教人踩洞。**
+
+### 1.6.2 🔴 C13/C14 — 今天**一条命令产不出**真正可引的产物
+
+**按构造推**：
+
+- 不给窗口参数 ⇒ `pinned=false` ⇒ 拦；
+- 给窗口参数 ⇒ 窗口必须覆盖**尚不存在**的记录（先有鸡蛋）；
+- ⇒ **唯一能一条命令过闸的路，就是 §1.6.1 那个未闭合的窗口。**
+
+**我们上线了一道：正常用永远红、能过的那条路是个洞的闸。**
+
+**C13 —— `collect` 缺"只读被动"与"按观测窗口自 pin"两种能力。**
+今天为改一个**读 WAL 的参数**，要重付 **142 次真实模型调用 + 约 9 分钟**
+（`collect` 强制要求 `--gateway`/`--target-url`，没有被动-only 模式）。
+而且重跑之后 —— 🔴 **主动半边是新样本、被动半边覆盖旧窗口，一份产物里两次抽样**，
+正是 [EV-R2 §9.1](EV-R2.md) 禁止的跨跑比对，只不过发生在一个文件内部。
+
+| 加什么 | 为什么 |
+|---|---|
+| **`--pin-observed-window`** | 🔴 **首选**：一条命令、零额外探针、窗口**按构造正确**。它**仍是有主的声明**（"我声明：口径就是这一跑"），不违反 C12 的"不自动 pin" |
+| **`--passive-only`** | 只读 WAL 不发探针。也是 **#6 的前置能力**之一 |
+
+**C14 —— `pinned` 判据要按 `mode` 分。**
+主动跑**重跑必然得到不同的数**（探针是新样本），窗口 pin 不住它；
+它的可核性锚在 **`corpus_sha` + 逐条 `evidence_refs`**，不是窗口。
+**把被动侧的判据套在 `mode: "active"` 的 bundle 上，是套错了对象。**
+
+### 1.6.3 🔴 C16 — 一个不带版本的判定，过期了没人看得出来
+
+**现场（2026-08-07 Live）**：同一份 2026-08-05 写的 bundle ——
+
+```
+存储里写的 citable=True   |   现在重算 citable=False
+   现算 blocker: 这份产物没有生成时刻 generated_at_ns，无法判断固定窗口是否已闭合…
+```
+
+**判据没错，C15 完全生效。** 问题在于 **`citable` 是序列化字段**：读回来的是**写入当时**的判定，
+而**判据在那之后严过一次**（C15 就是因为发现了洞才加的）。
+
+⇒ 拿到那份文件的人，**无从知道自己手上的 `citable: true` 是过了今天的门、还是过了当初那道有洞的门**。
+🔴 **一个不带版本的判定是不可证伪的。**
+
+**这跟 `registry_fingerprint` 解决的是同一个问题**：评级要钉住"按哪一版 registry 判的"，
+**可引性也要钉住"按哪一版判据判的"**。
+
+**⇒ 定版：**
+
+| | 定 |
+|---|---|
+| **字段** | `citability_criteria`（整数），与 `citable` / `citable_blockers` **同框**。**本轮发布 `1`**；**缺失 = 早于版本化** |
+| **何时 +1** | 🔴 **blocker 集合发生任何增删改**（判据变严或变宽都算）。**不因文案改动而 +1** |
+| **消费者规则** | 见到 `citability_criteria` **缺失或小于当前** ⇒ **不许直接采信 `citable`**：重算，或显式标注"按旧判据" |
+| **落在哪** | 主要消费者是 **treval-web 的可引用性条** —— 它要**重算并在不一致时说出来**（`treval/citability.py` 是纯 stdlib，web 可直接用，不违反引擎纯度） |
+
+🔴 **为什么必须"说出来"而不是静默改判**：静默重算会让一份产物在不同时间显示不同结论，
+**而读者不知道变的是判据还是数据**。**两个结论并排 + 一句"判据已变"**，才是诚实的形状。
+
 ### 1.7 与既有告警的关系
 
 `collect` 今天在 **stderr** 打过一次 unpinned 警告（[collect.py:422](../../treval/cli/collect.py#L422)）。
@@ -369,6 +452,10 @@ n=80 0.7998 未过 ←又掉回去              n=81 0.8021 过（此后稳定�
 | ✅ **C10** | 混合断点（同级既有 `unmet` 又有 `insufficient_data`）怎么办 | 🔴 **`measured_gap` 逐条出，不从 state 派生**（§2.3.0）——二选一必是半句假话 | **已定**（评审与初稿均漏，架构师补） |
 | ✅ **C11** | 断点是 `unverified_evidence` 怎么办（文档原先没有这第 4 种状态） | 🔴 **按成因拆两支**：**A `BROKEN`（链断）** —— 报告级已经是 blocker，维度层**不新增状态、不编等级故事**，`measured_gap` 只出一句指向语；**B `UNVERIFIED` + `requires_integrity`（来源不可链校验）** —— 报告级**一个字都没有**（`evidence_basis` 只从 `target_kind` 推，看不到单条 measurement 的 integrity）⇒ **新增 `evidence_unverified` 态**，行动项是"换一个可链校验的证据源"。**不折进 `blocked_no_data`**（会把人打发去查"为什么没输出"，而它输出了）；**不归 `below_floor`**（那会宣称一个我们没有的值） | **已定**（Implementer 提出，架构师裁） |
 | ✅ **C12** | `pinned` 该不该自动、空窗口算不算站不住 | 🔴 **不自动 pin**（声明式口径有责任归属，抹掉它是损失）；🔴 **但声明必须被机械校验** —— `pinned && record_count == 0` **是 blocker**，且报文**直接给出观测窗口**供照抄（§1.6）。今天的 `pinned` 量的是"人传了参"，不是"窗口可复算" ⇒ **放过了空窗口，拦住了可复算的观测窗口** | **已定**（Live 实证，架构师裁） |
+| ✅ **C13** | `collect` 要不要"只读被动"与"按观测窗口自 pin" | 🔴 **两个都加**（§1.6.2）。**`--pin-observed-window` 优先** —— 一条命令、零额外探针、窗口按构造正确，且仍是**有主的声明**；`--passive-only` 消除"为改一个读 WAL 的参数重付整个主动侧"，也是 **#6 的前置** | **已定**（用户提出浪费，架构师裁） |
+| ✅ **C14** | 窗口类 blocker 对"没有被动证据"的跑适不适用 | 🔴 **豁免条件挂 `provenance.wal_dir`（意图：这一跑有没有【声明】WAL 证据源），不挂 `mode`（结果：被动实际读到几条）。** 初版挂 `mode == "active"` 是错的：`mode=="active"` ⇔ 被动读到 0 条 ⇔ **正是 C12 要抓的症状**，于是空窗口自己豁免了自己（实证回归）。`provenance` 整个缺失 ⇒ **也不豁免**（无法判断即不放行）| **已定**（初版误裁，架构师实核回归后更正） |
+| ✅ **C16** | 存储下来的 `citable` 要不要带"按哪一版判据判的" | 🔴 **要**（§1.6.3）。`citable` 是**序列化字段**，读回来是**写入当时**的判定；而判据已经严过一次（C15）。**一个不带版本的判定，过期了没人看得出来** ⇒ 新增 `citability_criteria`（整数，缺失 = 早于版本化）；**消费者见到旧版本不许直接采信**。与 `registry_fingerprint` 钉住"按哪一版 registry 判级"是同一件事 | **已定**（Live 实证：旧产物存 `true`、现算 `false`） |
+| ✅ **C15** | 上界在未来的 pin 算不算 pin | 🔴 **不算**（§1.6.1）。`collect` 在源头**拒绝未来上界**；`provenance` 补 `generated_at_ns`，citability 以 `window[1] > generated_at_ns` 为 blocker（**判据用产物内的数据，不在读取时取时钟**）。**C12 的报文同时要改**，明说不要放宽到未来 —— 否则报错在教人踩洞 | **已定**（架构师实核发现） |
 
 **无需外部裁定。**
 
@@ -400,6 +487,13 @@ n=80 0.7998 未过 ←又掉回去              n=81 0.8021 过（此后稳定�
 | 20 | 🔴 **A 不双重计费**（C11） | `integrity broken>0` ⇒ 报告级 `citable=false`；各维度 `measured_gap` **只出指向语**，**不得**出现"实测未达 L\<N\>"或"缺 \<indicator\>"式的等级故事 |
 | 21 | 🔴 **pin 空窗口即不可引**（C12） | 就用 Live 里那份 `record_count=0` 的 pinned bundle ⇒ **`citable=false`**，且 blocker 报文**含本次观测到的窗口数值**（只说"空窗口"不给数值 ⇒ 红——那就等于还要人自己算） |
 | 22 | 🔴 **分层测量必须点名分层** | `injection_catch_rate` 的 `subject="outcome_observable"` 那条，其 `citation_form` **必须含 `outcome_observable`**，且**必须带可观测子集偏差注**（复用 [pair.py](../../treval/cli/pair.py) 的 `_OBSERVABLE_BIAS_NOTE` 同一常量，**抄第二份文案 ⇒ 红**）。🔴 **它是全仓最不该裸引的数**：8/8=100% vs 全体 25/28=89.3%，三条漏检 marker 与 canary 皆空 ⇒ **按构造必然好看** |
+| 23 | 🔴 **未来上界即不可引**（C15） | `pinned=true` · `record_count=867` · `window[1] = 9999999999999999999` ⇒ **`citable=false`**。**今天这份输入返回 `(True, [])`，所以这条测试写下去就是红的** —— 修好才绿 |
+| 24 | 🔴 **源头就拒**（C15） | `collect --window-to-ns <未来>` ⇒ **拒绝执行**并说明理由（不是产出一份带假 pin 的 bundle 再让下游拦） |
+| 25 | 🔴 **一条命令能产出可引产物**（C13） | `collect --gateway … --pin-observed-window` ⇒ 产物 `pinned=true`、`record_count>0`、`window == observed_window`、`citable=true`，**且全程只发一轮探针**。🔴 **这条是本收尾的意义**：在它绿之前，"可引"在正常用法下不可达 |
+| 26 | **不发探针也能读被动**（C13） | `collect --passive-only --wal … --window-from-ns X --window-to-ns Y`（**不给 `--gateway`**）⇒ 成功产出被动测量；**今天这条命令是 `error: need --gateway`** |
+| 27 | 🔴 **报文不教人踩洞**（C15） | C12 空窗口那句 blocker **必须含"不要放宽到未来"之类的明示**；只给观测窗口不给这句 ⇒ 红。**缺戳那句必须含"重新采集（collect）"且明说"仅重跑 report 补不上"** —— 戳是采集期盖的，指错修法等于同一个病 |
+| 28 | 🔴 **判定自带判据版本**（C16） | 新产物含 `citability_criteria`（本轮 = `1`）；**去掉它 ⇒ 红**。且 **blocker 集合改动而版本没 +1 ⇒ 红**（回归：把 `CRITERIA_VERSION` 与 blocker 常量数量/名字集合绑一个断言，**改判据忘了改版本就红**） |
+| 29 | 🔴 **旧判定不被静默采信**（C16） | 拿一份 `citability_criteria` 缺失、存 `citable=true` 的旧产物 ⇒ **Web 上必须并排显示"存储判定 / 现判据下的判定"并标"判据已变"**；只显示存储值 ⇒ 红；**静默改成现算值也 ⇒ 红**（读者会分不清变的是判据还是数据） |
 
 ---
 
@@ -410,6 +504,22 @@ n=80 0.7998 未过 ←又掉回去              n=81 0.8021 过（此后稳定�
 | **T1** | 判据单一定义 + `measured_state` + `measured_gap` | `treval/rubric/engine.py`（`_is_not_measured` 上移、`measured_state`、`measured_gap`）、`treval/rubric/serialize.py`（进 JSON）、`treval/cli/render.py`（改为引用引擎定义）、`treval/web/view.py` + `treval/web/radar.py` + `treval/web/templates/dashboard.html`（两态文案 + 雷达）、`tests/` | 验收 10–13 |
 | **T2** | 可引用性闸 | 新 `treval/citability.py`（**纯 stdlib，判据集中一处**）、`treval/rubric/serialize.py`（顶层与维度字段）、`treval/cli/render.py`（human 首行）、`tests/test_citability.py` | 验收 1–6 |
 | **T3** | `citation_form` + 页面条 | `treval/citability.py`（form 生成，区间按机制）、`treval/rubric/serialize.py`、`treval/web/view.py` + `dashboard.html`（可引用性条，两态都显示）、`docs/CLI_USAGE.md` + `README.md` | 验收 7–9、14 |
+
+### 6.1 🆕 收尾（T4·T5，2026-08-07 —— **前三件已合并后追加**）
+
+| # | 提交 | 文件 | 验证 |
+|---|---|---|---|
+| **T4** | 🔴 **未闭合的 pin 不是 pin**（C15） | `treval/cli/collect.py`（源头拒绝未来上界）、`treval/provenance.py`（补 `generated_at_ns`）、`treval/citability.py`（新 blocker + **改 C12 那句报文**）、`docs/report.schema.json`、`tests/test_citability.py`、`tests/test_provenance.py` | 验收 23、24、27 |
+| **T5** | 🔴 **让"可引"在一条命令内可达**（C13 + C14） | `treval/cli/collect.py`（`--pin-observed-window` · `--passive-only` · `--gateway` 改为按需必填）、`treval/citability.py`（豁免挂 `provenance.wal_dir`，C14）、`docs/CLI_USAGE.md`、`tests/test_cli_collect.py` | 验收 25、26 |
+| **T6** | 🔴 **判定自带判据版本**（C16） | `treval/citability.py`（`CRITERIA_VERSION = 1` + 返回它）、`treval/rubric/serialize.py`（写进产物）、`docs/report.schema.json`、`treval/web/view.py` + `dashboard.html`（**重算并在不一致时并排显示"判据已变"**）、`tests/test_citability.py` + `tests/test_web_report.py` | 验收 28、29 |
+
+**顺序**：**T4 先** —— 它把洞堵上；T5 再把正门打开。
+🔴 **反过来做会有一段时间"正门开着、洞也开着"**，而 T5 产出的窗口恰好等于观测窗口，
+届时 T4 的判据是它唯一的守卫。
+
+> **为什么这两件值得单独一轮**：它们不新增任何能力，
+> **只是让上一轮已经合并的闸从"正常用永远红、能过的路是个洞"变成"能用"**。
+> 在 T5 绿之前，`citable=true` 在正常用法下**不可达**。
 
 **顺序**：T1 先 —— 件二的 `insufficient_data` 判据是件一维度级 blocker 的输入。
 🔴 **T2 单独成一个纯 stdlib 模块**：它是本单唯一的**判定**代码，必须能脱离渲染与 HTTP 单测
@@ -447,6 +557,146 @@ python -m treval.cli report --measurement-bundle /tmp/pinned.json \
    **不是"无实测信号"**（它测了 `oauth_scope` 且过了），**也不是"实测未达 L3"**（那一级没测）。
    **三个维度三种文案，一种都不许串**；
 5. 任一率的 `citation_form` 都带 `n` 与区间；`chain_integrity` 那条**不带区间**、写"普查"。
+
+### 7.1 🆕 收尾（T4/T5）的 Live Test —— **一条命令产出可引产物**
+
+**这一节的意义**：在它绿之前，`citable=true` 在正常用法下**不可达**；
+而 T4 的三条负面用例，**每一条都对应一次真实踩过的坑**。
+
+```bash
+cd <repo> && export PYTHONPATH=$PWD
+GW=http://127.0.0.1:8080 ; WAL=/home/olvan/wal ; T=__eval__ ; U=<已开通的评测用户>
+```
+
+**① 🔴 正门：一条命令、零额外探针、窗口按构造正确（验收 25）**
+
+```bash
+python -m treval.cli collect --gateway $GW --wal $WAL --tenant $T --user $U \
+  --model deepseek-v4-flash --pin-observed-window --out /tmp/pin1.json
+
+python -c "import json;p=json.load(open('/tmp/pin1.json'))['provenance']
+print('pinned',p['pinned'],'| n',p['record_count'],
+      '| window==observed:',p['window']==p['observed_window'],
+      '| generated_at_ns:',p.get('generated_at_ns'))"
+
+python -m treval.cli report --measurement-bundle /tmp/pin1.json \
+  --posture docs/posture.sample.yaml --self-contained --out-dir reports/store
+```
+
+**必须看到**：`pinned True` · `n > 0` · `window == observed_window` ·
+🔴 **`generated_at_ns` 非空**（C15 fail-closed 之后，没有它就不可引，见 ⑤）·
+报告 **`citable=true`、blockers 空** —— 🔴 **且探针只发了一轮**
+（对照：修前要两轮，142 次真实模型调用被白付一次）。
+
+**② 不发探针也能读被动（验收 26）**
+
+```bash
+python -m treval.cli collect --passive-only --wal $WAL --tenant $T \
+  --pin-observed-window --out /tmp/pas.json          # 🔴 不给 --gateway
+grep -c chain_integrity /tmp/pas.json                  # 期望 ≥1
+```
+
+**必须看到**：命令**成功**（修前是 `error: need --gateway`）· 有被动测量 · **秒级返回**。
+
+**③ 🔴 未闭合的 pin 被拦（C15 · 验收 23/24）**
+
+```bash
+# 源头就该拒
+python -m treval.cli collect --gateway $GW --wal $WAL --tenant $T --user $U \
+  --window-from-ns 1 --window-to-ns 9999999999999999999 --out /tmp/future.json
+```
+
+**必须看到**：**拒绝执行**并说明"上界在未来"——**不是**产出一份带假 pin 的 bundle 再让下游拦。
+
+**④ 🔴 空窗口仍被拦（C12 —— 这条是 C14 的回归现场）**
+
+```bash
+python -m treval.cli collect --gateway $GW --wal $WAL --tenant $T --user $U \
+  --window-from-ns 1 --window-to-ns 2 --out /tmp/empty.json
+python -m treval.cli report --measurement-bundle /tmp/empty.json \
+  --posture docs/posture.sample.yaml --self-contained --out-dir /tmp/emptystore
+python -c "import json;from treval.report_store import ReportStore
+st=ReportStore('/tmp/emptystore');d=json.loads(st.read_bytes(st.list()[0]))
+p=d['provenance']
+print('wal_dir',bool(p.get('wal_dir')),'| record_count',p['record_count'],'| citable',d['citable'])
+[print(' ',b[:100]) for b in d['citable_blockers']]"
+```
+
+🔴 **必须看到 `citable=false` + 空窗口 blocker**，**尽管这份 bundle 的被动测量为 0**。
+**这条曾经绿过** —— C14 初版用 `mode == "active"`（**结果**）当豁免条件，
+而 `mode=="active"` ⇔ 被动读到 0 条 ⇔ **正是 C12 要抓的症状**，于是空窗口自己豁免了自己。
+判据现在挂 **`provenance.wal_dir`**（**意图**：这一跑有没有**声明**过 WAL 证据源）——
+上面那行打印的就是这个谓词：**`wal_dir=True` 且 `record_count=0` ⇒ 必须被拦**。
+（🔴 `provenance` 整个缺失也**不豁免** —— 无法判断即不放行。）
+**报文里还必须含"不要把上界放宽到未来"** —— 否则报错在教人踩 ③ 那个洞（验收 27）。
+
+**⑤ 🔴 fail-closed 降级是可见的，不是静默的**
+
+> 🔴 **不要直接读旧产物的 `citable`**：它是**序列化字段**，读回来是**写入当时**的判定，
+> 演示不了今天的判据（C16 §1.6.3 —— 初版的这一步就是这么写错的）。
+> **必须把"存储写的"和"现在重算的"并排看。**
+
+```bash
+python - <<'EOF'
+import json
+from treval.report_store import ReportStore
+from treval.citability import report_citability
+st = ReportStore('reports/store')
+for e in st.list()[:4]:
+    d = json.loads(st.read_bytes(e))
+    stored, (live_ok, live_b) = d['citable'], report_citability(d)
+    stamp = d['provenance'].get('generated_at_ns')
+    ver = d.get('citability_criteria', '(缺失)')
+    flag = '   🔴 判据已变' if stored != live_ok else ''
+    print(f"stamp={str(stamp):22s} criteria={ver} 存储={stored} 现算={live_ok}{flag}")
+    for b in live_b:
+        print('    ', b[:90])
+EOF
+```
+
+**必须看到**：**pre-C15 的旧报告（`generated_at_ns` 为空）现在是不可引的**，
+且 blocker 🔴 **明说要重新 `collect`、而不是只重跑 `report`**：
+
+> 「这份产物没有生成时刻 `generated_at_ns`，无法判断固定窗口是否已闭合 ——
+> 用当前版本**重新采集（collect）**并重出报告，使其带上生成时刻；
+> **仅重跑 `report` 补不上这个采集期的数据**」
+
+🔴 **最后半句是这条报文的关键**：戳是**采集期**盖的，
+读者最自然的反应（"那我重出一次报告"）**不管用** ——
+**报文必须自己说清楚，否则又是一次"报错把人指向错的修法"。**
+
+**带牙**：拿同一份旧 bundle 只重跑 `report` ⇒ **现算仍是 `False`**
+（戳是**采集期**盖的；若变可引，说明戳被读取期伪造了）。
+
+> 🔴 **这是口径影响，不是 bug**：一个**无法被校验的声明不该当作通过**（C12 立的那条）。
+> 但它必须**说出来** —— 静默跳过才是错的那一种。① 产出的新报告不受影响。
+
+**⑥ 🔴 判定自带判据版本，旧判定不被静默采信（C16 · 验收 28/29）**
+
+```bash
+# 新产物带版本
+python -c "import json;from treval.report_store import ReportStore
+st=ReportStore('reports/store');d=json.loads(st.read_bytes(st.list()[0]))
+print('citability_criteria =', d.get('citability_criteria'))"        # 期望 1
+
+# 浏览器：把旧报告和新报告各看一次
+pkill -f 'treval.web'
+TREVAL_REPORT_STORE=reports/store python -m treval.web    # :8090
+```
+
+**必须看到：**
+
+1. 新产物 `citability_criteria = 1`；
+2. 🔴 打开**旧**报告（`criteria` 缺失、存储写着可引）⇒ 可引用性条上
+   **两个结论并排 + 一句「判据已变」**，并给出现判据下的 blocker；
+3. 🔴 打开 ① 产出的**新**报告 ⇒ 只有一个结论（存储与现算一致），**不出现"判据已变"**；
+4. **带牙**：`citability_criteria` 从产物里删掉 ⇒ 测试红；
+   **blocker 集合改了而 `CRITERIA_VERSION` 没 +1 ⇒ 测试红**。
+
+> 🔴 **两个结论必须并排，不许静默改判**：静默重算会让同一份产物在不同时间显示不同结论，
+> **而读者不知道变的是判据还是数据**。**并排 + 说明**，才是诚实的形状。
+
+---
 
 > 🔴 **第 2 与第 3 项是这一跑的意义**：
 > 第 2 项证明闸拦的是"站不住"，不是"不好看"；
