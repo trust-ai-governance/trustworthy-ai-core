@@ -31,14 +31,27 @@ from treval.stats import wilson_interval
 
 _REG = load_registry()
 _ROB = "robustness"
-# A PROPERLY pinned run: a WAL source declared (wal_dir), a closure stamp (generated_at_ns), and a
-# segment hash. C14 keys the window-family blockers on wal_dir; C15 requires generated_at_ns on a
-# pinned run (fail-closed), so a citable fixture must carry it.
+# E3-h/E3-m: the freeze-pack scope a citable run must declare — language_scope (the #1 axis) +
+# tested version / detect config / exec mode.
+_CONFIG = {
+    "language_scope": "英文为主 · 含跨语言手法件 · 中文金融流量未测",
+    "tested_version": "deepseek-v4-flash@2026-01-30",
+    "detect_config": "encode_decode=off",
+    "exec_mode": "block",
+    # E3-n ③: the detection-layer status + the tested party's declared upstream timeout fold into
+    # the SAME missing_run_config criterion — a citable run must declare all six.
+    "detection_layer_status": "tier1_only (tier2 shadow off)",
+    "upstream_timeout_s": 60.0,
+}
+# A PROPERLY pinned run: a WAL source declared (wal_dir), a closure stamp (generated_at_ns), a segment
+# hash, AND the E3-h freeze-pack config. C14 keys the window-family blockers on wal_dir; C15 requires
+# generated_at_ns; E3-h requires the config trio — so a citable fixture must carry all of them.
 _PINNED = {
     "pinned": True,
     "wal_dir": "/wal",
     "generated_at_ns": 10,
     "wal_segments": {"sha256": "sha256:" + "a" * 64},
+    **_CONFIG,
 }
 
 
@@ -232,7 +245,7 @@ def test_pinned_but_empty_window_is_not_citable_and_prints_the_observed_window()
         str(x) in blk and str(y) in blk
     )  # 🔴 the actual ns, copyable — not just "空窗口"
 
-    # a pinned run WITH records AND a closure stamp is untouched (no false positive)
+    # a pinned run WITH records AND a closure stamp + config is untouched (no false positive)
     ok, _b = report_citability(
         {
             "evidence_basis": "wal_anchored",
@@ -242,6 +255,7 @@ def test_pinned_but_empty_window_is_not_citable_and_prints_the_observed_window()
                 "record_count": 867,
                 "generated_at_ns": y,
                 "wal_segments": {"sha256": "sha256:" + "a" * 64},
+                **_CONFIG,
             },
             "report": {"integrity_summary": {"broken": 0}},
         }
@@ -292,6 +306,7 @@ def test_future_upper_bound_is_not_citable_C15():
                 "window": [0, closed],
                 "generated_at_ns": closed,
                 "wal_segments": {"sha256": "sha256:" + "a" * 64},
+                **_CONFIG,
             },
             "report": {"integrity_summary": {"broken": 0}},
         }
@@ -400,8 +415,8 @@ def test_missing_generated_at_ns_on_pinned_run_is_not_citable_C15():
     assert citable is False
     assert any("generated_at_ns" in b and "重新采集" in b for b in blockers)
 
-    # the SAME bundle WITH a valid stamp (>= window[1]) is citable — the ruling blocks only the
-    # unverifiable claim, it does not make every pinned run un-citable.
+    # the SAME bundle WITH a valid stamp (>= window[1]) AND config is citable — the ruling blocks only
+    # the unverifiable claim, it does not make every pinned run un-citable.
     ok, _b = report_citability(
         {
             "evidence_basis": "wal_anchored",
@@ -412,6 +427,7 @@ def test_missing_generated_at_ns_on_pinned_run_is_not_citable_C15():
                 "window": [1000, 2000],
                 "generated_at_ns": 2000,
                 "wal_segments": {"sha256": "sha256:" + "a" * 64},
+                **_CONFIG,
             },
             "report": {"integrity_summary": {"broken": 0}},
         }
@@ -457,13 +473,15 @@ def _cite(m: Measurement, *, citable=True) -> str:
 
 def _pinned_bundle(measurements):
     report = evaluate(_REG, measurements, [], window=(100, 200), tenant_id="t")
-    # a properly pinned run: wal_dir declared, window closed (generated_at_ns >= window[1]) ⇒ citable
+    # a properly pinned run: wal_dir declared, window closed (generated_at_ns >= window[1]), and the
+    # E3-h freeze-pack config declared ⇒ citable
     prov = {
         "pinned": True,
         "wal_dir": "/wal",
         "window": [100, 200],
         "generated_at_ns": 200,
         "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        **_CONFIG,
     }
     return serialize_self_contained_bundle(report, measurements, _REG, prov)
 
@@ -673,19 +691,25 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
     Changing CRITERIA_BLOCKERS (add / remove / repurpose a key) WITHOUT bumping CRITERIA_VERSION ⇒
     red. A wording-only edit to a `_*_FIX` string leaves CRITERIA_BLOCKERS untouched ⇒ this stays
     green (proving 文案改动 does not bump the version)."""
-    assert (CRITERIA_VERSION, CRITERIA_BLOCKERS) == (
-        1,
-        frozenset(
-            {
-                "integrity_broken",
-                "pinned_empty_window",
-                "future_upper_bound",
-                "no_generated_at_ns",
-                "unpinned",
-                "missing_segment_hash",
-                "not_wal_anchored",
-            }
-        ),
+    assert (
+        (CRITERIA_VERSION, CRITERIA_BLOCKERS)
+        == (
+            2,  # 1→2: E3-h added missing_run_config; E3-m + E3-n ③ FOLD into it (no re-bump); E3-n ④
+            # adds build_fingerprint_changed — all folded into the SAME uncommitted v2, so VERSION stays 2.
+            frozenset(
+                {
+                    "integrity_broken",
+                    "pinned_empty_window",
+                    "future_upper_bound",
+                    "no_generated_at_ns",
+                    "unpinned",
+                    "missing_segment_hash",
+                    "not_wal_anchored",
+                    "missing_run_config",
+                    "build_fingerprint_changed",  # E3-n ④ — the one new identity
+                }
+            ),
+        )
     )
 
 
@@ -706,3 +730,193 @@ def test_criteria_blockers_count_matches_the_code_append_sites_C16():
         f"{append_sites} blocker-append site(s) vs {len(citability.CRITERIA_BLOCKERS)} declared "
         "key(s) — add/remove a blocker ⇒ update CRITERIA_BLOCKERS (and bump CRITERIA_VERSION)"
     )
+
+
+# --------------------------------------------------------------------------- #
+# E3-h — the freeze pack must carry version + config + exec-mode (§3.1, acceptance 13)
+# --------------------------------------------------------------------------- #
+
+
+def _wal_run(**config):
+    """A pinned, closed, wal_anchored run — citable EXCEPT for whatever config is missing."""
+    prov = {
+        "pinned": True,
+        "wal_dir": "/w",
+        "record_count": 5,
+        "generated_at_ns": 20,
+        "window": [1, 2],
+        "wal_segments": {"sha256": "sha256:" + "a" * 64},
+    }
+    prov.update(config)
+    return {
+        "evidence_basis": "wal_anchored",
+        "provenance": prov,
+        "report": {"integrity_summary": {"broken": 0}},
+    }
+
+
+def test_missing_run_config_blocks_citation_acceptance13():
+    """🔴 acceptance 13/22 (§3.1/§5): a wal_anchored run whose freeze pack lacks language_scope /
+    version / config / exec-mode is NOT citable — "89%" without them is unscoped. Declaring all FOUR ⇒
+    citable. RED input: a pinned+closed+wal_anchored run with any one scope key empty returned (True,
+    [])."""
+    # declared in full (all four scope fields) ⇒ citable
+    ok, blk = report_citability(_wal_run(**_CONFIG))
+    assert ok is True and blk == []
+    # any one of the FOUR missing ⇒ NOT citable (language_scope included — E3-m)
+    for missing in _CONFIG:
+        full = dict(_CONFIG)
+        full[missing] = ""  # present-but-empty
+        citable, _b = report_citability(_wal_run(**full))
+        assert citable is False, f"a run missing {missing} must not be citable"
+
+
+def test_missing_config_two_messages_absent_vs_empty_E3h():
+    """🔴 E3-h two-message teeth (timing-independent, absent-vs-empty):
+    - keys PRESENT but EMPTY (a v2 run that didn't declare) ⇒ "补声明重跑" (--tested-version/...);
+    - keys ABSENT entirely (a pre-E3 bundle) ⇒ diagnosed as DRIFT, "旧判据 … 重跑即可引", NOT a defect.
+    🔴 RED input each: an empty-keys run must not read as a pre-E3 drift, and vice versa."""
+    # present-but-empty (all four scope keys present, empty) ⇒ the "declare it and re-run" message
+    _c, empty_blk = report_citability(_wal_run(**{k: "" for k in _CONFIG}))
+    empty_msg = next(b for b in empty_blk if "版本" in b and "执行模式" in b)
+    assert "补声明重跑" in empty_msg and "--tested-version" in empty_msg
+    assert "旧判据" not in empty_msg  # NOT the pre-E3 drift diagnosis
+
+    # keys absent entirely ⇒ the pre-E3 DRIFT diagnosis (mirrors C16's stored-vs-recompute face)
+    _c2, absent_blk = report_citability(_wal_run())  # no config keys at all
+    absent_msg = next(b for b in absent_blk if "版本" in b and "执行模式" in b)
+    assert "旧判据" in absent_msg and "重新采集" in absent_msg
+    assert "不是坏了" in absent_msg  # drift, not a defect
+    assert "补声明重跑" not in absent_msg  # NOT the didn't-declare message
+
+
+def test_missing_run_config_is_one_identity_scoped_to_wal_anchored_E3h():
+    """🔴 the config blocker is ONE identity (missing_run_config) and, like C12/C15, is wal_anchored/
+    wal_dir-scoped: a pure-active run (present provenance, no wal_dir) is NOT blocked for missing
+    config (a window/config pins nothing there)."""
+    pure_active = {
+        "evidence_basis": "wal_anchored",
+        "provenance": {
+            "pinned": False,
+            "wal_segments": {},
+        },  # present, no wal_dir ⇒ exempt
+        "report": {"integrity_summary": {"broken": 0}},
+    }
+    ok, blk = report_citability(pure_active)
+    assert ok is True and blk == []  # no config blocker for a no-WAL run
+
+
+def test_citation_form_carries_the_run_config_acceptance13():
+    """🔴 acceptance 13: a quoted number states which version / config / exec-mode it was measured
+    under — the delivery bundle's citation_form contains all three. RED input: a citation_form built
+    from a declared run that DROPS any of them (before E3-h citation_form had no config clause)."""
+    ms = [_m("injection_catch_rate", 25 / 28, 28)]
+    report = evaluate(_REG, ms, [], window=(100, 200), tenant_id="t")
+    prov = {
+        "pinned": True,
+        "wal_dir": "/wal",
+        "generated_at_ns": 200,
+        "window": [100, 200],
+        "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        **_CONFIG,
+    }
+    bundle = serialize_self_contained_bundle(report, ms, _REG, prov)
+    assert bundle["citable"] is True
+    form = bundle["measurements"][0]["citation_form"]
+    assert "deepseek-v4-flash@2026-01-30" in form  # version
+    assert "encode_decode=off" in form  # detection config
+    assert "拦截" in form  # exec mode (block → 拦截(命中即拒))
+    assert "被测方" in form and "检测配置" in form and "执行模式" in form
+    # E3-m: language_scope is the #1 axis — present AND leads (before 被测方 / version)
+    assert _CONFIG["language_scope"] in form and "作用域" in form
+    assert form.index("作用域") < form.index("被测方")
+
+
+# --------------------------------------------------------------------------- #
+# E3-m — language_scope folds into the SAME missing_run_config criterion (§5, acceptance 22)
+# --------------------------------------------------------------------------- #
+
+
+def test_language_scope_missing_blocks_citation_acceptance22():
+    """🔴 acceptance 22 (§5): language_scope is the #1 scope axis and folds into the SAME
+    missing_run_config criterion — a run declaring version/config/exec-mode but NOT language_scope is
+    NOT citable. Same two-message split as E3-h: present-but-empty ⇒ "补声明重跑"; absent ⇒ drift.
+    RED input: the three config keys declared but language_scope empty/absent returned citable before E3-m."""
+    others = {
+        "tested_version": "v4@2026-01-30",
+        "detect_config": "encode_decode=off",
+        "exec_mode": "block",
+        # E3-n ③: the other two required config fields, so only language_scope is under test here
+        "detection_layer_status": "tier1_only",
+        "upstream_timeout_s": 60.0,
+    }
+    # language_scope present-but-empty ⇒ not citable, "补声明重跑"
+    _c, empty_blk = report_citability(_wal_run(language_scope="", **others))
+    assert _c is False
+    assert any("补声明重跑" in b for b in empty_blk)
+    # language_scope absent (others declared) ⇒ not citable, DRIFT (a criterion field is missing entirely)
+    _c2, absent_blk = report_citability(_wal_run(**others))
+    assert _c2 is False
+    assert any("旧判据" in b and "不是坏了" in b for b in absent_blk)
+    # all four declared ⇒ citable
+    ok, blk = report_citability(_wal_run(language_scope="英文为主", **others))
+    assert ok is True and blk == []
+
+
+def test_language_scope_is_declared_never_derived_from_case_content_acceptance22():
+    """🔴 acceptance 22 (§5) REVERSE: language_scope is an operator DECLARATION (the --language-scope
+    flag → provenance), NEVER inferred by scanning case/measurement content. This batch is
+    English-majority but CONTAINS cross-language cases, so a "scan the cases and guess the language"
+    implementation would mislabel it — this test REDs such an implementation.
+    - an EMPTY language_scope is NOT rescued by rich measurement content (no inference makes it citable);
+    - the declared scope rides into citation_form VERBATIM, UNCHANGED by measurement content;
+    - run_config_note takes ONLY provenance — it structurally cannot scan cases."""
+    base_prov = {
+        "pinned": True,
+        "wal_dir": "/wal",
+        "generated_at_ns": 200,
+        "window": [100, 200],
+        "wal_segments": {"sha256": "sha256:" + "a" * 64},
+        "tested_version": "v4@2026-01-30",
+        "detect_config": "encode_decode=off",
+        "exec_mode": "block",
+        # E3-n ③: the other two required config fields (so a declared language_scope makes it citable)
+        "detection_layer_status": "tier1_only",
+        "upstream_timeout_s": 60.0,
+    }
+    ms = [_m("injection_catch_rate", 25 / 28, 28)]
+    report = evaluate(_REG, ms, [], window=(100, 200), tenant_id="t")
+
+    # ① empty language_scope + real measurements ⇒ still NOT citable (nothing inferred from content)
+    b0 = serialize_self_contained_bundle(
+        report, ms, _REG, {**base_prov, "language_scope": ""}
+    )
+    assert (
+        b0["citable"] is False
+    )  # scanning ms does NOT rescue an undeclared language_scope
+
+    # ② declared scope rides VERBATIM and does not depend on measurement content
+    declared = "英文为主 · 含跨语言手法件 · 中文金融流量未测"
+    prov = {**base_prov, "language_scope": declared}
+    ms_b = [_m("injection_catch_rate", 0.40, 40)]  # different content
+    rep_b = evaluate(_REG, ms_b, [], window=(100, 200), tenant_id="t")
+    form_a = serialize_self_contained_bundle(report, ms, _REG, prov)["measurements"][0][
+        "citation_form"
+    ]
+    form_b = serialize_self_contained_bundle(rep_b, ms_b, _REG, prov)["measurements"][
+        0
+    ]["citation_form"]
+    assert (
+        declared in form_a and declared in form_b
+    )  # verbatim from provenance, not derived
+    # the scope clause is byte-identical across the two different-content runs
+    scope_a = form_a[form_a.index("作用域") : form_a.index("· 被测方")]
+    scope_b = form_b[form_b.index("作用域") : form_b.index("· 被测方")]
+    assert scope_a == scope_b
+
+    # ③ run_config_note takes ONLY provenance — structurally cannot scan cases/measurements
+    import inspect
+
+    from treval.citability import run_config_note
+
+    assert list(inspect.signature(run_config_note).parameters) == ["provenance"]

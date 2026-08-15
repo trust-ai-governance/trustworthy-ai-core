@@ -137,6 +137,61 @@
             "null"
           ]
         },
+        "language_scope": {
+          "description": "EV-COVERAGE E3-m (§5): the #1 scope axis — which language(s)/traffic the numbers represent, operator-DECLARED (e.g. '英文为主 · 含跨语言手法件 · 中文金融流量未测'). 🔴 A STATEMENT, never inferred from case bytes: an English-majority batch that includes cross-language cases still says so here. Part of the missing_run_config criterion (with tested_version/detect_config/exec_mode). Empty = a v2 run that did not declare (present-but-empty); ABSENT = a pre-E3 bundle. Leads citation_form's scope clause.",
+          "type": "string"
+        },
+        "tested_version": {
+          "description": "EV-COVERAGE E3-h (§3.1): the tested party's version identifier, operator-declared. Part of what scopes the numbers — a citable wal_anchored run must carry it (with language_scope + detect_config + exec_mode). Empty string = a v2 run that did not declare (present-but-empty); ABSENT entirely = a pre-E3 bundle.",
+          "type": "string"
+        },
+        "detect_config": {
+          "description": "EV-COVERAGE E3-h (§3.1): key detection config switches, esp. encode/decode on-off — their state directly changes the catch number. Operator-declared free-form string. Empty = undeclared (present-but-empty on a v2 run); absent = pre-E3.",
+          "type": "string"
+        },
+        "exec_mode": {
+          "description": "EV-COVERAGE E3-h (§2.2.2): execution mode — `block` (hit⇒deny) or `flag` (mark-only). τ_fpr's operational meaning varies by this. Empty = undeclared; absent = pre-E3.",
+          "type": "string",
+          "enum": ["", "block", "flag"]
+        },
+        "config_source": {
+          "description": "EV-COVERAGE E3-h: HOW the config fields arrived — `declared` (operator-declared, the only source today) or `queried` (reserved for a future version/config endpoint). 🔴 Metadata only: NOT part of the citability criterion (the criterion is fields-present, independent of source — so a query endpoint later is provenance enrichment + a declared≠queried drift record, NOT a criteria bump).",
+          "type": "string",
+          "enum": ["declared", "queried"]
+        },
+        "detection_layer_status": {
+          "description": "EV-COVERAGE E3-n ③: which detection layers are live (operator-declared, e.g. 'tier1_only (tier2 shadow off)'). Part of the missing_run_config criterion (with language_scope/tested_version/detect_config/exec_mode/upstream_timeout_s). Empty = undeclared (present-but-empty on a v2 run); absent = pre-E3-n.",
+          "type": "string"
+        },
+        "upstream_timeout_s": {
+          "description": "EV-COVERAGE E3-n ③: the tested party's DECLARED upstream request-timeout in seconds (its OWN hardcoded value, e.g. 60.0 — not the harness default). The client --timeout is DERIVED as 2× this. Part of the missing_run_config criterion. null = undeclared (present-but-null on a v2 run); absent = pre-E3-n.",
+          "type": ["number", "null"]
+        },
+        "tier2_drain_executed": {
+          "description": "EV-COVERAGE E3-n ②: did the async Tier-2 drain execute this run? Recorded so a Tier-2 layer that was never drained reads as unmeasurable (its indicators emit n/a), NEVER as a 0% lift/rate. false on a standard collect (which does not drain). Absent = pre-E3-n.",
+          "type": "boolean"
+        },
+        "build_fingerprint_before": {
+          "description": "EV-COVERAGE E3-n ④: the tested party's self-reported build fingerprint (GET /admin/v1/buildinfo — git_sha/ir_spec_sha/wheel_sha256/ruleset/detection_switches) captured BEFORE the run, stored verbatim. citability compares it to build_fingerprint_after; any bit of difference ⇒ the tested party changed mid-run ⇒ NOT citable. null when no admin endpoint was queried.",
+          "type": ["object", "null"]
+        },
+        "build_fingerprint_after": {
+          "description": "EV-COVERAGE E3-n ④: the build fingerprint captured AFTER the run (paired with build_fingerprint_before). null when no admin endpoint was queried, OR when --admin-url was declared but the fetch failed (see admin_url_declared).",
+          "type": ["object", "null"]
+        },
+        "admin_url_declared": {
+          "description": "EV-COVERAGE E3-n ④ (fail-CLOSED, THREE-state): whether --admin-url was DECLARED (the build-fingerprint claim). declared + both fetched + before==after ⇒ pass; declared + either side null (fetch FAILED — wrong port/non-200/parse, reason in warnings) ⇒ the build_fingerprint blocker (NOT citable — a declared-but-unreachable endpoint is a check that failed, not 'no claim'); not declared ⇒ no claim, not checked. Absent = pre-E3-n-④ bundle.",
+          "type": "boolean"
+        },
+        "probe_window": {
+          "description": "EV-COVERAGE E3-n ②: this run's probe span [scan_start, generated_at), half-open. The ACTIVE rates (injection_catch_rate / false_positive_rate / four-cell / injection_success_rate — evidence_requirement != needs_wal) cite THIS in citation_form; passive/census indicators keep observed_window (the full WAL range read, incl. history). null when nothing was probed.",
+          "type": ["array", "null"],
+          "items": {
+            "type": "integer"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
         "wal_segments": {
           "type": [
             "object",

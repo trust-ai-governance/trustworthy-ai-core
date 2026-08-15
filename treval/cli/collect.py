@@ -37,12 +37,16 @@ from treval.active_eval import (
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SystemPromptLeakRate,
+    Tier2ShadowRecallLift,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
     load_corpus,
     run_corpus,
 )
-from treval.active_eval.corpus import corpus_fingerprint
+from treval.active_eval.cases import serialize_case_contract
+from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
+from treval.active_eval.target import ProbeResult
+from treval.case_contract import CaseContractError
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
     BoundaryBreachRate,
@@ -90,9 +94,10 @@ class Producer:
 # still measures them.
 # OUTPUT-side (EV-PAIR-A): read response_text / secret_canary / output_marker only, so they are
 # `measured` on BOTH gateway AND raw_model — this is what lets `collect --target-kind raw_model`
-# produce real numbers (the same corpus↔indicator pairs eval_report already runs). NOTE: llm01 is
-# driven twice (catch + success) — one run per producer is the existing table model (no grouping;
-# not new logic). `within_cost_budget` is deliberately NOT here — it needs a budget arg while
+# produce real numbers (the same corpus↔indicator pairs eval_report already runs). 🔴 NOTE: several
+# producers share a corpus (llm01_prompt_injection has six). They are probed ONCE and share that one
+# run — see collect_measurements PHASE 1; the old one-run-per-producer model made catch and success
+# read DIFFERENT executions of the same corpus. `within_cost_budget` is deliberately NOT here — it needs a budget arg while
 # `factory()` is no-arg; it lands with EV-PAIR's factory-form change (EV-PAIR-A §3).
 CURATION: tuple[Producer, ...] = (
     # decision-side
@@ -149,6 +154,14 @@ CURATION: tuple[Producer, ...] = (
     ),
     Producer(
         "system_prompt_leak_rate", SystemPromptLeakRate, "llm07_system_prompt_leak"
+    ),
+    # G1 — the async Tier-2 shadow judge's recall lift over Tier-1. Unbound (not in the registry):
+    # a DISCLOSURE row, never graded. 🔴 Wired so a Tier-2-on run actually MEASURES the layer it is
+    # labelled with: without this producer a run with the judge enabled emits a bundle that says
+    # "Tier-2 on" while every number in it is Tier-1-only — the worst of the three options. Reads
+    # governance_evidence, which only PHASE 2's drain populates ⇒ no drain ⇒ `no-async`, never 0.
+    Producer(
+        "tier2_shadow_recall_lift", Tier2ShadowRecallLift, "llm01_prompt_injection"
     ),
 )
 
@@ -264,6 +277,16 @@ class ActiveScan:
     error_count: int
     first_error: str | None
     corpus_sha: dict[str, str]
+    # EV-R2 (--cases-out): the llm01_prompt_injection corpus + its ProbeResults, captured from the
+    # FIRST injection producer's run (InjectionCatchRate) so the case contract re-adds to the SAME
+    # aggregate this run's bundle reports. Empty when no injection producer ran (e.g. a corpus with
+    # no llm01_prompt_injection subdir).
+    injection_cases: tuple[CorpusCase, ...] = ()
+    injection_results: tuple[ProbeResult, ...] = ()
+    # G1 — did PHASE 2 actually drain the async Tier-2 records? False ⇒ the Tier-2 rows are
+    # UNMEASURED (n/a), never 0: "the judge scored below τ" and "we never looked" must not
+    # collapse into the same number (the fail-open shape this ticket exists to close).
+    tier2_drain_executed: bool = False
 
 
 def collect_measurements(
@@ -281,25 +304,179 @@ def collect_measurements(
     error_count = 0
     first_error: str | None = None
     corpus_sha: dict[str, str] = {}
-    for prod in CURATION:
+    injection_cases: tuple[CorpusCase, ...] = ()
+    injection_results: tuple[ProbeResult, ...] = ()
+
+    # 🔴 PHASE 0 — PRE-FLIGHT the drain path, in SECONDS, before spending hours probing.
+    #
+    # PHASE 2's drain necessarily runs at the END (its stop condition snapshots the WAL head once and
+    # polls past it). So a broken drain used to surface only after the whole run: observed live, the
+    # cursor read raised and the run finished 2.3 h later with tier2_drain_executed=False and every
+    # Tier-2 row n/a — a wasted night, discovered at the end. Reading the cursor ONCE up front turns
+    # that into a 2-second answer. It is a WARNING, not a refusal: a Tier-2-off run does not need the
+    # drain, and refusing to start would make an unrelated admin hiccup block the whole collection.
+    probe = getattr(target, "read_drain_cursor", None) or getattr(
+        target, "_read_cursor", None
+    )
+    if callable(getattr(target, "drain_governance", None)) and callable(probe):
         try:
-            corpus = list(load_corpus(corpus_root / prod.corpus_subdir))
-            corpus_sha[prod.indicator_id] = corpus_fingerprint(corpus)
-            results = run_corpus(corpus, target)  # type: ignore[arg-type]
-            for pr in results:
-                probe_count += 1
-                if pr.error is not None:
-                    error_count += 1
-                    if first_error is None:
-                        first_error = pr.error
-            (m,) = prod.factory().measure(results)
-            measurements.append(m)
+            cur = probe()
+        except Exception as e:  # noqa: BLE001 — any failure is the same signal here
+            cur = None
+            warnings.append(
+                f"pre-flight: drain cursor read raised {type(e).__name__}: {e}"
+            )
+        if not isinstance(cur, dict) or cur.get("wal_head_seq") is None:
+            warnings.append(
+                "🔴 pre-flight: the Tier-2 drain cursor is NOT readable "
+                f"(got {cur!r}) — this run will finish with tier2_drain_executed=false and every "
+                "Tier-2 row n/a. Fix the admin endpoint BEFORE spending the run, or accept a "
+                "Tier-1-only result."
+            )
+
+    # 🔴 PHASE 1 — probe each corpus subdir ONCE, shared by every producer bound to it.
+    #
+    # It used to be one `run_corpus` PER PRODUCER: llm01_prompt_injection has six producers, so the
+    # same 202 cases were probed six times (~1484 probes for ~406 cases, ~3.6× waste, ~139 min).
+    # 🔴 But the wasted time was the SMALLER half of the problem: each producer then measured its OWN
+    # pass, so `injection_catch_rate` (decision-side, deterministic) and `injection_success_rate`
+    # (OUTPUT-side, reads the model's text) were computed over DIFFERENT probe executions of the same
+    # corpus. Observed live: one run reported success 0.3333 (n=63) in the bundle and 0.2812 (n=64)
+    # in its own case contract — two answers, one run. Probing once makes every producer over a corpus
+    # read ONE observation, which is what "catch and success on one denominator" always claimed.
+    by_subdir: dict[str, list[Producer]] = {}
+    for prod in CURATION:
+        by_subdir.setdefault(prod.corpus_subdir, []).append(prod)
+
+    probed: dict[str, tuple[CorpusCase, ...]] = {}
+    runs: dict[str, tuple[ProbeResult, ...]] = {}
+    for subdir, prods in by_subdir.items():
+        try:
+            corpus = tuple(load_corpus(corpus_root / subdir))
+            sha = corpus_fingerprint(corpus)
+            results = tuple(run_corpus(list(corpus), target))  # type: ignore[arg-type]
         except Exception as e:  # env/transport/corpus failure — record, keep going
+            for prod in prods:
+                warnings.append(
+                    f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
+                )
+            continue
+        probed[subdir] = corpus
+        runs[subdir] = results
+        for prod in prods:
+            corpus_sha[prod.indicator_id] = sha
+        for pr in results:
+            probe_count += 1
+            if pr.error is not None:
+                error_count += 1
+                if first_error is None:
+                    first_error = pr.error
+
+    # 🔴 PHASE 2 — drain the ASYNC Tier-2 governance records ONCE, after ALL probing (G1).
+    #
+    # The Tier-2 shadow judge writes its record ~2s AFTER the probe, so a run that never drains leaves
+    # `governance_evidence` None on every result and `caught_by_tier2` returns False for BOTH "the
+    # judge scored below τ" and "we never looked" — a check that cannot return True. Draining here (not
+    # per corpus) is deliberate: the stop condition snapshots the WAL head ONCE and polls the drain
+    # cursor past it, so it must run after the last probe. No admin_url / not a gateway ⇒ skipped, and
+    # `tier2_drain_executed=False` travels into provenance so the Tier-2 rows read n/a, never 0.
+    drain = getattr(target, "drain_governance", None)
+    drained = False
+    if callable(drain) and runs:
+        order = list(runs)
+        flat = [pr for subdir in order for pr in runs[subdir]]
+        try:
+            # 🔴 Re-split BY POSITION, never by id(): drain_governance rebuilds the attached results
+            # with dataclasses.replace, so a drained ProbeResult is a NEW object — an identity map
+            # would silently drop exactly the records the drain just found. Order IS preserved.
+            back = list(drain(flat))
+            if len(back) != len(flat):
+                raise ValueError(
+                    f"drain returned {len(back)} results for {len(flat)} probes"
+                )
+            at = 0
+            for subdir in order:
+                n = len(runs[subdir])
+                runs[subdir] = tuple(back[at : at + n])
+                at += n
+            drained = True
+        except Exception as e:  # a drain failure must not void the whole collection
+            warnings.append(f"tier-2 drain failed: {type(e).__name__}: {e}")
+
+    # 🔴 PHASE 3 — measure. Every producer over a corpus reads the SAME results tuple.
+    # Iterates CURATION (not the by-corpus grouping) so the bundle's measurement ORDER is unchanged
+    # by this refactor — fixtures and diffs stay stable, and the one-aggregate-per-bound-id invariant
+    # is still read straight off CURATION.
+    if "llm01_prompt_injection" in runs:
+        # EV-R2 — the contract is built from the SAME single run the aggregates are measured over
+        # (that identity is now structural, not a "capture the first pass" convention).
+        injection_cases = probed["llm01_prompt_injection"]
+        injection_results = runs["llm01_prompt_injection"]
+    for prod in CURATION:
+        shared = runs.get(prod.corpus_subdir)
+        if shared is None:
+            continue  # its corpus failed to load/probe — already warned in PHASE 1
+        try:
+            (m,) = prod.factory().measure(shared)
+            measurements.append(m)
+        except Exception as e:
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
             )
     return ActiveScan(
-        tuple(measurements), probe_count, error_count, first_error, corpus_sha
+        tuple(measurements),
+        probe_count,
+        error_count,
+        first_error,
+        corpus_sha,
+        injection_cases,
+        injection_results,
+        drained,
+    )
+
+
+def _write_case_contract(
+    cases: tuple[CorpusCase, ...],
+    results: tuple[ProbeResult, ...],
+    tenant_id: str,
+    path: str,
+    *,
+    warnings: list[str],
+) -> None:
+    """EV-R2 (--cases-out) — serialize + write the LLM01 injection Tier-0 case contract from THIS
+    run, mirroring tools.eval_report._write_case_contract. `serialize_case_contract` runs the §3.1
+    recompute guard, so a run whose rows can't re-add their own aggregates is reported (never a
+    contract that lies). Best-effort (§5): a missing injection run / a fork is a warning, not a
+    crashed collection. 🔴 Tier-0: POINTERS only (request_id + evidence_ref), never response
+    content — disclosure_class=operator_only."""
+    if not results:
+        warnings.append(
+            "--cases-out: no llm01_prompt_injection results to serialize (contract skipped)"
+        )
+        return
+    try:
+        contract = serialize_case_contract(
+            cases,
+            results,
+            target_kind="gateway",
+            tenant_id=tenant_id,
+            generated_at_ns=time.time_ns(),
+        )
+    except CaseContractError as e:
+        warnings.append(f"--cases-out: case contract did not re-add (not written): {e}")
+        return
+    import json
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(contract, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"wrote {dest}: EV-R2 case contract "
+        f"(disclosure_class={contract['disclosure_class']}, {len(contract['cases'])} cases "
+        "— operator_only, do NOT publish)",
+        file=sys.stderr,
     )
 
 
@@ -341,6 +518,14 @@ def run_collect(args: argparse.Namespace) -> int:
     warnings: list[str] = []
     passive_only = getattr(args, "passive_only", False)
     pin_observed = getattr(args, "pin_observed_window", False)
+    # E3-n ④ — the tested party's build fingerprint captured before/after a gateway run (None when no
+    # --admin-url, or on a passive/raw_model run); citability compares them to verify zero-change.
+    build_fp_before: dict | None = None
+    build_fp_after: dict | None = None
+    build_fp_before_err: str | None = None
+    build_fp_after_err: str | None = None
+    scan_start_ns: int | None = None
+    admin_url_declared = bool(getattr(args, "admin_url", None))
     # C15 (source): the wall clock at INPUT-VALIDATION time — legal here — used ONLY to reject a
     # future --window-to-ns before any probe runs. This is a DIFFERENT moment from generated_at_ns
     # (the product-GENERATION clock, read AFTER the scan below): with --gateway --pin-observed-window
@@ -420,14 +605,32 @@ def run_collect(args: argparse.Namespace) -> int:
 
         target: object
         if target_kind == "gateway":
-            target = GatewayTarget(
+            # E3-n ③ — DERIVE the client timeout from the tested party's DECLARED upstream request-
+            # timeout: client = 2× upstream (not a guess). Platform pinned upstream = 60.0s hardcoded
+            # (openai_request_timeout_s), so --upstream-timeout-s 60 ⇒ client 120s. Falls back to the
+            # opt-in --timeout (EV-Coverage E3), else GatewayTarget's own 30.0 default.
+            upstream = getattr(args, "upstream_timeout_s", None)
+            timeout = getattr(args, "timeout", None)
+            client_timeout = (
+                2.0 * upstream
+                if upstream is not None
+                else (timeout if timeout is not None else 30.0)
+            )
+            gw = GatewayTarget(
                 target_url,
                 wal_dir=args.wal,
                 tenant_id=args.tenant,
                 user_id=args.user,  # MUST be provisioned (else all-unmeasurable)
                 model=model,
                 temperature=0.0,  # pin for the statistical verticals
+                timeout=client_timeout,
+                # E3-n ④ — the admin base (GET /admin/v1/buildinfo + the drain cursor).
+                admin_url=getattr(args, "admin_url", None),
             )
+            # E3-n ④ — snapshot the tested party's build fingerprint BEFORE any probe runs (None when
+            # no --admin-url); the AFTER snapshot below must match it bit-for-bit or the run is void.
+            build_fp_before, build_fp_before_err = gw.fetch_buildinfo()
+            target = gw
         elif target_kind == "raw_model":
             # EV-FWD: a bare OpenAI-compatible model. NO wal_dir / NO tenant — it is not governed;
             # only the output-side indicators measure on it, the rest surface as availability=n/a.
@@ -440,9 +643,37 @@ def run_collect(args: argparse.Namespace) -> int:
             )
             return EXIT_IO
         corpus_root = Path(args.corpus) if args.corpus else _DEFAULT_CORPUS
+        # E3-n ② — bracket the active scan in wall-clock so probe_window (this run's probe span) is
+        # distinguishable from observed_window (the whole WAL the passive scan read, incl. history).
+        scan_start_ns = time.time_ns()
         active = collect_measurements(
             target, corpus_root=corpus_root, warnings=warnings
         )
+        # E3-n ④ — snapshot the build fingerprint AFTER the run (isinstance narrows target →
+        # GatewayTarget for mypy). citability blocks the run if before != after (a mid-run change),
+        # OR if --admin-url was declared but either snapshot could not be fetched (fail-closed).
+        if isinstance(target, GatewayTarget):
+            build_fp_after, build_fp_after_err = target.fetch_buildinfo()
+        # EV-R2 (--cases-out): write the Tier-0 LLM01 injection case contract from THIS run.
+        # Gateway-only — it carries WAL decision pointers a bare model has no record for. The
+        # stamped tenant is args.tenant, the SAME value handed to GatewayTarget(tenant_id=...)
+        # above (UI-3 §5.2 — one source, not a second drifting env read).
+        cases_out = getattr(args, "cases_out", None)
+        if cases_out:
+            if target_kind != "gateway":
+                print(
+                    "error: --cases-out needs a gateway run (the contract carries WAL decision "
+                    "pointers a bare model has no record for)",
+                    file=sys.stderr,
+                )
+                return EXIT_IO
+            _write_case_contract(
+                active.injection_cases,
+                active.injection_results,
+                args.tenant,
+                cases_out,
+                warnings=warnings,
+            )
     # EV-PAIR-A2 §1: did the WHOLE run get zero model responses? (every probe errored). Computed
     # here so the guard can shout at the top + exit non-zero, rather than leaving the only clue
     # in each indicator's `N error(s) excluded` notes.
@@ -519,6 +750,26 @@ def run_collect(args: argparse.Namespace) -> int:
     # make the just-observed window look "in the future" and wrongly block a legitimate citable run.
     generated_at_ns = time.time_ns()
 
+    # E3-n ④ fail-CLOSED — a DECLARED admin endpoint that couldn't be reached is a check that FAILED
+    # (not "no claim made"); surface which side + why so it is never silent (citability then blocks).
+    if admin_url_declared:
+        if build_fp_before_err:
+            warnings.append(
+                f"build_fingerprint: BEFORE snapshot could not be fetched — {build_fp_before_err}"
+            )
+        if build_fp_after_err:
+            warnings.append(
+                f"build_fingerprint: AFTER snapshot could not be fetched — {build_fp_after_err}"
+            )
+    # E3-n ② — this run's probe span [scan_start, generated_at), half-open; None when nothing was
+    # probed. Active rates cite THIS, not observed_window, so a 430-probe number is not read as
+    # standing on the whole WAL's (here 16.5h / 7837-record) history.
+    probe_window = (
+        (scan_start_ns, generated_at_ns)
+        if (scan_start_ns is not None and active.probe_count > 0)
+        else None
+    )
+
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
@@ -538,6 +789,29 @@ def run_collect(args: argparse.Namespace) -> int:
             record_count=scan.record_count,
             observed_window=prov_observed,
             generated_at_ns=generated_at_ns,  # C15: stamped AFTER the scan (see above)
+            # E3-h/E3-m §3.1/§5: operator-declared freeze-pack config (empty when not passed).
+            # language_scope is the #1 scope axis (declared, never inferred). config_source is
+            # "declared" — no queryable version/config endpoint exists yet ("queried" is reserved).
+            language_scope=getattr(args, "language_scope", None),
+            tested_version=getattr(args, "tested_version", None),
+            detect_config=getattr(args, "detect_config", None),
+            exec_mode=getattr(args, "exec_mode", None),
+            # E3-n ③ — the detection-layer status + the tested party's DECLARED upstream timeout,
+            # both folded into the missing_run_config citability criterion.
+            detection_layer_status=getattr(args, "detection_layer_status", None),
+            upstream_timeout_s=getattr(args, "upstream_timeout_s", None),
+            # E3-n ② — collect does NOT drain the async Tier-2 layer (Platform froze it OFF), so the
+            # freeze pack records whether PHASE 2 actually ran: False ⇒ the Tier-2 indicators read
+            # n/a, never 0% ("scored below τ" and "we never looked" must not be the same number).
+            tier2_drain_executed=active.tier2_drain_executed,
+            # E3-n ④ — the before/after build fingerprints (verbatim evidence in the artifact).
+            build_fingerprint_before=build_fp_before,
+            build_fingerprint_after=build_fp_after,
+            # E3-n ④ — whether --admin-url was DECLARED (the claim). Lets citability fail-close a
+            # declared-but-unfetched check: both-None blocks only when the endpoint was actually named.
+            admin_url_declared=admin_url_declared,
+            # E3-n ② — this run's probe span; active rates cite it, passive/census keep observed_window.
+            probe_window=probe_window,
         ),
     )
     out = args.out or "bundle.json"

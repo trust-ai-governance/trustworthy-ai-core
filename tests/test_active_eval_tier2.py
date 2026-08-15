@@ -72,6 +72,10 @@ def _probe(
         evidence=None if error else _decision(cid, block=tier1),
         governance_evidence=gov,
         error=error,
+        # E3-n ②: these tests all model a run where the async drain DID execute (they assert the
+        # measured lift/no-async/no-WAL behavior), so the drain-executed flag is set — the n/a gate
+        # (drain-never-ran) is covered by the dedicated E3-n ② tests, not these.
+        tier2_drain_executed=True,
     )
 
 
@@ -156,6 +160,7 @@ def _no_wal_probe(cid: str) -> ProbeResult:
         response_text="",
         evidence=None,
         governance_evidence=None,
+        tier2_drain_executed=True,  # E3-n ②: the drain ran; this probe simply had no WAL to read
     )
 
 

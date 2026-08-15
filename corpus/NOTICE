@@ -1,0 +1,125 @@
+THIRD-PARTY CORPUS ATTRIBUTIONS  (corpus/NOTICE)
+================================================
+
+`corpus/` is a PUBLIC repository, so `git push` IS redistribution. The moment the
+first external attack set is copied in, the third-party attribution obligation has
+ALREADY triggered — not "will trigger later" (EV-COVERAGE-E3 §10.2). This file is
+that attribution: one entry per external source, carrying its project / license /
+url and — load-bearing — the exact COMMIT that pins what we took.
+
+    未 pin 的署名不是可核验的来源证明。
+    An un-pinned attribution is not a verifiable provenance claim.
+
+A `commit` that is empty, all-zeros, `TODO`, `xxxxxxx`, or not a hex sha pins
+NOTHING. tools/check_corpus_notice.py reds it even though this file itself states
+the principle above — the gate checks that an attribution is MEANINGFUL, not merely
+that it EXISTS (查有意义不只查存在, §10.2). A sibling mechanism's bidirectional gate
+verified existence but not meaning, and a `0000000` sailed through green; this gate
+does not repeat that.
+
+Attribution is enforced BOTH directions by tools/check_corpus_notice.py:
+  - a source used by >= 1 corpus case but absent here  =>  build red;
+  - a source listed here but used by zero cases         =>  build red.
+
+--------------------------------------------------------------------------------
+ENTRY FORMAT   (the first external merge fills this in; today there are none)
+--------------------------------------------------------------------------------
+
+  [<source-id>]                     # the `source:` prefix before the first ':'
+  project:     <name>
+  license:     <SPDX id or license name>
+  url:         <upstream url>
+  commit:      <full hex sha>       # pins EXACTLY what was taken
+  license-text:
+    <the upstream license / copyright paragraph, verbatim>
+
+  Probe-tool sources (e.g. garak) additionally pin — a probe's OUTPUT changes with
+  the tool version, so a bare repo sha does not pin what we exported (§10.2):
+
+  type:        probe-tool
+  version:     <tool release, e.g. 0.9.2>
+  probe:       <exact probe name, e.g. encoding.InjectBase64>
+  export-date: <YYYY-MM-DD the probe corpus was exported>
+
+The sources this repo recognises as external-native are datasets such as deepset /
+promptinject and the probe tool garak; the authoritative allowlist lives in
+treval.active_eval.coverage.EXTERNAL_NATIVE_SOURCES (this file does not restate it).
+
+--------------------------------------------------------------------------------
+SOURCES
+--------------------------------------------------------------------------------
+
+[garak]
+project:     garak — LLM vulnerability scanner (NVIDIA)
+license:     Apache-2.0
+url:         https://github.com/NVIDIA/garak
+commit:      b1e0101a177981cc423455448fd745be88b87916
+type:        probe-tool
+version:     0.16.1.pre1
+export-date: 2026-08-13
+probe:       encoding.InjectBase32, encoding.InjectMorse, encoding.InjectNato, encoding.InjectBraille, encoding.InjectUU, encoding.InjectAtbash, dan.Dan_11_0, dan.ChatGPT_Developer_Mode_v2, latentinjection.LatentInjectionTranslationEnFr, latentinjection.LatentInjectionReport, latentinjection.LatentInjectionResume, web_injection.MarkdownImageExfil, promptinject.HijackHateHumans (payload-neutralized), promptinject.HijackKillHumans (payload-neutralized), promptinject.HijackLongPrompt (payload-neutralized)
+license-text:
+    Copyright (c) 2023 Leon Derczynski; portions (c) NVIDIA Corporation & Affiliates.
+    Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+    these files except in compliance with the License. You may obtain a copy of the
+    License at http://www.apache.org/licenses/LICENSE-2.0 . Unless required by
+    applicable law or agreed to in writing, software distributed under the License is
+    distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+    §10.1 PROBE-LEVEL EXCLUSIONS (harmful-behavior-derived probes NOT taken, by name):
+    dan.DanInTheWild / dan.DanInTheWildFull, atkgen, grandma, realtoxicityprompts,
+    av_spam_scanning, donotanswer, malwaregen, exploitation, and the encoding probes'
+    `slur_terms` (slur_terms_en) and `xss` (web_html_js) PAYLOAD classes — only the
+    innocuous `default` (text_en) encoding payloads were used. The three promptinject
+    Hijack* rows are PAYLOAD-NEUTRALIZED (harmful rogue string swapped; see YAML
+    pre_neutralize_hash over the real pre-swap upstream string).
+
+[deepset]
+project:     deepset prompt-injections dataset
+license:     Apache-2.0
+url:         https://huggingface.co/datasets/deepset/prompt-injections
+commit:      4f61ecb038e9c3fb77e21034b22511b523772cdd
+export-date: 2026-08-13
+license-text:
+    Copyright (c) deepset GmbH. Licensed under the Apache License, Version 2.0 (see the
+    Apache-2.0 terms above). Rows taken verbatim (label==1 injections); non-English
+    prioritized; rows carrying political / harmful payloads were EXCLUDED at selection.
+
+[promptinject]
+project:     PromptInject (Agency Enterprise) — goal-hijacking / rogue-string / prompt-leak corpus
+license:     MIT
+url:         https://github.com/agencyenterprise/PromptInject
+commit:      2928a719d5de62d3766226f1b44c51d9570bc530
+export-date: 2026-08-13
+license-text:
+    Copyright (c) 2020 Agency Enterprise, LLC. Permission is hereby granted, free of
+    charge, to any person obtaining a copy of this software and associated documentation
+    files (the "Software"), to deal in the Software without restriction, including
+    without limitation the rights to use, copy, modify, merge, publish, distribute,
+    sublicense, and/or sell copies of the Software, subject to the MIT License terms.
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. Rows taken verbatim:
+    the 5 goal_hijacking_attacks (with the innocuous `long-prompt` rogue string) and the
+    5 prompt_leaking_attacks (no rogue string).
+
+--------------------------------------------------------------------------------
+MODIFICATIONS (Apache-2.0 §4(b) "note the changes" / MIT notice retention)
+--------------------------------------------------------------------------------
+Where a taken file was changed, the change is annotated IN PLACE via the case's
+`source:` tag suffix — this is where the "You changed the files" notice lives:
+  · `(payload-neutralized)` — the harmful payload was swapped for a benign canary;
+    the pre-swap upstream string's hash is in the case's `pre_neutralize_hash`
+    (the three garak promptinject.Hijack* rows).
+  · `(bare-payload-control)` — the injection SKELETON was stripped to form the
+    §2.2.3 control arm; the verbatim external payload is retained, the framing removed
+    (the 49 control_bare_payload cases; each keeps its partner's external source prefix).
+Verbatim rows carry NO such suffix (unchanged). This satisfies Apache-2.0 §4(b) for the
+garak/deepset material and preserves the MIT notice for the promptinject rows.
+
+--------------------------------------------------------------------------------
+NOT INCLUDED — hackaprompt (BLOCKED: gated dataset)
+--------------------------------------------------------------------------------
+hackaprompt/hackaprompt-dataset is GATED on HuggingFace (gated: auto) and returns HTTP
+401 without an authenticated HF token, which this environment does not have. The single
+150MB parquet cannot be downloaded here. Its pinned commit (from public metadata) is
+25b87fbedfb86840abaf8cd09af7a029208a971a — ready for a tokened fetch. No hackaprompt
+cases are shipped in 3b, so there is NO [hackaprompt] NOTICE entry (an unused entry
+would red the bidirectional gate). See MANIFEST.txt for the handoff recipe.

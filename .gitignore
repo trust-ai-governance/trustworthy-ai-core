@@ -240,4 +240,7 @@ eval_report.diff
 .vscode/settings.json
 node_modules/
 report.diff
+verifyresult.txt
+e3_3a_staging/
+e3_3b_staging/
 

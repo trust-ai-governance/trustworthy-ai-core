@@ -218,8 +218,8 @@ def test_web_shows_both_verdicts_when_criteria_drifted_C16(tmp_path):
         "as-generated" in page and "旧判据·未版本化" in page
     )  # stored verdict, unversioned
     assert (
-        "按当前判据 v1" in page and "不可引" in page
-    )  # the recompute under current criteria
+        "按当前判据 v2" in page and "不可引" in page
+    )  # the recompute under current criteria (E3-h bumped 1→2)
 
 
 def test_no_drilldown_wording_anywhere(client):

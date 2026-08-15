@@ -79,6 +79,15 @@ class ProbeResult:
     secret_canary: str = (
         ""  # the case's planted secret (attached by run_corpus, for leak checks)
     )
+    # EV-COVERAGE E3 §2.2.3 — case metadata the attribution arm (indicators.py) reads, attached by
+    # run_corpus like the canaries so the indicators stay self-contained (the ProbeResult, not a second
+    # corpus lookup, carries what the rate needs). `attack_class` identifies a control_bare_payload /
+    # benign probe; `source` identifies an external-verbatim payload (needs a control to attribute its
+    # catch); `control_for` links a control probe back to the partner attack it controls. Empty on any
+    # probe whose case did not set them (every pre-E3 probe is unchanged).
+    attack_class: str = ""
+    source: str = ""
+    control_for: str = ""
     # HTTP-parsed token usage (EV-AE5, LLM10). This is the CROSS-CHECK working value;
     # the chain-verified WAL response record's token_usage is the AUTHORITATIVE oracle
     # (D1/D3). 0 when absent — e.g. a BLOCKed runaway has no completion (no consumption).
@@ -102,6 +111,13 @@ class ProbeResult:
     # read). Populated by GatewayTarget.drain_governance() after the run; None if it never
     # landed (drain timeout) or no WAL. Read by caught_by_tier2 / the Tier-2 lift + flag lines.
     governance_evidence: AuditEvidence | None = None
+    # E3-n ② — did the async Tier-2 drain actually EXECUTE for this probe? drain_governance() sets
+    # this True on every probe it processes. 🔴 The distinction the Tier-2 indicators need:
+    # governance_evidence=None conflates "async record truly absent (judge scored below τ)" with
+    # "drain never ran" — and collect never drains, so without this flag the Tier-2 layer silently
+    # reads 0/False. False (the default) ⇒ the drain did not run ⇒ the Tier-2 indicators emit n/a /
+    # unmeasurable, NEVER a zero lift/rate.
+    tier2_drain_executed: bool = False
     # P3C-harness C1-STABILITY-CURVE §1 — the vendor-neutral bearer seam for score-driven
     # judges (self-built logprob + future moderation APIs). Additive + honest-default ⇒ every
     # existing ProbeResult construction is unchanged and the WAL golden does not churn. Landing
@@ -407,6 +423,38 @@ class GatewayTarget:
             return None
         return parsed if isinstance(parsed, dict) else None
 
+    def fetch_buildinfo(self) -> tuple[dict | None, str | None]:
+        """E3-n ④ — GET {admin_url}/admin/v1/buildinfo: the tested party's SELF-REPORTED build
+        fingerprint (`git_sha` · `ir_spec_sha` · `wheel_sha256` · `ruleset` · `detection_switches`).
+        Called BEFORE and AFTER a freeze run; if the two differ by a single bit the tested party
+        changed mid-run and the run is void (citability blocks it).
+
+        🔴 Returns `(fingerprint, error)`, THREE-state — NOT a bare `dict | None` (that conflated
+        "no claim" with "check failed" and made the fail-open bug):
+          • `(dict, None)`  — fetched OK.
+          • `(None, "…")`   — --admin-url WAS given but the fetch FAILED (non-200 / transport / parse).
+                              This is a check that could not be made; the reason travels to `warnings`
+                              and citability BLOCKS (fail-closed) — a declared-but-unreachable admin
+                              endpoint (e.g. the wrong port) must not silently pass.
+          • `(None, None)`  — no --admin-url: no claim to check (status quo, not blocked).
+        🔴 Admin endpoint CONFIRMED via the Platform handoff (P3_CLOSEOUT_ROUND2_HANDOFF §1;
+        E3_REVIEW_RECORD §8.2/§9.11). Same admin base + auth face as the drain cursor. httpx lazy."""
+        if self._admin_url is None:
+            return None, None
+        import httpx  # lazy: only needed to drive a live gateway
+
+        url = self._admin_url + "/admin/v1/buildinfo"
+        try:
+            resp = httpx.get(url, timeout=5.0)
+            if resp.status_code != 200:
+                return None, f"HTTP {resp.status_code} from {url}"
+            parsed = resp.json()
+        except (httpx.HTTPError, ValueError) as e:
+            return None, f"{type(e).__name__} from {url}: {e}"
+        if not isinstance(parsed, dict):
+            return None, f"buildinfo at {url} was not a JSON object"
+        return parsed, None
+
     def _scan_governance(
         self, wanted: set[str], found: dict[str, AuditEvidence]
     ) -> None:
@@ -491,7 +539,11 @@ class GatewayTarget:
         else:
             # Snapshot the head ONCE — the evaluator appends type-3 which pushes the head
             # up; re-reading it each loop would chase a moving target (never terminating).
-            probe_head = int(cursor.get("wal_head_seq", 0))
+            # 🔴 `or 0`, not `.get(k, 0)`: the default only fires on a MISSING key — the cursor
+            # endpoint returns the key with a JSON null while the tailer is still initialising, and
+            # `int(None)` then blows up the whole drain (observed live: the drain died, the run
+            # finished 2.3h later with tier2_drain_executed=False and every Tier-2 row n/a).
+            probe_head = int(cursor.get("wal_head_seq") or 0)
             while True:
                 self._scan_governance(wanted, found)
                 cur = self._read_cursor()
@@ -502,7 +554,7 @@ class GatewayTarget:
                     )
                     self._drain_to_deadline(wanted, found, deadline, poll_interval)
                     break
-                if int(cur.get("guardrail_cursor_seq", 0)) >= probe_head:
+                if int(cur.get("guardrail_cursor_seq") or 0) >= probe_head:
                     self._scan_governance(wanted, found)  # one final read+join
                     break
                 if cur.get("guardrail_degraded"):
@@ -521,12 +573,17 @@ class GatewayTarget:
                     break
                 time.sleep(poll_interval)
 
-        if not found:
-            return results
+        # E3-n ② — the drain RAN to completion (cursor-driven or timeout backstop). Stamp
+        # tier2_drain_executed=True on EVERY probe (found or not), so a probe still missing an async
+        # record is a GENUINE no-async (judge below τ), distinguishable by the Tier-2 indicators from
+        # "the drain never ran" (default False). This is the only path that flips the flag — the
+        # no-wal / no-wanted early returns above leave it False (the drain could not execute).
         return [
-            replace(r, governance_evidence=found[r.request_id])
-            if r.request_id in found
-            else r
+            replace(
+                r,
+                tier2_drain_executed=True,
+                governance_evidence=found.get(r.request_id, r.governance_evidence),
+            )
             for r in results
         ]
 

@@ -21,6 +21,12 @@ from treval.active_eval import (
     sensitive_disclosed,
 )
 from treval.active_eval.target import ProbeResult
+from treval.active_eval.coverage import (
+    EXTERNAL_NATIVE_SOURCES,
+    _case_text,
+    is_control,
+    source_prefix,
+)
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
@@ -48,11 +54,18 @@ _WIRE_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_wire_indirec
 
 def test_shipped_corpus_loads_deterministically():
     cases = load_corpus()
-    assert 20 <= len(cases) <= 45  # EV-AE11 added wire-placed indirect variants
+    assert (
+        len(cases) >= 20
+    )  # grows with EV-COVERAGE E3 (3a self-authored + 3b external + controls)
     assert all(c.owasp == "LLM01" for c in cases)
     assert all(c.dimension == "robustness" for c in cases)
     assert all(c.success_when == "blocked_or_flagged" for c in cases)
-    assert all(c.source == "core-authored" for c in cases)
+    # core-authored OR an external-native source (E3-3b verbatim + controls); never empty / other
+    assert all(
+        c.source == "core-authored"
+        or source_prefix(c.source) in EXTERNAL_NATIVE_SOURCES
+        for c in cases
+    )
     assert len({c.id for c in cases}) == len(cases)
     # deterministic: same order on a second load
     assert [c.id for c in cases] == [c.id for c in load_corpus()]
@@ -623,7 +636,7 @@ def test_allowed_is_inverse_of_blocked_or_flagged_when_evidence_present():
 
 def test_shipped_benign_corpus_loads_deterministically():
     cases = load_corpus(_BENIGN_DIR)
-    assert 15 <= len(cases) <= 25
+    assert len(cases) >= 15  # grows with EV-COVERAGE E3-c (the benign FPR arm)
     assert all(c.owasp == "LLM01" for c in cases)
     assert all(c.dimension == "robustness" for c in cases)
     assert all(c.success_when == "allowed" for c in cases)
@@ -641,7 +654,10 @@ def test_benign_corpus_disjoint_from_attack_corpus():
     benign = load_corpus(_BENIGN_DIR)
     attack = load_corpus()  # the LLM01 attack corpus
     assert not ({c.id for c in benign} & {c.id for c in attack})
-    assert not ({c.input for c in benign} & {c.input for c in attack})
+    # Compare the FULL author-controlled surface (input + system_prompt + messages) via _case_text,
+    # so the multi-turn cases — which carry input="" and put their text in `messages` — stay IN range
+    # (a bare `if c.input` filter would silently drop all 18 of them, the least-reviewed group).
+    assert not ({_case_text(c) for c in benign} & {_case_text(c) for c in attack})
 
 
 # --------------------------------------------------------------------------- #
@@ -805,8 +821,10 @@ def test_shipped_wire_indirect_cases_load():
     # the placement channels: a tool-role message and an out-of-window (index >= 9) case
     assert any(m.role == "tool" for c in wire if c.messages for m in c.messages)
     assert any(c.messages is not None and len(c.messages) >= 10 for c in wire)
-    # the default corpus (phrasing cases) no longer carries any wire/messages case
-    assert all(c.messages is None for c in load_corpus())
+    # (EV-COVERAGE E3 added multi-turn TECHNIQUE cases — deferred/conditional trigger, context
+    # accumulation — to the main injection corpus; those legitimately carry `messages` and SHOULD
+    # count in injection_catch_rate, so the old "main corpus has no messages" invariant no longer
+    # holds. The wire corpus's own placement invariants above still do.)
 
 
 def test_shipped_indirect_benign_corpus_loads():
@@ -872,18 +890,24 @@ def test_shipped_attack_cases_all_carry_a_technique():
         if not d.is_dir():
             continue
         for c in load_corpus(d):
-            if c.attack_class.startswith("benign"):
-                assert c.attack_technique == "", f"{c.id} is benign but has a technique"
+            if c.attack_class.startswith("benign") or is_control(c):
+                # benign AND control_bare_payload (E3-i, a bare payload) carry no technique by design
+                assert c.attack_technique == "", (
+                    f"{c.id} ({c.attack_class}) must carry no technique"
+                )
             else:
                 assert c.attack_technique, f"{c.id} is an attack with no technique"
 
 
-def test_llm01_injection_has_28_distinct_techniques():
-    """§0.2: the 28 cases are 28 distinct techniques (1:1, like llm06/llm07) — the whole point
-    of E0 is that this coverage was already there, just undeclared."""
+def test_llm01_injection_covers_at_least_28_distinct_techniques():
+    """§0.2 was a 1:1 (28 cases = 28 techniques) before EV-COVERAGE E3. E3 grew both (3a's 30 new
+    techniques + 3b external's ~20), added control_bare_payload cases (no technique) and multiple
+    cases per technique, so the 1:1 no longer holds — but the technique COVERAGE must never shrink
+    below the original 28 (a regression toward fewer techniques = the exact thing the coverage gate
+    forbids)."""
     cases = load_corpus(_INJECTION_DIR)
-    techniques = {c.attack_technique for c in cases}
-    assert len(cases) == 28 and len(techniques) == 28
+    techniques = {c.attack_technique for c in cases if c.attack_technique}
+    assert len(techniques) >= 28
 
 
 def test_attack_class_is_unchanged_by_e0():
@@ -891,7 +915,13 @@ def test_attack_class_is_unchanged_by_e0():
     consumers (attribution rate table / benign label / regression) depend on it. llm01 stays the
     coarse 2-value vector even though technique is now fine-grained."""
     classes = {c.attack_class for c in load_corpus(_INJECTION_DIR)}
-    assert classes == {"direct_prompt_injection", "indirect_prompt_injection"}
+    # E0 must not MUTATE the existing coarse vector; E3-i deliberately ADDED control_bare_payload
+    # (the attribution control arm, excluded from every denominator) as a third allowed class.
+    assert classes <= {
+        "direct_prompt_injection",
+        "indirect_prompt_injection",
+        "control_bare_payload",
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -912,3 +942,47 @@ def test_holdout_true_loads(tmp_path):
 def test_holdout_non_bool_raises(tmp_path):
     with pytest.raises(CorpusError, match="holdout"):
         load_corpus(_write_case(tmp_path, _valid_doc(holdout="yes")))
+
+
+# --------------------------------------------------------------------------- #
+# EV-COVERAGE E3 §5.3 — the benign usage `scene`: optional str, must not break existing corpora
+# --------------------------------------------------------------------------- #
+
+
+def test_scene_is_optional_and_defaults_empty(tmp_path):
+    """Like content_class/holdout: absent ⇒ "" (the pre-E3 benign corpus predates the field, so it
+    must load cleanly — the corpus gate requires scene on NEW benign cases only, §5.3)."""
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.scene == ""
+
+
+def test_scene_loads_when_set(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc(scene="frontstage-qa")))
+    assert case.scene == "frontstage-qa"
+
+
+def test_empty_scene_raises(tmp_path):
+    # present-but-empty is an author mistake (fail-closed), same as the other optional fields
+    with pytest.raises(CorpusError, match="scene, if set"):
+        load_corpus(_write_case(tmp_path, _valid_doc(scene="")))
+
+
+# --------------------------------------------------------------------------- #
+# EV-COVERAGE E3-j §5.2.1.1 — pre_neutralize_hash: optional str (only payload-neutralized cases need it)
+# --------------------------------------------------------------------------- #
+
+
+def test_pre_neutralize_hash_optional_and_defaults_empty(tmp_path):
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc()))
+    assert case.pre_neutralize_hash == ""
+
+
+def test_pre_neutralize_hash_loads_when_set(tmp_path):
+    h = "sha256:" + "a" * 64
+    (case,) = load_corpus(_write_case(tmp_path, _valid_doc(pre_neutralize_hash=h)))
+    assert case.pre_neutralize_hash == h
+
+
+def test_empty_pre_neutralize_hash_raises(tmp_path):
+    with pytest.raises(CorpusError, match="pre_neutralize_hash, if set"):
+        load_corpus(_write_case(tmp_path, _valid_doc(pre_neutralize_hash="")))

@@ -160,9 +160,12 @@ def n_ladder_for_upper_bound(
 def _attack_guidance(point: float, threshold: float) -> str:
     first_pass, stable_n = stable_n_for_lower_bound(point, threshold)
     if stable_n is None:
+        # 🔴 §2.1.1 / acceptance 14: p̂ <= τ is a CAPABILITY GAP, not a sample shortfall — ci_low is
+        # always below the point estimate, so NO sample size can ever clear the bar. Say so, and give
+        # NO projected n (a fake "需 n≈…" would burn a window writing more corpus for an unreachable bar).
         return (
-            f"点估计 ~{point * 100:.0f}% 不高于 {_thr(threshold)}，扩样本无法过线 —— "
-            "需提高命中率本身，而非加样本。"
+            f"点估计 ~{point * 100:.0f}% 不高于 {_thr(threshold)} —— 无解 · 能力缺口：区间下界永远在"
+            "点估计之下，任何样本量都过不了线，只能提高命中率本身。"
         )
     cross = ""
     if first_pass is not None and first_pass < stable_n:
@@ -194,9 +197,15 @@ def _unmet_sentence(o: MeasuredObjective) -> str:
     field, op, tau = _parse(o.satisfied_when)
     if field == "ci_low" and n > 0:
         cl = wilson_interval(round(val * n), n)[0]
+        # 🔴 §2.1.1: the "（样本不足，非能力不足）" qualifier holds ONLY when more n can eventually clear
+        # the bar. Derive it from the SAME predicate _attack_guidance uses — stable_n is None ⇒ a
+        # CAPABILITY GAP (val <= τ, incl. the val == τ boundary) — so the qualifier and the guidance
+        # can never contradict (no duplicated `> τ` compare that could drift from the boundary).
+        _, stable_n = stable_n_for_lower_bound(val, tau)
+        qualifier = "" if stable_n is None else "（样本不足，非能力不足）"
         return (
             f"实测未达 {o.level} —— {ind} {_pct(val)} (n={n})，ci_low {_f3(cl)} < {_thr(tau)}"
-            f"（样本不足，非能力不足）。{_attack_guidance(val, tau)}"
+            f"{qualifier}。{_attack_guidance(val, tau)}"
         )
     if field == "ci_high" and n > 0:
         ch = wilson_interval(round(val * n), n)[2]

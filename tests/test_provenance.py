@@ -180,6 +180,36 @@ def test_build_provenance_carries_generated_at_ns():
     )
 
 
+def test_build_provenance_always_emits_the_config_keys_E3h():
+    """🔴 E3-h (§3.1): the freeze-pack config keys are ALWAYS present — empty when the operator did
+    NOT declare (present-but-empty), populated when they did. This is what lets citability tell a v2
+    run that didn't declare (keys present, empty) apart from a pre-E3 bundle (keys absent). config_source
+    defaults to 'declared' (no query endpoint exists yet). RED input: build_provenance omitting the keys."""
+    undeclared = build_provenance(
+        wal_dir=None, window=None, pinned=False, tenant_id=_TENANT, record_count=0
+    )
+    # E3-m folds language_scope into the SAME always-present set (the #1 axis)
+    for k in ("language_scope", "tested_version", "detect_config", "exec_mode"):
+        assert k in undeclared and undeclared[k] == ""  # PRESENT but empty, not absent
+    assert undeclared["config_source"] == "declared"
+
+    declared = build_provenance(
+        wal_dir=None,
+        window=None,
+        pinned=False,
+        tenant_id=_TENANT,
+        record_count=0,
+        language_scope="英文为主 · 含跨语言手法件 · 中文金融流量未测",
+        tested_version="v4@2026-01-30",
+        detect_config="encode_decode=off",
+        exec_mode="block",
+    )
+    assert declared["language_scope"] == "英文为主 · 含跨语言手法件 · 中文金融流量未测"
+    assert declared["tested_version"] == "v4@2026-01-30"
+    assert declared["detect_config"] == "encode_decode=off"
+    assert declared["exec_mode"] == "block"
+
+
 def test_pinned_empty_window_recovers_the_real_window_for_the_blocker(wal):
     """🔴 C12: a PINNED window with no records (record_count==0) — the windowed scan sees nothing,
     but an UNFILTERED read recovers where the records really are ([1000,1501)); that window rides in
