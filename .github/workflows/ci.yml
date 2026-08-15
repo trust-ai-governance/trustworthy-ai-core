@@ -131,6 +131,18 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: python tools/check_corpus_coverage.py
 
+      # `corpus/` is a PUBLIC repo, so `git push` IS redistribution: the first external attack set
+      # copied in triggers a third-party attribution obligation immediately (EV-COVERAGE-E3 §10.2).
+      # This gate holds corpus/NOTICE and the corpus BIDIRECTIONALLY consistent (a source used but
+      # un-attributed, or attributed but unused, reds), pins every probe-tool source (version/probe/
+      # export-date), and reds a PLACEHOLDER commit (查有意义不只查存在). Green day-one (all cases are
+      # core-authored); bites when the first external source arrives.
+      - name: Corpus NOTICE attribution gate
+        if: steps.detect.outputs.has_py == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}  # 🔴 imports treval — same reason as the corpus gate
+        run: python tools/check_corpus_notice.py
+
       # Every judgment threshold must be registered with a real code home (GATE-CONSISTENCY 件二) —
       # two incidents came from a threshold living only in prose / two concepts sharing a number.
       - name: Threshold registry gate
