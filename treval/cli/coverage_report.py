@@ -80,6 +80,17 @@ def _render_human(cov: dict, by_dir: dict[str, tuple[CorpusCase, ...]]) -> str:
         )
     else:
         lines.append("    (no hold-out cases yet — axis ④ starts at 0%, §3)")
+    lines.append("")
+
+    src = cov["source_distribution"]
+    # §5.2: axis ⑤ is a COUNT + LIST + per-source COUNTS like ② — 🔴 NEVER a rate. Single-source
+    # diversity has no external denominator; a printed % would be the same fake precision (the label
+    # deliberately avoids the '%' character so acceptance 9 can red on any % in the ⑤ section).
+    lines.append(
+        f"⑤ source distribution: {src['count']} distinct source(s) — 🔴 counts + list, never a rate"
+    )
+    for name, k in src["by_source"].items():
+        lines.append(f"    {name}: {k}")
     return "\n".join(lines) + "\n"
 
 

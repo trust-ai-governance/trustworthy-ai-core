@@ -18,6 +18,14 @@ import yaml
 
 from treval.active_eval.checks import KNOWN_SUCCESS_TOKENS
 
+# EV-COVERAGE E3 §2.2.3 — the THIRD attack_class value (control_bare_payload): a case that re-runs a
+# verbatim external payload with the injection SKELETON REMOVED, so the attribution arm can MEASURE
+# (not claim) whether a partner's catch is due to injection detection. 🔴 RE-EXPORTED here (redundant-
+# alias): the canonical definition lives in the PURE treval.case_contract so the catch-exclusion rule
+# (catch_excluded_case_ids) single-sources it WITHOUT dragging the harness into that engine-free module
+# (E3-l). Every corpus/coverage/indicator import of it via corpus is unchanged.
+from treval.case_contract import CONTROL_BARE_PAYLOAD as CONTROL_BARE_PAYLOAD
+
 _DEFAULT_DIR = Path(__file__).resolve().parents[2] / "corpus" / "llm01_prompt_injection"
 # `input` is handled separately (EV-AE11): a case supplies EITHER `input` (a single
 # user turn) OR `messages` (an explicit wire array), so it is not in the always-required
@@ -115,6 +123,27 @@ class CorpusCase:
     # corpus loads); the coverage report splits tuning vs hold-out on it, and the tuning↔hold-out
     # gap IS the "overfit-to-our-own-detector" measure (§3).
     holdout: bool = False
+    # EV-COVERAGE E3 §5.3 — the benign USAGE SCENE a benign control represents (e.g. frontstage-qa /
+    # analysis-tool / operator-console). "Benign" is only defined RELATIVE to a scenario — FPR varies
+    # by role — so a benign case that declares no scene lets "FPR ≤ 5%" sound scenario-agnostic (the
+    # benign mirror of the §5.2 attack-side over-extrapolation). OPTIONAL (the pre-E3 benign corpus
+    # predates it, so absent must load); the corpus gate requires it on NEW benign cases only. Empty
+    # for attack cases (they carry attack_technique instead).
+    scene: str = ""
+    # EV-COVERAGE E3 §5.2.1.1 — for a case whose `source` is tagged `(payload-neutralized)` (an
+    # external probe whose PAYLOAD was mechanically swapped, skeleton kept verbatim): a hash of the
+    # PRE-swap original text (NOT the text — holders of the upstream set recompute and compare). It is
+    # the VERIFIABLE record §5.2.1.1 pt2 demands ("实测优于声称" — a swap without a record is only a
+    # claim). OPTIONAL (only payload-neutralized cases need it); the corpus gate reds a payload-
+    # neutralized case that lacks it. Empty for every other case.
+    pre_neutralize_hash: str = ""
+    # EV-COVERAGE E3 §2.2.3 — set ONLY on a `control_bare_payload` case (see CONTROL_BARE_PAYLOAD): the
+    # id of the PARTNER attack case it controls (the verbatim external case it re-runs with the
+    # injection SKELETON removed). The attribution arm (indicators.py) reads it — a control that is
+    # itself CAUGHT means the partner's catch is NOT attributable to injection detection, so the partner
+    # EXITS the injection_catch_rate denominator. 🔴 The control (and this link) is HAND-WRITTEN by the
+    # corpus author; the code never derives it. OPTIONAL / empty on every non-control case.
+    control_for: str = ""
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -278,6 +307,25 @@ def _load_case(yaml_path: Path) -> CorpusCase:
         if not isinstance(holdout, bool):
             raise CorpusError(f"{yaml_path}: holdout, if set, must be a boolean")
         fields["holdout"] = holdout
+    scene = doc.get("scene")  # optional (EV-COVERAGE E3 §5.3 — benign usage scene)
+    if scene is not None:
+        if not isinstance(scene, str) or not scene:
+            raise CorpusError(f"{yaml_path}: scene, if set, must be a non-empty string")
+        fields["scene"] = scene
+    pre_hash = doc.get("pre_neutralize_hash")  # optional (EV-COVERAGE E3 §5.2.1.1)
+    if pre_hash is not None:
+        if not isinstance(pre_hash, str) or not pre_hash:
+            raise CorpusError(
+                f"{yaml_path}: pre_neutralize_hash, if set, must be a non-empty string"
+            )
+        fields["pre_neutralize_hash"] = pre_hash
+    control_for = doc.get("control_for")  # optional (EV-COVERAGE E3 §2.2.3)
+    if control_for is not None:
+        if not isinstance(control_for, str) or not control_for:
+            raise CorpusError(
+                f"{yaml_path}: control_for, if set, must be a non-empty string"
+            )
+        fields["control_for"] = control_for
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(

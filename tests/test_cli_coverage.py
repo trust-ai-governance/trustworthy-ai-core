@@ -34,3 +34,25 @@ def test_coverage_human_lists_absent_and_frames_sha(capsys):
     assert "① category coverage" in out and "absent" in out
     assert "② technique coverage" in out and "NOT a %" in out
     assert "③ outcome-observable" in out and "④ hold-out" in out
+
+
+def test_coverage_json_carries_source_distribution_as_counts(capsys):
+    """§5.2 axis ⑤: the vector carries a source distribution — a distinct COUNT + LIST + per-source
+    COUNTS, all integers. Acceptance 9: no percentage anywhere in that sub-structure."""
+    rc = main(["coverage", "--format", "json"])
+    assert rc == 0
+    sd = json.loads(capsys.readouterr().out)["source_distribution"]
+    assert sd["count"] >= 1 and sd["names"]
+    assert all(isinstance(v, int) for v in sd["by_source"].values())
+    assert "%" not in json.dumps(sd, ensure_ascii=False)  # 🔴 no rate
+
+
+def test_coverage_human_axis5_has_no_percent_sign(capsys):
+    """Acceptance 9 (带牙): the axis ⑤ SECTION of the human report must contain no '%' character — a
+    percent sign in ⑤ output ⇒ this test reds (⑤ is a declaration of counts, never a rate)."""
+    rc = main(["coverage"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "⑤ source distribution" in out
+    axis5 = out[out.index("⑤ source distribution") :]  # ⑤ is the last section
+    assert "%" not in axis5
