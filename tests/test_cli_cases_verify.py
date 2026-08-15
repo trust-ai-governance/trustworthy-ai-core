@@ -247,3 +247,134 @@ def test_missing_disclosure_class_is_refused(tmp_path):
     path.write_text(json.dumps(doc), encoding="utf-8")
     rc, out = _run(path)
     assert rc == 2 and "cannot verify" in out
+
+
+# --------------------------------------------------------------------------- #
+# E3-l (§2.2.3 / acceptance 21) — the case contract applies the SAME control exclusion as the
+# indicators, so a run CONTAINING a control_bare_payload case does NOT mis-fire the §3.1 recompute
+# fork guard. Without it: aggregates (from the indicators) exclude the control, the row-recompute
+# re-adds INCLUDING it ⇒ mismatch ⇒ `cases verify` mis-diagnoses a CORRECT file as tampered (the
+# EV-CIGATE F1 shape). The exclusion RULE is single-sourced in case_contract.catch_excluded_case_ids.
+# --------------------------------------------------------------------------- #
+
+_MARK = "ZZPWN"  # == test_ev_r2._MARK
+
+
+def _control_contract(tmp_path, *, control_decision):
+    """A contract from a run CONTAINING an external-verbatim attack (`ext.0`) + its hand-written control
+    (`ctrl.0`, the bare payload with the injection skeleton removed) + two core-authored marker cases.
+    `control_decision` is the BARE PAYLOAD's decision (BLOCK ⇒ caught ⇒ ext.0's catch is NOT attributable
+    ⇒ ext.0 leaves the catch denominator). The probes carry the case metadata run_corpus attaches
+    (attack_class / source / control_for) so the INDICATOR side excludes the control exactly as the
+    recompute does."""
+    from dataclasses import replace
+
+    from treval.active_eval.corpus import CONTROL_BARE_PAYLOAD, CorpusCase
+
+    def _cc(
+        cid, *, attack_class="direct", source="core-authored", control_for="", marker=""
+    ):
+        return CorpusCase(
+            id=cid,
+            owasp="LLM01",
+            dimension="robustness",
+            attack_class=attack_class,
+            input="attack text",
+            success_when="blocked_or_flagged",
+            severity="high",
+            source=source,
+            attack_technique="delimiter_break",
+            output_marker=marker,
+            control_for=control_for,
+        )
+
+    cases = [
+        _cc("core.hard", marker=_MARK),  # core-authored, caught, marker-bearing
+        _cc("core.miss", marker=_MARK),  # core-authored, missed, marker-bearing
+        _cc("ext.0", source="deepset:probe@v2"),  # external-verbatim, no marker
+        _cc(
+            "ctrl.0", attack_class=CONTROL_BARE_PAYLOAD, control_for="ext.0"
+        ),  # the control
+    ]
+    raw = [
+        _probe("core.hard", decision=_BLOCK, marker=_MARK),
+        _probe("core.miss", decision=_ALLOW, marker=_MARK),
+        _probe("ext.0", decision=_BLOCK, marker=""),
+        _probe("ctrl.0", decision=control_decision, marker=""),
+    ]
+    results = [
+        replace(
+            pr, attack_class=c.attack_class, source=c.source, control_for=c.control_for
+        )
+        for c, pr in zip(cases, raw)
+    ]
+    # serialize_case_contract runs the §3.1 write-time guard — it RAISES if the rows do not re-add to
+    # the (exclusion-aware) indicator aggregates, so reaching a written file is itself the tooth.
+    contract = serialize_case_contract(
+        cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=1
+    )
+    path = tmp_path / "control.json"
+    path.write_text(json.dumps(contract, indent=2), encoding="utf-8")
+    return path, cases, results
+
+
+def test_control_run_case_contract_verifies_pass(tmp_path):
+    """🔴 Acceptance 21: a run CONTAINING a control_bare_payload case (+ its partner) ⇒ `cases verify`
+    PASSES — the rows re-add to the exclusion-aware aggregates. RED input: revert the exclusion in
+    recompute_from_cases (or drop `control_for` from the row) ⇒ the rows re-add INCLUDING the caught
+    control + its partner ⇒ §3.1 fork ⇒ serialize_case_contract raises / verify prints 'NOT
+    self-consistent … Do not trust it' — a correct file misdiagnosed as tampered."""
+    path, _cases, _results = _control_contract(tmp_path, control_decision=_BLOCK)
+    rc, out = _run(path)
+    assert rc == 0 and "✅ self-consistent" in out
+
+
+def test_caught_control_removes_partner_from_recompute_matching_indicator(tmp_path):
+    """🔴 The bit-for-bit invariant: a CAUGHT control removes BOTH itself and its partner from the
+    recompute's catch denominator, exactly matching the indicator's aggregate n. RED input: the
+    recompute keeping the caught partner ⇒ its catch-denominator n exceeds the indicator's ⇒ mismatch."""
+    from treval.active_eval.cases import aggregates_from_results, build_cases
+    from treval.active_eval.indicators import InjectionCatchRate
+    from treval.case_contract import compare_cases_to_aggregates, recompute_from_cases
+
+    _path, cases, results = _control_contract(tmp_path, control_decision=_BLOCK)
+    built = build_cases(cases, results, target_kind="gateway")
+    (catch,) = InjectionCatchRate().measure(results)
+    num, den = recompute_from_cases(built)["injection_catch_rate"]
+    # ext.0 (caught partner) AND ctrl.0 (control) both dropped ⇒ only the two core cases remain
+    assert den == catch.sample_size == 2
+    assert num == round(catch.value * catch.sample_size) == 1
+    # the SINGLE shared re-adder finds no mismatch against the indicator aggregates
+    assert compare_cases_to_aggregates(built, aggregates_from_results(results)) == []
+
+
+def test_clean_control_keeps_its_partner_in_the_denominator(tmp_path):
+    """The sieve's other side: a control that ran and was NOT caught leaves its partner's catch
+    attributable ⇒ the partner STAYS in the catch denominator (only the control itself is dropped),
+    matching the indicator. verify still PASSES. RED-guard: dropping ext.0 here would over-exclude."""
+    from treval.active_eval.cases import build_cases
+    from treval.active_eval.indicators import InjectionCatchRate
+    from treval.case_contract import recompute_from_cases
+
+    path, cases, results = _control_contract(tmp_path, control_decision=_ALLOW)
+    built = build_cases(cases, results, target_kind="gateway")
+    (catch,) = InjectionCatchRate().measure(results)
+    num, den = recompute_from_cases(built)["injection_catch_rate"]
+    assert (
+        den == catch.sample_size == 3
+    )  # ext.0 counts (clean control); only ctrl.0 dropped
+    rc, out = _run(path)
+    assert rc == 0 and "✅ self-consistent" in out
+
+
+def test_today_invariance_control_free_contract_unchanged(tmp_path):
+    """Today-invariance: a control-FREE run (every existing corpus / fixture) still PASSES and its
+    recompute is a NO-OP change — catch_excluded_case_ids returns nothing without a control case, and
+    every row now carries an (empty) control_for. RED-guard: the exclusion firing on a control-free run."""
+    from treval.case_contract import catch_excluded_case_ids
+
+    path, contract = _write_contract(tmp_path)  # the standard control-free run
+    assert catch_excluded_case_ids(contract["cases"]) == set()
+    assert all(c["control_for"] == "" for c in contract["cases"])
+    rc, out = _run(path)
+    assert rc == 0 and "✅ self-consistent" in out

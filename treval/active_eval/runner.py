@@ -25,6 +25,9 @@ def run_corpus(corpus: Iterable[CorpusCase], target: Target) -> tuple[ProbeResul
                 target.probe(case),
                 output_marker=case.output_marker,
                 secret_canary=case.secret_canary,
+                attack_class=case.attack_class,
+                source=case.source,
+                control_for=case.control_for,
             )
             results.append(pr)
         except Exception as e:  # transport/target failure — record, don't drop
@@ -38,6 +41,9 @@ def run_corpus(corpus: Iterable[CorpusCase], target: Target) -> tuple[ProbeResul
                     error=f"{type(e).__name__}: {e}",
                     output_marker=case.output_marker,
                     secret_canary=case.secret_canary,
+                    attack_class=case.attack_class,
+                    source=case.source,
+                    control_for=case.control_for,
                 )
             )
     return tuple(results)

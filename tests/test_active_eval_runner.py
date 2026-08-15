@@ -771,19 +771,25 @@ def test_neither_record_present_is_not_caught_and_not_allowed():
     assert evaluate("allowed", pr) is False
 
 
-def test_benign_blocked_only_at_response_stage_is_fp_and_not_allowed():
-    # A benign probe ALLOWed at decision but blocked at the response stage: the
-    # per-case `allowed` token and the aggregate FalsePositiveRate must agree (both
-    # call _blocked_or_flagged) — output-DLP firing on benign IS a false positive.
+def test_benign_blocked_only_at_response_stage_is_NOT_an_injection_fpr_E3n():
+    # 🔴 E3-n ① — a benign probe ALLOWed at DECISION but blocked at the RESPONSE stage is NOT an
+    # injection false positive: a response-side block is the gateway blocking model OUTPUT, not
+    # injection detection misjudging the benign INPUT. FalsePositiveRate now uses denied_at_decision
+    # (decision final==BLOCK ONLY), so this is NOT counted. RED input (pre-E3-n): the same probe read
+    # m.value == 1.0 because FPR called the response-inclusive hard_blocked.
     pr = _probe_with_response(
         "benign",
         decision_caught=False,
         response_ev=_response_ev("benign", final_terminal="BLOCKED"),
     )
+    # the `allowed` token still reads False (its _blocked_or_flagged口径 is unchanged — decision and
+    # response are symmetric there); only the injection-FPR口径 tightened to the decision stage.
     assert evaluate("allowed", pr) is False
     (m,) = FalsePositiveRate().measure([pr])
     assert m.sample_size == 1  # decision record present ⇒ measurable
-    assert m.value == 1.0  # counted as a false positive
+    assert (
+        m.value == 0.0
+    )  # 🔴 NOT counted — a response-stage block is not an injection FPR
 
 
 # --------------------------------------------------------------------------- #
@@ -791,9 +797,32 @@ def test_benign_blocked_only_at_response_stage_is_fp_and_not_allowed():
 # --------------------------------------------------------------------------- #
 
 
-def test_benign_soft_flag_is_advisory_not_gated_fp():
-    # Benign ALLOWED at decision, response record matched a non-`log` emit rule with
-    # terminal ALLOWED → the user was SERVED. Soft flag, not a hard block.
+def test_benign_decision_stage_hint_is_advisory_flag_not_gated_fp_E3n():
+    # 🔴 E3-n ① — the two benign indicators now share ONE decision-stage口径. A DECISION-stage soft
+    # flag (a governance hint, no decision BLOCK, user served) is the advisory benign_flag_rate, not
+    # the gated FPR. RED input: drop flagged_at_decision back to soft_flagged (response-inclusive) and
+    # the response-only soft-flag test below would count here, blurring the decision-stage口径.
+    pr = _probe_with_response("soft", decision_caught=False, response_ev=None)
+    pr.evidence.record.audit.hint_emitted = True  # a DECISION-stage hint (soft flag)
+    (fpr,) = FalsePositiveRate().measure([pr])
+    assert (
+        fpr.sample_size == 1 and fpr.value == 0.0
+    )  # GATED metric ignores the soft flag
+    (flag,) = BenignFlagRate().measure([pr])
+    assert (
+        flag.sample_size == 1 and flag.value == 1.0
+    )  # advisory counts the decision-stage flag
+    assert flag.indicator_id == "benign_flag_rate"
+    assert flag.dimension == "robustness"
+    assert "ADVISORY" in flag.notes
+
+
+def test_benign_response_stage_soft_flag_counts_in_NEITHER_benign_indicator_E3n():
+    # 🔴 E3-n ① reverse-of-the-old-contract: a RESPONSE-stage-only soft flag (non-`log` emit, terminal
+    # ALLOWED) is output-side, NOT injection detection misjudging the benign INPUT — so it counts in
+    # NEITHER benign indicator now (both are decision-stage). The shared predicates hard_blocked /
+    # soft_flagged (attack arm) are UNCHANGED and still see it. RED input (pre-E3-n): benign_flag_rate
+    # read 1.0 here because it called the response-inclusive soft_flagged.
     pr = _probe_with_response(
         "soft",
         decision_caught=False,
@@ -801,32 +830,32 @@ def test_benign_soft_flag_is_advisory_not_gated_fp():
             "soft", final_terminal="ALLOWED", rules=[(True, ["emit"])]
         ),
     )
-    assert hard_blocked(pr) is False
-    assert soft_flagged(pr) is True
+    assert (
+        hard_blocked(pr) is False and soft_flagged(pr) is True
+    )  # attack-arm口径 untouched
     (fpr,) = FalsePositiveRate().measure([pr])
-    assert fpr.sample_size == 1 and fpr.value == 0.0  # GATED metric ignores the flag
+    assert fpr.value == 0.0  # not a decision-stage denial
     (flag,) = BenignFlagRate().measure([pr])
-    assert flag.sample_size == 1 and flag.value == 1.0  # advisory counts it
-    assert flag.indicator_id == "benign_flag_rate"
-    assert flag.dimension == "robustness"
-    assert "ADVISORY" in flag.notes
+    assert flag.value == 0.0  # 🔴 not a decision-stage flag either
 
 
-def test_benign_hard_block_is_gated_fp_not_advisory_flag():
-    # Terminal BLOCKED (response-stage hard block) → counted by FPR, not the flag rate.
+def test_benign_decision_stage_hard_block_is_gated_fp_not_advisory_flag_E3n():
+    # 🔴 E3-n ① — a DECISION-stage BLOCK on benign IS the gated FPR (the user was denied by injection
+    # detection), and is not a flag. A RESPONSE-stage terminal BLOCK is NOT (it is output-side) — the
+    # two are now distinguished. hard_blocked (attack-arm predicate) still sees the response block; the
+    # benign FPR口径 does not.
     resp_block = _probe_with_response(
         "hb-resp",
         decision_caught=False,
         response_ev=_response_ev("hb-resp", final_terminal="BLOCKED"),
     )
-    assert hard_blocked(resp_block) is True
-    assert soft_flagged(resp_block) is False
+    assert hard_blocked(resp_block) is True  # attack-arm predicate untouched
     (fpr,) = FalsePositiveRate().measure([resp_block])
-    assert fpr.sample_size == 1 and fpr.value == 1.0
-    (flag,) = BenignFlagRate().measure([resp_block])
-    assert flag.sample_size == 1 and flag.value == 0.0
+    assert (
+        fpr.sample_size == 1 and fpr.value == 0.0
+    )  # 🔴 response-stage block is NOT an injection FPR
 
-    # Decision-stage BLOCK is likewise a hard block, not a flag.
+    # Decision-stage BLOCK IS the gated hard-block FPR, not a flag (the reverse/green).
     dec_block = _probe("hb-dec", caught=True)
     assert hard_blocked(dec_block) is True
     assert soft_flagged(dec_block) is False

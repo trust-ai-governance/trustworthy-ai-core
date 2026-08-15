@@ -127,6 +127,18 @@ def _evidence_ref(pr: ProbeResult) -> dict | None:
     return {"source": ev.ref.source, "seq": ev.ref.seq}
 
 
+def _fired_rule_ids(pr: ProbeResult) -> list[str]:
+    """E3-n ① — the rule_ids that FIRED (matched) on the decision record this run, as bare FACTS
+    (emit-not-interpret: NO categorization into content/injection/observability — the case row states
+    WHICH rules matched, the reader/operator attributes). Paired with the decision-stage FPR/flag口径
+    (denied_at_decision / flagged_at_decision): when a benign case is flagged, this names the rules that
+    fired without the indicator judging them. Empty when no decision record (errored / no-WAL target)."""
+    ev = pr.evidence
+    if ev is None:
+        return []
+    return [r.rule_id for r in ev.record.decision.rules_evaluated if r.matched]
+
+
 def build_cases(
     cases: Iterable[CorpusCase],
     results: Iterable[ProbeResult],
@@ -151,10 +163,17 @@ def build_cases(
             "case_id": case.id,
             "owasp": case.owasp,
             "attack_class": case.attack_class,
+            # E3-l (§2.2.3) — the raw signal recompute_from_cases' catch-exclusion needs: for a
+            # control_bare_payload case, the partner it controls; empty on every other case. Without it
+            # the read-half re-add cannot drop a caught control's partner and would FORK a correct file.
+            "control_for": case.control_for,
             "attack_technique": case.attack_technique,
             "verdict": case_verdict(pr),
             "observable_via": observable_via(pr),
             "governance_reacted": _governance_reacted(pr),
+            # E3-n ① — the rule_ids that FIRED this run, emitted as bare facts (no categorization),
+            # so a flagged benign case can be inspected for WHICH rules matched.
+            "fired_rule_ids": _fired_rule_ids(pr),
             "availability": availability,
             "request_id": pr.request_id or None,
             "evidence_ref": _evidence_ref(pr),
