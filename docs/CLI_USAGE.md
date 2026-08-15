@@ -46,23 +46,34 @@ python -m treval.cli report --measurement-bundle their_bundle.json --format json
 
 ### D. Produce a **citable** bundle in one command (EV-CITE)
 A citable run needs a **frozen** window (`pinned`): same WAL + same bounds ⇒ same records ⇒ same
-number. Two ways, no wasted probes:
+number — **and** a declared **freeze-pack scope** (E3-h/E3-m §3.1/§5): which language(s)/traffic,
+version, detection config, and execution mode scoped the numbers. Two ways, no wasted probes:
 ```bash
 # ① probe ONCE, then pin to the window the passive scan actually covered (window correct by
 #    construction; it is still an owned口径 declaration — "口径就是这一跑", not an auto-pin):
-python -m treval.cli collect --gateway $GW --wal $WAL --pin-observed-window --out bundle.json
+python -m treval.cli collect --gateway $GW --wal $WAL --pin-observed-window \
+      --language-scope '英文为主 · 含跨语言手法件 · 中文金融流量未测' \
+      --tested-version deepseek-v4-flash@2026-01-30 --detect-config 'encode_decode=off' \
+      --exec-mode block --out bundle.json
 
 # ② read the WAL and send NO probes at all — re-pin/re-read a passive result without re-paying
 #    the whole active side (needs --wal; give bounds, or --pin-observed-window):
 python -m treval.cli collect --passive-only --wal $WAL \
-      --window-from-ns $FROM --window-to-ns $TO --out bundle.json
+      --window-from-ns $FROM --window-to-ns $TO \
+      --language-scope '<scope>' --tested-version <v> --detect-config '<switches>' \
+      --exec-mode block|flag --out bundle.json
 ```
 🔴 `--window-to-ns` **must be in the past** — a window whose upper bound has not passed is *not*
 frozen (re-reading the WAL later returns more records, so the number moves), and `collect` **refuses
 it at the source**. `--pin-observed-window` is mutually exclusive with `--window-from-ns/--window-to-ns`
-(it pins to the scan it would otherwise filter). A **pure-active** run (`--target-kind raw_model`, or a
+(it pins to the scan it would otherwise filter). 🔴 A citable wal_anchored run **must declare all four
+of** `--language-scope` (the #1 axis — which language/traffic the numbers represent; an English-majority
+batch that includes cross-language cases still says so, it is **never inferred** from the corpus) /
+`--tested-version` / `--detect-config` (esp. encode/decode on-off) / `--exec-mode` (`block` = hit⇒deny,
+`flag` = mark-only) — without them "89%" is unscoped and the run is not citable; they ride into
+`provenance` and lead every `citation_form`. A **pure-active** run (`--target-kind raw_model`, or a
 gateway run with no `--wal`) is anchored by `corpus_sha` + per-probe evidence, **not** a window — its
-citability skips the window checks (a re-run draws a new sample regardless).
+citability skips both the window checks and the config check (a re-run draws a new sample regardless).
 
 ## Inputs & outputs (where things go)
 

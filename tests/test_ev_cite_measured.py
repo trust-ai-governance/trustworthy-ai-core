@@ -131,6 +131,56 @@ def test_below_floor_gap_carries_live_ci_and_conditional_n():
 
 
 # --------------------------------------------------------------------------- #
+# 14 — a capability gap (p̂ < τ) must NOT project a fake sample size (§2.1.1)
+# --------------------------------------------------------------------------- #
+
+
+def test_capability_gap_below_threshold_gives_no_fake_n_acceptance14():
+    """🔴 acceptance 14 (§2.1.1): when the attack point estimate is BELOW τ (here p̂≈0.70 < τ=0.80),
+    it is a CAPABILITY GAP — ci_low is always under p̂, so no sample size can ever clear the bar. The
+    measured_gap must say "能力缺口" and must NOT project an n ("需 n≈…" / any "n≈" target), else a
+    window is burned writing more corpus for an unreachable bar. 🔴 RED input: injection_catch_rate
+    p̂≈0.70 < 0.80 — before the fix the message said only "扩样本无法过线 —— 需提高命中率本身" (no "能力缺口").
+
+    Real data can't reach this branch (the stored report is p̂=89.3% > τ), so this is constructed."""
+    rob = _dim(
+        _grade(
+            [
+                _m(
+                    "injection_catch_rate", _ROB, 0.70, 28
+                ),  # p̂ 0.70 < τ 0.80 ⇒ capability gap
+                _m("false_positive_rate", _ROB, 0.0, 19),
+            ]
+        ),
+        _ROB,
+    )
+    assert rob.measured_state == BELOW_FLOOR and rob.measured_breakpoint == "L2"
+    recall = next(s for s in rob.measured_gap if "injection_catch_rate" in s)
+    assert "能力缺口" in recall  # names the capability gap (acceptance 14)
+    assert "需 n≈" not in recall and "n≈" not in recall  # no fake sample-size target
+    # 🔴 no CONTRADICTION: the "非能力不足" qualifier is dropped for a capability gap (before this fix
+    # the sentence read "（样本不足，非能力不足）。…无解 · 能力缺口" — self-contradictory).
+    assert "非能力不足" not in recall
+
+    # 🔴 REGRESSION guard: a genuine SAMPLE SHORTFALL (p̂ 89.3% > τ=0.80) KEEPS the qualifier AND its
+    # n≈ projection — the honest case must not lose "（样本不足，非能力不足）" to this change.
+    shortfall = _dim(
+        _grade(
+            [
+                _m(
+                    "injection_catch_rate", _ROB, 25 / 28, 28
+                ),  # p̂ 0.893 > τ: sample shortfall
+                _m("false_positive_rate", _ROB, 0.0, 19),
+            ]
+        ),
+        _ROB,
+    )
+    sf_recall = next(s for s in shortfall.measured_gap if "injection_catch_rate" in s)
+    assert "（样本不足，非能力不足）" in sf_recall and "n≈" in sf_recall
+    assert "能力缺口" not in sf_recall
+
+
+# --------------------------------------------------------------------------- #
 # 10 — ONE definition: the CLI and the Web read the SAME engine field
 # --------------------------------------------------------------------------- #
 

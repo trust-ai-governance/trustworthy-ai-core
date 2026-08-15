@@ -101,13 +101,33 @@ def build_provenance(
     record_count: int,
     observed_window: tuple[int, int] | None = None,
     generated_at_ns: int | None = None,
+    language_scope: str | None = None,
+    tested_version: str | None = None,
+    detect_config: str | None = None,
+    exec_mode: str | None = None,
+    detection_layer_status: str | None = None,
+    upstream_timeout_s: float | None = None,
+    config_source: str = "declared",
+    tier2_drain_executed: bool = False,
+    build_fingerprint_before: dict[str, Any] | None = None,
+    build_fingerprint_after: dict[str, Any] | None = None,
+    admin_url_declared: bool = False,
+    probe_window: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """The run's pin artifact, embedded in the collect bundle (EV-PIN §1.3).
 
     `pinned` is True only when the operator supplied BOTH window bounds — that is the whole
     claim: this run is reproducible from its inputs. A run whose window was merely *observed*
     is honest about covering that range but is still a snapshot of wherever the WAL happened
-    to be, so it reports `pinned: false` and must not be cited externally (§1.4)."""
+    to be, so it reports `pinned: false` and must not be cited externally (§1.4).
+
+    EV-COVERAGE E3-h (§3.1) — the freeze pack must also record what SCOPES the numbers: the
+    tested party's `tested_version`, its detection `detect_config` (esp. encode/decode on-off),
+    and the `exec_mode` (`block` = hit⇒deny, `flag` = mark-only). 🔴 These keys are ALWAYS emitted
+    (empty when the operator didn't declare them) so citability can tell a v2 run that DIDN'T declare
+    (keys present-but-empty) apart from a pre-E3 bundle (keys absent). `config_source` records HOW
+    they arrived (`declared` now; `queried` reserved for a future version/config endpoint) — it is
+    metadata, NOT part of the citability criterion (the criterion is fields-present, not their source)."""
     segments = segment_provenance(wal_dir) if wal_dir else None
     return {
         # What KIND of data this is, declared positively. A run built here always read a real
@@ -133,4 +153,41 @@ def build_provenance(
         # time — a bundle carries its own basis so it stays judgeable after it changes hands. None ⇒
         # a pre-C15 bundle with no stamp; the future-upper-bound blocker then skips (no clock fallback).
         "generated_at_ns": generated_at_ns,
+        # EV-COVERAGE E3-h/E3-m (§3.1 / §2.2.2 / §5) — what scopes "89%": the #1 axis is the
+        # `language_scope` (upstream rules English numbers fail-closed for the Chinese market), then
+        # the tested party's version, its key detection config switches, and the execution mode
+        # (block / flag). 🔴 ALL ALWAYS present (empty when undeclared) so present-but-empty (a v2 run
+        # that didn't declare) is distinguishable from absent (a pre-E3 bundle). 🔴 language_scope is
+        # an operator DECLARATION (the --language-scope flag), NEVER inferred from case bytes.
+        # `config_source` is HOW they arrived — metadata, not the criterion.
+        "language_scope": language_scope or "",
+        "tested_version": tested_version or "",
+        "detect_config": detect_config or "",
+        "exec_mode": exec_mode or "",
+        # EV-COVERAGE E3-n ③ — the freeze pack must ALSO pin the DETECTION-LAYER STATUS (which layers
+        # are live, e.g. tier1_only / tier2 shadow off) and the tested party's UPSTREAM REQUEST-TIMEOUT
+        # (its OWN hardcoded value, DECLARED — the client --timeout is then derived as 2×, not guessed).
+        # Both fold into the SAME missing_run_config citability criterion. Present-but-empty (""/null on
+        # a v2 run that didn't declare) is distinguishable from ABSENT (a pre-E3-n bundle), like the four
+        # keys above. upstream_timeout_s stays a number (the declared seconds), null when undeclared.
+        "detection_layer_status": detection_layer_status or "",
+        "upstream_timeout_s": upstream_timeout_s,
+        "config_source": config_source,
+        # EV-COVERAGE E3-n ② — did the async Tier-2 drain execute this run? Recorded so a Tier-2 layer
+        # that was never drained cannot be read as "0% lift" — the freeze pack states the layer's status.
+        "tier2_drain_executed": tier2_drain_executed,
+        # EV-COVERAGE E3-n ④ — the tested party's self-reported build fingerprint (git_sha +
+        # detection_switches, GET /admin/v1/buildinfo) captured BEFORE and AFTER the run, stored
+        # VERBATIM (evidence in the artifact, not just compared-then-discarded). citability compares
+        # them: any bit of difference ⇒ the tested party changed mid-run ⇒ NOT citable. null when no
+        # admin endpoint was queried (no --admin-url).
+        "build_fingerprint_before": build_fingerprint_before,
+        "build_fingerprint_after": build_fingerprint_after,
+        # E3-n ④ — whether --admin-url was declared. citability fail-closes a declared-but-unfetched
+        # build-fingerprint check (both-None blocks ONLY when the admin endpoint was actually named).
+        "admin_url_declared": admin_url_declared,
+        # E3-n ② — this run's probe span [first, last+ε), half-open. The ACTIVE rates (catch / FPR /
+        # four-cell / success) cite THIS in their citation_form; passive / census indicators keep
+        # `observed_window` (the WAL range they actually read). None when nothing was probed.
+        "probe_window": list(probe_window) if probe_window else None,
     }

@@ -450,7 +450,29 @@ def build_parser() -> argparse.ArgumentParser:
             "for an arbitrary endpoint); gateway defaults to deepseek-v4-flash. Env: "
             "TREVAL_EVAL_MODEL (NOT TREVAL_TARGET_MODEL).",
         )
+        # EV-Coverage E3: per-probe HTTP timeout for a --gateway run. Opt-in — absent ⇒
+        # GatewayTarget's own 30.0 default (LLM10 runaway runs rely on it). Raise it (e.g. 90)
+        # so slow encoding-smuggle cases return a real verdict instead of a ReadTimeout that
+        # silently excludes them from the frozen number.
+        col.add_argument(
+            "--timeout",
+            type=float,
+            default=None,
+            help="per-probe HTTP timeout in seconds for a --gateway run (default 30.0); raise "
+            "it (e.g. 90) so slow encoding-smuggle cases return a real verdict instead of a "
+            "ReadTimeout that excludes them",
+        )
         col.add_argument("--out", default=None)
+        # EV-R2: also write the LLM01 injection Tier-0 case contract from THIS run (per-case verdict
+        # + the two recompute signals, POINTERS ONLY — no response content). This is the on-disk,
+        # product-produced contract `cases verify` re-adds. disclosure_class=operator_only — a
+        # tenant-internal bypass map; do NOT publish. Mirrors tools/eval_report.py --cases-out.
+        col.add_argument(
+            "--cases-out",
+            default=None,
+            help="also write the EV-R2 Tier-0 LLM01 injection case contract here (gateway run "
+            "only; POINTERS only, disclosure_class=operator_only — do NOT publish)",
+        )
         # EV-PIN: freeze the run's window. Supplying BOTH bounds makes the run reproducible
         # (same WAL + same bounds ⇒ same records) and stamps `pinned: true`. Bounds are
         # HALF-OPEN [from, to) — matching the WAL reader's filter — so `to` is exclusive.
@@ -481,6 +503,62 @@ def build_parser() -> argparse.ArgumentParser:
             help="pin to the window the passive scan actually covered (an explicit口径 declaration). "
             "One command, zero extra probes, window correct by construction; combinable with --gateway. "
             "Mutually exclusive with --window-from-ns/--window-to-ns.",
+        )
+        # EV-COVERAGE E3-h/E3-m (§3.1 / §5): declare what SCOPES the numbers — the freeze pack must
+        # carry these for a wal_anchored run to be citable (they enter provenance + citation_form).
+        # Declaration-based today (no queryable version/config endpoint exists); provenance records
+        # config_source. 🔴 --language-scope is the #1 axis and is an operator STATEMENT (e.g. "英文为主
+        # · 含跨语言手法件 · 中文金融流量未测"), NEVER inferred from case bytes (E3-m §5).
+        col.add_argument(
+            "--language-scope",
+            default=None,
+            help="which language(s)/traffic the numbers represent, operator-declared (e.g. "
+            "'英文为主 · 含跨语言手法件 · 中文金融流量未测') — required for a citable wal_anchored run; "
+            "an English-majority batch that INCLUDES cross-language cases still says so here (E3-m §5)",
+        )
+        col.add_argument(
+            "--tested-version",
+            default=None,
+            help="the tested party's version identifier (e.g. deepseek-v4-flash@2026-01-30) — "
+            "required for a citable wal_anchored run (E3-h §3.1)",
+        )
+        col.add_argument(
+            "--detect-config",
+            default=None,
+            help="key detection config switches, esp. encode/decode on-off (e.g. "
+            "'encode_decode=off; multiturn=on') — on/off directly changes the catch number (E3-h §3.1)",
+        )
+        col.add_argument(
+            "--exec-mode",
+            choices=("block", "flag"),
+            default=None,
+            help="execution mode: block = hit⇒deny, or flag = mark-only (τ_fpr's scope varies by "
+            "this — E3-h §2.2.2)",
+        )
+        # EV-COVERAGE E3-n ③ — the freeze pack must ALSO pin the detection-layer status and the tested
+        # party's UPSTREAM request-timeout (its own hardcoded value). Both fold into missing_run_config.
+        col.add_argument(
+            "--detection-layer-status",
+            default=None,
+            help="which detection layers are live (operator-declared, e.g. 'tier1_only (tier2 shadow "
+            "off)') — required for a citable wal_anchored run (E3-n ③)",
+        )
+        col.add_argument(
+            "--upstream-timeout-s",
+            type=float,
+            default=None,
+            help="the tested party's DECLARED upstream request-timeout in seconds (its hardcoded "
+            "value, e.g. 60) — the gateway --timeout is then DERIVED as 2× this (not guessed), and the "
+            "value is pinned into the freeze pack (E3-n ③)",
+        )
+        # EV-COVERAGE E3-n ④ — the gateway admin base (GET /admin/v1/buildinfo). Passed to
+        # GatewayTarget so collect can capture the build fingerprint before AND after the run and prove
+        # zero-change during the freeze (also the drain-cursor base). Env: TREVAL_EVAL_ADMIN_URL.
+        col.add_argument(
+            "--admin-url",
+            default=os.environ.get("TREVAL_EVAL_ADMIN_URL"),
+            help="gateway admin base URL (GET /admin/v1/buildinfo — captures the tested party's build "
+            "fingerprint before/after the run to VERIFY zero-change during the freeze; E3-n ④)",
         )
         if name == "run":
             col.add_argument("--posture", default=None)

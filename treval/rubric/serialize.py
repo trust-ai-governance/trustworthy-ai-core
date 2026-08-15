@@ -18,7 +18,12 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from treval.citability import CRITERIA_VERSION, citation_form, report_citability
+from treval.citability import (
+    CRITERIA_VERSION,
+    citation_form,
+    report_citability,
+    run_config_note,
+)
 from treval.models import (
     DimensionReport,
     EvidenceRef,
@@ -352,19 +357,37 @@ def serialize_self_contained_bundle(
     }
     pinned = bool(provenance and provenance.get("pinned"))
     window = provenance.get("window") if provenance else None
+    # E3-n ② — the ACTIVE rates (catch / FPR / four-cell / success — any indicator whose
+    # evidence_requirement is NOT needs_wal) cite THIS run's probe span, so a 430-probe number is not
+    # read as standing on the whole WAL's history. Passive / census (needs_wal) keep observed_window.
+    probe_window = provenance.get("probe_window") if provenance else None
     first_blocker = citable_blockers[0] if citable_blockers else None
+    config_note = run_config_note(
+        provenance
+    )  # E3-h: the freeze-pack config, once per run
     for m, row in zip(
         sorted(materialized, key=lambda x: (x.indicator_id, x.subject)),
         base["measurements"],
     ):
+        _req = (
+            evidence_requirements.get(m.indicator_id) if evidence_requirements else None
+        )
+        # E3-n ② — ACTIVE rates (probe-driven: needs_decision / output_only) cite probe_window; the
+        # passive & census indicators (needs_wal, OR unclassified ⇒ None ⇒ they read the whole WAL, not
+        # just this run's probes) keep observed_window. 🔴 Key on the ACTIVE set, not `== needs_wal`:
+        # the census indicators (chain_integrity / unclosed_loop / duration_p99 / terminal_error) map to
+        # None, so a `needs_wal`-only check would wrongly hand them probe_window.
+        _active = _req in ("needs_decision", "output_only")
+        _window = probe_window if (_active and probe_window) else window
         row["citation_form"] = citation_form(
             m,
             pinned=pinned,
-            window=window,
+            window=_window,
             evidence_basis=base["evidence_basis"],
             citable=citable,
             first_blocker=first_blocker,
             satisfied_when=pred_by_indicator.get(m.indicator_id),
+            config_note=config_note,
         )
     return {
         "schema_version": base["schema_version"],
