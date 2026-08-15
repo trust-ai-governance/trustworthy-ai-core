@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -451,6 +452,237 @@ def test_gateway_keeps_its_model_default(tmp_path, monkeypatch):
     assert json.loads(out.read_text(encoding="utf-8"))["target_kind"] == "gateway"
 
 
+def _capture_gateway_timeout(monkeypatch, argv):
+    """Run a gateway `collect` with httpx.post faked, returning the `timeout=` value the
+    probe actually handed to httpx (GatewayTarget passes self._timeout straight through) —
+    so this proves the CLI flag reaches the real HTTP call, not just the parser."""
+    import httpx
+
+    seen: dict[str, float | None] = {}
+
+    def fake_post(url, *, headers=None, json=None, timeout=None):
+        seen["timeout"] = timeout
+        return _FakeResp(_COMPLIANT)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.delenv("TREVAL_EVAL_GATEWAY_URL", raising=False)
+    monkeypatch.delenv("TREVAL_EVAL_WAL_DIR", raising=False)
+    rc = main(argv)
+    return rc, seen
+
+
+def test_collect_timeout_flag_reaches_the_gateway_target(tmp_path, monkeypatch):
+    """EV-Coverage E3: `--timeout 90` threads through run_collect → GatewayTarget → the
+    per-probe httpx.post, so slow encoding-smuggle cases get a real verdict instead of a
+    30s ReadTimeout that silently excludes them."""
+    out = tmp_path / "gw.json"
+    rc, seen = _capture_gateway_timeout(
+        monkeypatch,
+        [
+            "collect",
+            "--gateway",
+            "http://fake:8080",
+            "--timeout",
+            "90",
+            "--out",
+            str(out),
+        ],
+    )
+    assert rc == 0
+    assert seen["timeout"] == 90.0
+
+
+def test_collect_timeout_defaults_to_the_gateway_target_default(tmp_path, monkeypatch):
+    """The flag is opt-in: with no --timeout, GatewayTarget's own 30.0 default rides through
+    unchanged (LLM10 runaway runs rely on it)."""
+    out = tmp_path / "gw.json"
+    rc, seen = _capture_gateway_timeout(
+        monkeypatch,
+        ["collect", "--gateway", "http://fake:8080", "--out", str(out)],
+    )
+    assert rc == 0
+    assert seen["timeout"] == 30.0
+
+
+def test_collect_client_timeout_is_2x_declared_upstream_E3n(tmp_path, monkeypatch):
+    """🔴 E3-n ③: the gateway client timeout is DERIVED as 2× the tested party's DECLARED upstream
+    request-timeout (--upstream-timeout-s 60 ⇒ 120), not guessed, and the declared upstream value is
+    pinned into the freeze pack. RED input: pre-E3-n the client timeout was the raw --timeout guess,
+    ignoring the upstream value entirely."""
+    out = tmp_path / "gw.json"
+    rc, seen = _capture_gateway_timeout(
+        monkeypatch,
+        [
+            "collect",
+            "--gateway",
+            "http://fake:8080",
+            "--upstream-timeout-s",
+            "60",
+            "--out",
+            str(out),
+        ],
+    )
+    assert rc == 0
+    assert seen["timeout"] == 120.0  # 2× the declared 60s upstream
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert (
+        doc["provenance"]["upstream_timeout_s"] == 60.0
+    )  # the declared value is pinned
+
+
+def test_collect_captures_build_fingerprint_and_blocks_on_change_E3n(
+    tmp_path, monkeypatch
+):
+    """🔴 E3-n ④: a gateway collect with --admin-url captures the tested party's /admin/v1/buildinfo
+    fingerprint BEFORE and AFTER the run and stores both verbatim; when they differ (the tested party
+    changed mid-run) the graded delivery bundle is NOT citable via the build_fingerprint_changed
+    blocker. RED input: pre-E3-n nothing verified zero-change, so a mid-run change went unnoticed."""
+    _fake_openai(monkeypatch, _COMPLIANT)
+    from treval.active_eval import GatewayTarget
+
+    fps = [
+        {"git_sha": "a" * 40, "detection_switches": {"lexicon": True}},
+        {
+            "git_sha": "a" * 40,
+            "detection_switches": {"lexicon": False},
+        },  # changed mid-run
+    ]
+    calls = {"n": 0}
+
+    def fake_fp(self):
+        i = min(calls["n"], len(fps) - 1)
+        calls["n"] += 1
+        return fps[i], None  # E3-n ④ — fetch_buildinfo now returns (fingerprint, error)
+
+    monkeypatch.setattr(GatewayTarget, "fetch_buildinfo", fake_fp)
+    out = tmp_path / "gw.json"
+    rc = main(
+        [
+            "collect",
+            "--gateway",
+            "http://fake:8080",
+            "--admin-url",
+            "http://fake:8081",
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    prov = json.loads(out.read_text(encoding="utf-8"))["provenance"]
+    assert prov["build_fingerprint_before"] == fps[0]  # stored verbatim (before)
+    assert prov["build_fingerprint_after"] == fps[1]  # stored verbatim (after)
+
+    from treval.cli.main import run_self_contained
+    from treval.report_store import ReportStore
+
+    entry, _ = run_self_contained(out, None, tmp_path / "store", generated_at_ns=1)
+    delivered = json.loads(ReportStore(tmp_path / "store").read_bytes(entry))
+    assert delivered["citable"] is False
+    assert any(
+        "buildinfo" in b and "指纹" in b for b in delivered["citable_blockers"]
+    )  # the ④ blocker fired
+
+
+class _DecidedGatewayTarget:
+    """A gateway target whose every probe carries a REAL BLOCK decision record (verified WAL
+    evidence), so build_cases and the indicators agree and the §3.1 recompute guard passes — the
+    'healthy, all-decided run' the case contract requires (a no-WAL fake is gateway-undecided and
+    would fork)."""
+
+    target_id = "gateway"
+    tenant_id = "acme"
+
+    def probe(self, case):
+        from trustworthy_ai.v1 import request_context_pb2 as rc_pb
+
+        from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
+
+        ctx = rc_pb.RequestContext()
+        ctx.envelope.request_id = f"req-{case.id}"
+        ctx.decision.final_decision = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
+        r = ctx.decision.rules_evaluated.add()
+        r.rule_id = "inj-1"
+        r.matched = True
+        ev = AuditEvidence(
+            ref=EvidenceRef(
+                source="wal:/w/000.wal", seq=1, request_id=f"req-{case.id}"
+            ),
+            integrity=IntegrityStatus.VERIFIED,
+            tenant_id="acme",
+            received_at_ns=0,
+            record=ctx,
+        )
+        return ProbeResult(
+            case_id=case.id,
+            request_id=f"req-{case.id}",
+            decision="BLOCK",
+            response_text="",
+            evidence=ev,
+        )
+
+
+def test_collect_cases_out_writes_the_injection_case_contract(tmp_path):
+    """EV-R2 / task-d: a gateway collect run captures the llm01_prompt_injection probes and
+    `_write_case_contract` serializes the Tier-0 case contract from the SAME run (build_cases +
+    serialize_case_contract), so `cases verify` finally has a real product-produced contract on disk
+    (the dangling reference in its help). Tier-0 ⇒ POINTERS only, disclosure_class=operator_only,
+    and the rows re-add to the aggregates bit-for-bit."""
+    from treval.cli.collect import _write_case_contract, collect_measurements
+
+    warnings: list[str] = []
+    active = collect_measurements(
+        _DecidedGatewayTarget(), corpus_root=_CORPUS, warnings=warnings
+    )
+    # the first llm01_prompt_injection run was captured for the contract
+    assert active.injection_results, "no injection run captured for --cases-out"
+
+    cases_path = tmp_path / "cases.json"
+    _write_case_contract(
+        active.injection_cases,
+        active.injection_results,
+        "acme",
+        str(cases_path),
+        warnings=warnings,
+    )
+    assert cases_path.exists(), (
+        f"--cases-out did not write the contract; warnings={warnings}"
+    )
+    contract = json.loads(cases_path.read_text(encoding="utf-8"))
+    assert contract["disclosure_class"] == "operator_only"  # Tier-0
+    assert contract["target_kind"] == "gateway"
+    assert contract["tenant_id"] == "acme"  # the tenant the probes ran as (UI-3 §5.2)
+    assert len(contract["cases"]) > 0
+    # 🔴 Tier-0 carries POINTERS only — never a byte of response content
+    assert all("response_text" not in c for c in contract["cases"])
+    # §3.1: the rows re-add to the embedded aggregates bit-for-bit (serialize ran the guard)
+    from treval.case_contract import compare_cases_to_aggregates
+
+    assert compare_cases_to_aggregates(contract["cases"], contract["aggregates"]) == []
+
+
+def test_collect_cases_out_requires_a_gateway_run(tmp_path, monkeypatch, capsys):
+    """--cases-out embeds WAL decision pointers, so it is refused on a bare-model (raw_model) run
+    (no governed record to point at) with a readable error + non-zero exit."""
+    _fake_openai(monkeypatch, _COMPLIANT)
+    rc = main(
+        [
+            "collect",
+            "--target-url",
+            "http://fake/v1",
+            "--target-kind",
+            "raw_model",
+            "--model",
+            "m",
+            "--cases-out",
+            str(tmp_path / "cases.json"),
+            "--out",
+            str(tmp_path / "b.json"),
+        ]
+    )
+    assert rc != 0
+    assert "--cases-out needs a gateway run" in capsys.readouterr().err
+
+
 def test_output_side_notes_carry_the_cross_model_caveat():
     """§3: the capability-confusion caveat rides the number itself (notes), so it can't be
     read cross-model without seeing the warning — no reliance on remembering the doc."""
@@ -599,6 +831,20 @@ def test_pin_observed_window_produces_a_citable_bundle_in_one_command(
             "--tenant",
             _TENANT,
             "--pin-observed-window",
+            # E3-h/E3-m: a citable run must declare the freeze-pack scope (incl. language_scope)
+            "--language-scope",
+            "英文为主 · 含跨语言手法件 · 中文金融流量未测",
+            "--tested-version",
+            "deepseek-v4-flash@2026-01-30",
+            "--detect-config",
+            "encode_decode=off",
+            "--exec-mode",
+            "block",
+            # E3-n ③: the freeze pack must also declare the detection-layer status + upstream timeout
+            "--detection-layer-status",
+            "tier1_only (tier2 shadow off)",
+            "--upstream-timeout-s",
+            "60",
             "--out",
             str(out),
         ]
@@ -608,6 +854,10 @@ def test_pin_observed_window_produces_a_citable_bundle_in_one_command(
     assert doc["pinned"] is True
     assert doc["provenance"]["record_count"] > 0
     assert doc["window"] == doc["provenance"]["observed_window"] == [1000, 1501]
+    # the declared config rode into provenance (config_source declared)
+    assert doc["provenance"]["tested_version"] == "deepseek-v4-flash@2026-01-30"
+    assert doc["provenance"]["exec_mode"] == "block"
+    assert doc["provenance"]["config_source"] == "declared"
 
     # grade into the delivery bundle and confirm it is actually CITABLE (the whole aim)
     from treval.cli.main import run_self_contained
@@ -665,6 +915,20 @@ def test_pin_observed_window_stays_citable_with_realtime_records(tmp_path, monke
             "--tenant",
             _TENANT,
             "--pin-observed-window",
+            # E3-h/E3-m: a citable run must declare the freeze-pack scope (incl. language_scope)
+            "--language-scope",
+            "英文为主 · 含跨语言手法件 · 中文金融流量未测",
+            "--tested-version",
+            "deepseek-v4-flash@2026-01-30",
+            "--detect-config",
+            "encode_decode=off",
+            "--exec-mode",
+            "block",
+            # E3-n ③: the freeze pack must also declare the detection-layer status + upstream timeout
+            "--detection-layer-status",
+            "tier1_only (tier2 shadow off)",
+            "--upstream-timeout-s",
+            "60",
             "--out",
             str(out),
         ]
@@ -702,3 +966,82 @@ def test_pin_observed_window_is_mutually_exclusive_with_explicit_bounds(capsys):
     assert rc != 0
     err = capsys.readouterr().err
     assert "--pin-observed-window" in err and "do not also pass" in err
+
+
+class _CountingDriftTarget(_FakeTarget):
+    """A target that (a) counts probes and (b) is NOT deterministic across passes.
+
+    🔴 Load-bearing: a deterministic fake CANNOT detect the two-pass bug — both passes return the
+    same text, so bundle and contract agree even when they read different executions. This one flips
+    the planted output_marker off on the SECOND time it sees a case, so an OUTPUT-side rate measured
+    over a second pass MUST differ from one measured over the first.
+    """
+
+    def __init__(self) -> None:
+        self.calls: dict[str, int] = {}
+
+    def probe(self, case, **kw):  # type: ignore[override]
+        n = self.calls.get(case.id, 0) + 1
+        self.calls[case.id] = n
+        pr = super().probe(case, **kw)
+        # first pass: emit the marker; later passes: don't — an output-side rate must move
+        text = (case.output_marker or "") if n == 1 else ""
+        return replace(pr, response_text=text)
+
+    @property
+    def total(self) -> int:
+        return sum(self.calls.values())
+
+
+def test_probes_each_corpus_once_and_bundle_agrees_with_contract():
+    """🔴 G1/去重 硬验收 — the two defects the one-run-per-producer model caused.
+
+    (a) WASTE: llm01_prompt_injection has SIX producers, so the same cases were probed six times
+        (~1484 probes for ~406 cases). The target must see each case EXACTLY once.
+    (b) 🔴 THE REAL BUG: each producer measured its OWN pass, so `injection_catch_rate`
+        (decision-side, deterministic) and `injection_success_rate` (OUTPUT-side, reads the model's
+        text) were computed over DIFFERENT executions. Observed live: one run reported success
+        0.3333 (n=63) in the bundle and 0.2812 (n=64) in its own case contract — two answers, one
+        run. Bundle and contract must now be identical BY CONSTRUCTION (one results tuple).
+
+    🔴 Uses _CountingDriftTarget, NOT the deterministic fake: with a deterministic target this
+    assertion passes even when the bug is present (verified by mutation) — it would be a check that
+    cannot fail.
+    """
+    from treval.active_eval import load_corpus
+    from treval.active_eval.cases import aggregates_from_results
+
+    warnings: list[str] = []
+    target = _CountingDriftTarget()
+    scan = collect_measurements(target, corpus_root=_CORPUS, warnings=warnings)
+    assert warnings == []
+
+    # (a) the TARGET's own call tally — not the collector's self-report
+    probed_subdirs = {p.corpus_subdir for p in CURATION}
+    expected = sum(len(load_corpus(_CORPUS / d)) for d in probed_subdirs)
+    assert target.total == expected, (
+        f"target saw {target.total} probes for {expected} cases — a corpus is probed more than once"
+    )
+    assert max(target.calls.values()) == 1, "some case was probed twice"
+
+    # (b) bundle vs contract on the OUTPUT-side rate that used to diverge
+    contract = aggregates_from_results(scan.injection_results)
+    (bundle,) = [
+        m
+        for m in scan.measurements
+        if m.indicator_id == "injection_success_rate" and m.subject == ""
+    ]
+    assert (bundle.value, bundle.sample_size) == (
+        contract["injection_success_rate"]["value"],
+        contract["injection_success_rate"]["n"],
+    ), (
+        "bundle and case contract disagree on injection_success_rate — the two-pass bug is back"
+    )
+
+
+def test_tier2_drain_flag_is_false_without_a_draining_target():
+    """G1 — a target with no `drain_governance` (or no admin URL) must report the drain as NOT
+    executed, so the Tier-2 rows read n/a. 🔴 "the judge scored below τ" and "we never looked"
+    must never collapse into the same number."""
+    scan = collect_measurements(_FakeTarget(), corpus_root=_CORPUS, warnings=[])
+    assert scan.tier2_drain_executed is False
