@@ -445,7 +445,7 @@ def test_f4_benign_tier2_hint_counts_under_hard_or_flag_only():
 
 def test_f4_tau_zero_flagship_benign_rate_reds_the_gate():
     """🔴 §4.4(2) FLAGSHIP — τ→0 (every benign probe carries a Tier-2 hint): under the default
-    hard_or_flag口径 benign_flag_rate → 100% and ci_high blows past 0.05 (rob.l2.injection_benign_flag
+    hard_or_flag口径 benign_flag_rate goes to the ceiling and ci_high blows past 0.05 (rob.l2.injection_benign_flag
     REDS); under the pre-F4 blindness it read 0% (GREEN). 改前绿、改后红."""
     prs = [
         _pr(
@@ -532,7 +532,7 @@ def test_f4_tau_zero_flagship_reds_the_benign_flag_OBJECTIVE_not_just_the_indica
     status_red, ceiling_red = _benign_flag_status(1.0, 100)
     assert status_red == "unmet"
     assert ceiling_red != "L2"  # the L2 measured gate failed ⇒ ceiling dropped below it
-    # the passing world (0/100, ci_high 3.7% ≤ 0.05) grades it MET and L2 holds — teeth (green→red).
+    # the passing world grades it MET and L2 holds — teeth (green→red).  # synthetic: 构造性对照世界，非实测
     status_green, ceiling_green = _benign_flag_status(0.0, 100)
     assert status_green == "met" and ceiling_green == "L2"
 

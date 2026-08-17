@@ -13,8 +13,11 @@ Exemptions (each with a reason):
   • corpus/**        — that is INPUT (attack/benign text), not a measured value.
   • tests/fixtures/**— 🔴 §四: MACHINE-GENERATED artifacts (report bundles regen'd by UPDATE_FIXTURES),
                        not human prose. The gate catches【人写的散文】, never【机器生成的产物】.
-  • a `# synthetic:` line — constructive/synthetic test data (incl. a math function's own known-IO
-                       unit test, e.g. a Wilson-interval assertion) must carry the marker.
+  • a marked line     — `# synthetic: <reason>` / `# disclosure-ok: <reason>` (markdown:
+                       `<!-- disclosure-ok: <reason> -->`). 🔴 The REASON is mandatory: a bare marker
+                       never exempts, so每一次豁免都是一个【被写下的决定】. Use it for our OWN corpus
+                       composition, constructive test input, and a math function's known-IO.
+  • a format template — `f"{a}/{b} ({r:.1%})"` renders at runtime; it discloses nothing at rest.
 
 Run the SAME way CI will (git plumbing; needs the repo):
 
@@ -32,8 +35,25 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 
-_SYNTHETIC = "# synthetic:"
 _EXEMPT_PREFIXES = ("corpus/", "tests/fixtures/")
+
+# 🔴 §7B.2 (revised) — an explicit SAME-LINE marker that must carry a REASON. `synthetic` and
+# `disclosure-ok` are aliases; `#` (code) and `<!-- -->` (markdown) both work. A bare marker with no
+# reason does NOT exempt — a marker that needs no justification is a skeleton key, and the whole point
+# is that每一次豁免都是一个【被写下的决定】. Markdown: put it INSIDE the cell (`… <!-- disclosure-ok: r -->`)
+# so the table still renders.
+_EXEMPT_MARK_RE = re.compile(
+    r"(?:#|<!--)\s*(?:synthetic|disclosure-ok)\s*:\s*(\S[^\n]*?)\s*(?:-->|$)"
+)
+
+# 🔴 §7B.2 (revised) — an f-string/format PLACEHOLDER is a template, not a value: `f"{a}/{b} ({r:.1%})"`
+# prints a proportion at RUNTIME, it discloses nothing at rest. The gate's OWN output code was flagged
+# by the gate — a plain false positive. Strip placeholder spans before matching, so a LITERAL
+# proportion still fires while the template that would render one does not.
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+
+# `@@ -a,b +c,d @@` — the NEW-side start line, for the adjacent-marker lookup.
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)")
 
 # §7B.2 — three shapes of a measured VALUE written into prose. 🔴 A THRESHOLD (a satisfied_when
 # criterion like `ci_high <= 0.05` / `ci_low >= 0.80`) is NOT a disclosed value — it defines the gate,
@@ -51,11 +71,19 @@ _PERCENT_RE = re.compile(r"\d{1,3}(?:\.\d+)?\s*%")
 
 
 def disclosure_hit(line: str) -> str | None:
-    """Return a short reason if `line` DISCLOSES a measured VALUE (§7B.2), else None. A `# synthetic:`
-    marker exempts the line (constructive test data / a math function's known-IO). A THRESHOLD
-    (comparison operator) is never a disclosure — it is the gate criterion, not a measurement."""
-    if _SYNTHETIC in line:
+    """Return a short reason if `line` DISCLOSES a TESTED-PARTY measured VALUE (§7B.2), else None.
+
+    🔴 The question is NOT "does this look like k/n with a percent" — it is "is this a MEASURED value of
+    the tested party". Three things are therefore not disclosures:
+      • a THRESHOLD (`ci_high <= 0.05`) — it defines the gate, it does not report a measurement;
+      • a format PLACEHOLDER (`f"{a}/{b} ({r:.1%})"`) — a template renders at runtime, it discloses
+        nothing at rest (the gate flagged its OWN print statements — a plain false positive);
+      • a line carrying an explicit `synthetic:` / `disclosure-ok: <reason>` marker — WITH a reason
+        (our own corpus composition, constructive test input, a math function's known-IO). A bare
+        marker never exempts."""
+    if _EXEMPT_MARK_RE.search(line):
         return None
+    line = _PLACEHOLDER_RE.sub(" ", line)  # a template is not a value
     # pattern ① — k/n alongside a PERCENTAGE, or a non-threshold ci_ VALUE (not a `ci_ <=`criterion).
     if _KN_RE.search(line) and (
         "%" in line or (_CI_VALUE_RE.search(line) and not _CI_THRESHOLD_RE.search(line))
@@ -87,9 +115,10 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def added_lines(base: str) -> list[tuple[str, str]]:
-    """(path, added_line) for every line ADDED vs `base` (working tree + staged), across tracked files.
-    `--unified=0` so only the `+` lines of each hunk are new. On any git failure ⇒ empty (the gate then
+def added_lines(base: str) -> list[tuple[str, int, str]]:
+    """(path, lineno, added_line) for every line ADDED vs `base` (working tree + staged), across tracked
+    files. `--unified=0` so only the `+` lines of each hunk are new; the hunk header gives the NEW-side
+    line number, which the adjacent-marker lookup needs. On any git failure ⇒ empty (the gate then
     passes vacuously rather than crashing the build; the other gates still run)."""
     try:
         diff = _git("diff", "--unified=0", "--no-color", base)
@@ -99,23 +128,45 @@ def added_lines(base: str) -> list[tuple[str, str]]:
             file=sys.stderr,
         )
         return []
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, int, str]] = []
     path = ""
+    lineno = 0
     for line in diff.stdout.splitlines():
         if line.startswith("+++ b/"):
             path = line[len("+++ b/") :]
+        elif line.startswith("@@"):
+            m = _HUNK_RE.match(line)
+            lineno = int(m.group(1)) if m else 0
         elif line.startswith("+") and not line.startswith("+++"):
-            out.append((path, line[1:]))
+            out.append((path, lineno, line[1:]))
+            lineno += 1
     return out
+
+
+def _marked_nearby(path: str, lineno: int) -> bool:
+    """Is there an exemption marker on this line or an ADJACENT one (N-1 / N / N+1)?
+
+    🔴 Same-line ONLY is fragile: an auto-formatter reflows a long statement and pushes the trailing
+    comment onto the continuation line, silently voiding the exemption (observed live — `ruff format`
+    did exactly this). The marker's REASON still has to be written; only its exact placement is relaxed.
+    Read from the WORKING FILE, not the diff, so an unchanged marker line still counts."""
+    try:
+        lines = (_ROOT / path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    for i in range(max(0, lineno - 2), min(len(lines), lineno + 1)):
+        if _EXEMPT_MARK_RE.search(lines[i]):
+            return True
+    return False
 
 
 def collect_violations(base: str) -> list[Violation]:
     out: list[Violation] = []
-    for path, line in added_lines(base):
+    for path, lineno, line in added_lines(base):
         if not path or _is_exempt(path):
             continue
         why = disclosure_hit(line)
-        if why:
+        if why and not _marked_nearby(path, lineno):
             out.append(Violation(path, line.strip()[:100], why))
     return out
 
@@ -130,13 +181,22 @@ def main(argv: list[str] | None = None) -> int:
     if not violations:
         print("disclosure gate: PASS —— 新增行未把实测值写进散文（§7B，只守新增）")
         return 0
-    print(f"disclosure gate: FAIL —— {len(violations)} 处新增披露\n", file=sys.stderr)
+    print(
+        f"disclosure gate: FAIL —— {len(violations)} 处疑似【被测方实测值】进入新增行\n",
+        file=sys.stderr,
+    )
     for v in violations:
         print(f"[{v.why}] {v.path}", file=sys.stderr)
         print(f"    {v.text}", file=sys.stderr)
     print(
-        "\n修复：把实测值移出散文，或（构造性/合成数）在该行加 `# synthetic:` 标注；"
-        "corpus/ 与 tests/fixtures/ 已豁免（输入与机器生成物）",
+        "\n怎么办 —— 先判断它是不是【被测方】的实测值：\n"
+        "  • 是   ⇒ 移出本仓（实测结果与设计文档分离）；\n"
+        "  • 不是 ⇒ 在该行加标注并写明理由，例如\n"
+        "           代码:      # disclosure-ok: 我方语料构成，可由本仓 corpus/ 自行导出\n"
+        "           Markdown:  … <!-- disclosure-ok: 构造性测试输入，证明门有牙 -->\n"
+        "  🔴 标注必须带理由 —— 光有标记不放行（无理由的豁免等于万能钥匙）。\n"
+        "  已自动放行：格式占位符（f-string 模板不是值）· 门槛（ci_high <= 0.05 是判据不是测量）\n"
+        "  · corpus/（输入）· tests/fixtures/（机器生成物）",
         file=sys.stderr,
     )
     return 1
