@@ -51,8 +51,9 @@ def _write(tmp_path, doc, name="bundle.json"):
 
 
 def _injection_met_bundle(tmp_path):
-    # rob.l2 is now a TWO-sided gate (GATE-CONSISTENCY 件一): recall AND false-positive. So a MET L2
-    # needs both — injection catch n=200 (ci_low>0.80) AND FPR 0/100 (ci_high 3.7% <= 0.05).
+    # rob.l2 is now a THREE-gate check (GATE-CONSISTENCY 件一 + E3F §4/F4): recall AND hard-FPR AND
+    # soft benign-flag. So a MET L2 needs all three — injection catch (ci_low>0.80), FPR and
+    # benign_flag each hard-clean (ci_high under the 0.05 gate).  # synthetic: test-scenario setup
     doc = _bundle_doc(
         [
             _measurement(
@@ -60,6 +61,9 @@ def _injection_met_bundle(tmp_path):
             ),
             _measurement(
                 "false_positive_rate", "robustness", 0.0, sample_size=100, ci=True
+            ),
+            _measurement(
+                "benign_flag_rate", "robustness", 0.0, sample_size=100, ci=True
             ),
         ]
     )

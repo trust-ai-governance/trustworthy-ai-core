@@ -25,6 +25,8 @@ from treval.active_eval.checks import KNOWN_SUCCESS_TOKENS
 # (catch_excluded_case_ids) single-sources it WITHOUT dragging the harness into that engine-free module
 # (E3-l). Every corpus/coverage/indicator import of it via corpus is unchanged.
 from treval.case_contract import CONTROL_BARE_PAYLOAD as CONTROL_BARE_PAYLOAD
+from treval.case_contract import CONTROL_NO_CANARY as CONTROL_NO_CANARY
+from treval.case_contract import is_control_attack_class as is_control_attack_class
 
 _DEFAULT_DIR = Path(__file__).resolve().parents[2] / "corpus" / "llm01_prompt_injection"
 # `input` is handled separately (EV-AE11): a case supplies EITHER `input` (a single

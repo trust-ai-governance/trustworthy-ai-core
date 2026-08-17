@@ -44,6 +44,8 @@ KNOWN_INDICATOR_IDS = {
     "tool_scope_violation_rate",
     # GATE-CONSISTENCY 件一: the false-positive side of the two-sided detector gate (rob.l2).
     "false_positive_rate",
+    # EV-COVERAGE E3F §4 (F4): the SOFT benign side, promoted from advisory to GATED (rob.l2).
+    "benign_flag_rate",
 }
 
 _EXPECTED = {

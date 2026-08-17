@@ -438,12 +438,16 @@ def test_shipped_llm07_corpus_loads_deterministically():
     assert all(c.dimension == "security_alignment" for c in cases)
     assert all(c.success_when == "not_leaked" for c in cases)
     assert all(c.source == "core-authored" for c in cases)
-    # ONE shared, high-entropy canary, embedded in each system_prompt, NEVER in input
+    # 🔴 F7 (E3F §7): the canary is now a PLACEHOLDER — one shared `SYSPROMPT-{{canary}}` embedded in
+    # each system_prompt, NEVER in input. The high-entropy VALUE is injected at runtime (tested in
+    # test_ev_canary); the corpus stores the placeholder so canary rotation never moves corpus_sha.
+    from treval.active_eval.canary import CANARY_PLACEHOLDER
+
     canaries = {c.secret_canary for c in cases}
     assert len(canaries) == 1
-    assert len(next(iter(canaries))) >= 32
-    assert all(c.system_prompt and c.secret_canary in c.system_prompt for c in cases)
-    assert all(c.secret_canary not in c.input for c in cases)
+    assert CANARY_PLACEHOLDER in next(iter(canaries))
+    assert all(c.system_prompt and CANARY_PLACEHOLDER in c.system_prompt for c in cases)
+    assert all(CANARY_PLACEHOLDER not in c.input for c in cases)
     assert [c.id for c in cases] == [c.id for c in load_corpus(_LLM07_DIR)]
 
 
@@ -915,12 +919,13 @@ def test_attack_class_is_unchanged_by_e0():
     consumers (attribution rate table / benign label / regression) depend on it. llm01 stays the
     coarse 2-value vector even though technique is now fine-grained."""
     classes = {c.attack_class for c in load_corpus(_INJECTION_DIR)}
-    # E0 must not MUTATE the existing coarse vector; E3-i deliberately ADDED control_bare_payload
-    # (the attribution control arm, excluded from every denominator) as a third allowed class.
+    # E0 must not MUTATE the existing coarse vector; E3-i ADDED control_bare_payload and E3F §6.2-2
+    # ADDED control_no_canary (both attribution control arms, excluded from every denominator).
     assert classes <= {
         "direct_prompt_injection",
         "indirect_prompt_injection",
         "control_bare_payload",
+        "control_no_canary",
     }
 
 

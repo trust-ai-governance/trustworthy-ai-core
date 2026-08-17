@@ -29,6 +29,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # 🔴 full history so the changed-lines gates (disclosure §7B, corpus rule-2)
+          # can diff against the base branch — a shallow clone has no base ref to compare.
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
@@ -158,6 +161,24 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}  # 🔴 imports treval — same reason as the corpus gate
         run: python tools/check_egress.py
+
+      # E3F 3b — canary hygiene: no LITERAL canary left in the corpus (F7 requires the {{canary}}
+      # placeholder), and the injection attack↔benign canary carrier rates stay within 20pp (§6.2-3).
+      - name: Canary hygiene gate
+        if: steps.detect.outputs.has_py == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}  # 🔴 imports treval — same reason as the corpus gate
+        run: python tools/check_canary.py
+
+      # E3F F8 (§7B) — a measured VALUE must not be written into new prose (docs / registry / source
+      # comments). Runs ONLY on lines added vs the base branch; corpus/ & tests/fixtures/ are exempt.
+      - name: Disclosure-of-measured-values gate
+        if: steps.detect.outputs.has_py == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          BASE=$(git merge-base HEAD "origin/${{ github.base_ref || 'main' }}" 2>/dev/null || echo HEAD)
+          python tools/check_disclosure.py --base "$BASE"
 
       - name: Vulnerability scan with pip-audit
         run: pip-audit || true

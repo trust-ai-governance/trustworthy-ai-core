@@ -20,6 +20,7 @@ renders insufficient_data, honest missing data, not a crash).
 from __future__ import annotations
 
 import argparse
+import secrets
 import sys
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from pathlib import Path
 from treval.active_eval import (
     CorpusIndicator,
     BenignFlagRate,
+    BenignFlagRateHardOnly,
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionCatchRateObservable,
@@ -43,8 +45,10 @@ from treval.active_eval import (
     load_corpus,
     run_corpus,
 )
+from treval.active_eval.canary import CanarySet, assert_no_canary_plaintext
 from treval.active_eval.cases import serialize_case_contract
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
+from treval.active_eval.indicators import DEFAULT_ARM_PARITY, check_arm_parity
 from treval.active_eval.target import ProbeResult
 from treval.case_contract import CaseContractError
 from treval.cli.bundle import build_bundle
@@ -67,6 +71,36 @@ _DEFAULT_CORPUS = _ROOT / "corpus"
 
 EXIT_OK = 0
 EXIT_IO = 3
+
+
+class DuplicateProbeError(RuntimeError):
+    """F5 (§5) — a case_id was probed more than once in one collection (the case-level dedup broke)."""
+
+
+def _assert_probed_once(results: tuple[ProbeResult, ...]) -> None:
+    """🔴 F5 (§5.2) — the case-level dedup guarantee as a fail-CLOSED assertion (RAISE, never warn):
+    each case_id appears in the probe results EXACTLY once. A duplicate means a case was probed twice,
+    so its decision- and output-side numbers would read DIFFERENT executions — the exact bug F5 removes.
+    Restoring the old directory-level key (a case in two directories) trips this."""
+    counts: dict[str, int] = {}
+    for pr in results:
+        counts[pr.case_id] = counts.get(pr.case_id, 0) + 1
+    dups = sorted(cid for cid, n in counts.items() if n > 1)
+    if dups:
+        raise DuplicateProbeError(
+            f"F5: case_id(s) probed more than once in one collection: {dups[:5]} — the case-level "
+            "dedup broke (a case's decision- and output-side numbers would read different executions)"
+        )
+
+
+def _run_arm_parity() -> str:
+    """E3F §4 (F4) — the single arm-parity口径 this run stamped. The curated producers all build via
+    the zero-arg factory, so catch and benign both use DEFAULT_ARM_PARITY; check_arm_parity enforces
+    that they agree (it RAISES on a mismatch, §4.4-4) so the invariant is asserted, not merely assumed,
+    at the one place the value enters the bundle."""
+    catch_arm = benign_arm = DEFAULT_ARM_PARITY
+    check_arm_parity(catch_arm, benign_arm)
+    return catch_arm
 
 
 @dataclass(frozen=True)
@@ -140,6 +174,15 @@ CURATION: tuple[Producer, ...] = (
     # rule that scores 0% hard-FPR yet high recall is still loud).
     Producer("false_positive_rate", FalsePositiveRate, "llm01_benign"),
     Producer("benign_flag_rate", BenignFlagRate, "llm01_benign"),
+    # E3F "两种读法" — the SAME benign_flag_rate under the hard_only口径, as a DISCLOSURE row (subject),
+    # side-by-side with the graded hard_or_flag aggregate in ONE bundle so the口径's effect is visible
+    # without a second run. Shares the id, differentiated by subject ⇒ never trips DuplicateIndicatorError.
+    Producer(
+        "benign_flag_rate",
+        BenignFlagRateHardOnly,
+        "llm01_benign",
+        subject="arm_parity:hard_only",
+    ),
     # output-side (measurable on a bare model)
     Producer("injection_success_rate", InjectionSuccessRate, "llm01_prompt_injection"),
     Producer(
@@ -164,6 +207,33 @@ CURATION: tuple[Producer, ...] = (
         "tier2_shadow_recall_lift", Tier2ShadowRecallLift, "llm01_prompt_injection"
     ),
 )
+
+
+# §8.5.2 — the §6.2-3 carrier-rate gate's two arms are DERIVED from CURATION, never hand-listed. The
+# ATTACK arm is whatever corpus the injection indicators bind to; the BENIGN arm whatever the benign
+# indicators bind to. A hand-list is correct only by COINCIDENCE — the day someone binds a benign
+# indicator to a new corpus, a hand-list silently fails to widen and nothing reminds them. Deriving it
+# means the gate's benign arm expands WITH the binding (构造一致, not coincidentally-consistent). 🔴 The
+# indicator SETS here are the definition of each arm; the DIRS come from the bindings, so a known benign
+# indicator on a new corpus pulls that corpus into the arm automatically.
+_ATTACK_ARM_INDICATOR_IDS = frozenset(
+    {"injection_catch_rate", "tier2_shadow_recall_lift"}
+)
+_BENIGN_ARM_INDICATOR_IDS = frozenset({"false_positive_rate", "benign_flag_rate"})
+
+
+def carrier_arm_dirs() -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(attack_dirs, benign_dirs) for the carrier-rate gate, derived from CURATION so the arms track the
+    indicator↔corpus bindings (the single source of truth, §8.5.2). Each sorted + de-duplicated. Today
+    == (("llm01_prompt_injection",), ("llm01_benign",))."""
+
+    def _dirs(ids: frozenset[str]) -> tuple[str, ...]:
+        return tuple(
+            sorted({p.corpus_subdir for p in CURATION if p.indicator_id in ids})
+        )
+
+    return _dirs(_ATTACK_ARM_INDICATOR_IDS), _dirs(_BENIGN_ARM_INDICATOR_IDS)
+
 
 # PASSIVE producers (EV-5, EV-9): measured over the eval WAL's AuditEvidence stream, feeding the
 # MaturityReport's dimension grid (NOT the OWASP eval_report). Distinct ids, so they never collide
@@ -287,6 +357,10 @@ class ActiveScan:
     # UNMEASURED (n/a), never 0: "the judge scored below τ" and "we never looked" must not
     # collapse into the same number (the fail-open shape this ticket exists to close).
     tier2_drain_executed: bool = False
+    # F7 (E3F §7.3-③) — the run's canary-set identity (sha256-of-salt handle, NOT the salt or any
+    # canary string). Pins WHICH canary epoch this run used so two runs stay comparable (same
+    # corpus_sha, different canaries). Empty when nothing was probed.
+    canary_set_id: str = ""
 
 
 def collect_measurements(
@@ -350,27 +424,58 @@ def collect_measurements(
 
     probed: dict[str, tuple[CorpusCase, ...]] = {}
     runs: dict[str, tuple[ProbeResult, ...]] = {}
+    # F7 (E3F §7.3) — ONE run-level salt so every case's canary shares one epoch (one canary_set_id).
+    # The salt is SECRET (never stored); only its sha256-derived set_id reaches provenance. corpus_sha is
+    # taken from the ORIGINAL corpus (with {{canary}} placeholders) BEFORE injection, so canary rotation
+    # never moves it. A no-op on the current literal corpus (inject returns identity) until 3c.
+    run_salt = secrets.token_hex(32)
+    canary_set_id = ""
+    # 🔴 F5 (§5) — dedup at CASE-ID level, not directory level. Load every subdir, then MERGE all cases
+    # into one unique-by-case_id set and probe it ONCE; dispatch results back per subdir by case_id. The
+    # old per-directory probing relied on the COINCIDENCE that no case_id lives in two directories —
+    # nothing guarded it, so a case referenced by two directories would be probed twice and the decision-
+    # and output-side indicators would again read DIFFERENT executions (the two-runs bug in a new shape).
+    subdir_ids: dict[str, list[str]] = {}
+    unique_cases: dict[str, CorpusCase] = {}
     for subdir, prods in by_subdir.items():
         try:
             corpus = tuple(load_corpus(corpus_root / subdir))
-            sha = corpus_fingerprint(corpus)
-            results = tuple(run_corpus(list(corpus), target))  # type: ignore[arg-type]
-        except Exception as e:  # env/transport/corpus failure — record, keep going
+        except (
+            Exception
+        ) as e:  # corpus load failure — record, keep going (this subdir absent)
             for prod in prods:
                 warnings.append(
                     f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
                 )
             continue
         probed[subdir] = corpus
-        runs[subdir] = results
+        subdir_ids[subdir] = [c.id for c in corpus]
+        sha = corpus_fingerprint(
+            corpus
+        )  # per-subdir sha over its OWN cases (unchanged)
         for prod in prods:
             corpus_sha[prod.indicator_id] = sha
-        for pr in results:
+        for c in corpus:
+            unique_cases.setdefault(
+                c.id, c
+            )  # a case in two subdirs ⇒ ONE probe (dedup)
+
+    if unique_cases:
+        cset = CanarySet.generate(unique_cases.values(), salt=run_salt)
+        canary_set_id = cset.set_id
+        all_results = run_corpus(list(unique_cases.values()), target, canary_set=cset)  # type: ignore[arg-type]
+        _assert_probed_once(
+            all_results
+        )  # 🔴 F5 — a case_id probed >1 ⇒ RAISE, never warn
+        by_case = {pr.case_id: pr for pr in all_results}
+        for pr in all_results:
             probe_count += 1
             if pr.error is not None:
                 error_count += 1
                 if first_error is None:
                     first_error = pr.error
+        for subdir, ids in subdir_ids.items():
+            runs[subdir] = tuple(by_case[cid] for cid in ids if cid in by_case)
 
     # 🔴 PHASE 2 — drain the ASYNC Tier-2 governance records ONCE, after ALL probing (G1).
     #
@@ -432,6 +537,7 @@ def collect_measurements(
         injection_cases,
         injection_results,
         drained,
+        canary_set_id,
     )
 
 
@@ -461,6 +567,8 @@ def _write_case_contract(
             target_kind="gateway",
             tenant_id=tenant_id,
             generated_at_ns=time.time_ns(),
+            # E3F §8.2-3 — the run's口径; a hard_only (diagnostic) run refuses to emit a contract.
+            arm_parity=_run_arm_parity(),
         )
     except CaseContractError as e:
         warnings.append(f"--cases-out: case contract did not re-add (not written): {e}")
@@ -812,8 +920,17 @@ def run_collect(args: argparse.Namespace) -> int:
             admin_url_declared=admin_url_declared,
             # E3-n ② — this run's probe span; active rates cite it, passive/census keep observed_window.
             probe_window=probe_window,
+            # E3F §4 (F4) — the arm-parity口径 both arms ran on. The curated producers all construct
+            # via the zero-arg factory ⇒ DEFAULT_ARM_PARITY for catch AND benign; check_arm_parity
+            # asserts that invariant (refusing a mismatched pair, §4.4-4) before it is stamped.
+            arm_parity=_run_arm_parity(),
+            # F7 (E3F §7.3-③) — the run's canary epoch (sha256-of-salt handle, no plaintext).
+            canary_set_id=active.canary_set_id,
         ),
     )
+    # F7 (E3F §7.4-5) — the collect bundle is a public artifact (aggregates + provenance, no response
+    # content), so it must carry ZERO canary plaintext. Fail CLOSED before writing.
+    assert_no_canary_plaintext(bundle, where="collect bundle")
     out = args.out or "bundle.json"
     try:
         import json

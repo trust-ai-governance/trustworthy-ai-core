@@ -469,6 +469,11 @@ def _decision_ev(rid: str, *, block: bool) -> AuditEvidence:
         if block
         else rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
     )
+    # F1 (§1.3): a real injection block fires an injection rule — carry one (matched iff BLOCK, inj-
+    # id) so catch is ATTRIBUTABLE; a bare BLOCK with no rule would (correctly) read as unattributable.
+    r = ctx.decision.rules_evaluated.add()
+    r.rule_id = "inj-1"
+    r.matched = block
     return AuditEvidence(
         ref=EvidenceRef(source="wal:frozen", seq=1, request_id=rid),
         integrity=IntegrityStatus.VERIFIED,

@@ -21,6 +21,7 @@ from treval.active_eval.corpus import (
     CONTROL_BARE_PAYLOAD,
     CorpusCase,
     corpus_fingerprint,
+    is_control_attack_class,
 )
 
 # OWASP LLM Top-10 — axis ① is measured against this fixed list (a RANGE DECLARATION, not a score).
@@ -109,14 +110,15 @@ def is_benign(case: CorpusCase) -> bool:
 
 
 def is_control(case: CorpusCase) -> bool:
-    """§2.2.3 — a `control_bare_payload` case: the THIRD class, NEITHER attack NOR benign. It re-runs a
-    verbatim external payload with the injection SKELETON removed so the attribution arm can MEASURE
-    whether a partner's catch is due to injection detection. It carries no attack_technique and covers
-    nothing, so it is excluded from EVERY axis / denominator (technique · occupancy · the observable
-    floor · source diversity · injection_catch_rate · false_positive_rate). 🔴 It must be its own
-    class, NOT folded into benign: a control that is blocked is a CORRECT block, so counting it as
-    benign would inflate FPR — the exact §2.2.1 disease this fix must not reinstall."""
-    return case.attack_class == CONTROL_BARE_PAYLOAD
+    """§2.2.3 / §6.2-2 — a CONTROL case (any `control_*`): NEITHER attack NOR benign. control_bare_payload
+    re-runs a verbatim external payload with the injection SKELETON removed; control_no_canary re-runs an
+    attack with the CANARY line removed — both let the attribution arm MEASURE (not claim) what a catch is
+    due to. A control carries no attack_technique and covers nothing, so it is excluded from EVERY axis /
+    denominator (technique · occupancy · the observable floor · source diversity · injection_catch_rate ·
+    false_positive_rate). 🔴 §8.3.1b②: keyed on the generic `control_` prefix, so control_no_canary and any
+    future control class are excluded WITHOUT another edit. 🔴 A control must be its OWN class, NOT folded
+    into benign: a control that is blocked is a CORRECT block, so counting it benign would inflate FPR."""
+    return is_control_attack_class(case.attack_class)
 
 
 def _is_attack(case: CorpusCase) -> bool:
@@ -651,10 +653,13 @@ def check_external_verbatim_control(
     1:1 per case_id (§2.2.3 is now per-case, not deduplicated): exactly ONE control must point at each
     external-verbatim case. FULL-scan standing door — GREEN today (no external-verbatim case exists), and
     it bites only when such a case arrives (its partner ships in the same freeze, §2.2.3)."""
+    # 🔴 count control_bare_payload SPECIFICALLY — the 1:1 skeleton contrast. A control_no_canary
+    # (§6.2-2) may ALSO point at the same attack via control_for, but it is a DIFFERENT control (canary
+    # removed, not skeleton removed) and is NOT the 1:1 partner this rule requires.
     control_counts: Counter[str] = Counter()
     for cases in by_dir.values():
         for c in cases:
-            if is_control(c) and c.control_for:
+            if c.attack_class == CONTROL_BARE_PAYLOAD and c.control_for:
                 control_counts[c.control_for] += 1
     out: list[Violation] = []
     for d, cases in by_dir.items():

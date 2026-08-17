@@ -113,6 +113,8 @@ def build_provenance(
     build_fingerprint_after: dict[str, Any] | None = None,
     admin_url_declared: bool = False,
     probe_window: tuple[int, int] | None = None,
+    arm_parity: str = "hard_or_flag",
+    canary_set_id: str | None = None,
 ) -> dict[str, Any]:
     """The run's pin artifact, embedded in the collect bundle (EV-PIN §1.3).
 
@@ -190,4 +192,17 @@ def build_provenance(
         # four-cell / success) cite THIS in their citation_form; passive / census indicators keep
         # `observed_window` (the WAL range they actually read). None when nothing was probed.
         "probe_window": list(probe_window) if probe_window else None,
+        # E3F §1 (F1) — injection_catch_rate now counts a catch ONLY when a matched INJECTION rule
+        # earned it (rule-scoped attribution), never "the gateway reacted for any reason". Stamped as a
+        # CONSTANT because Core always attributes post-F1: its PRESENCE marks the new epoch, so a
+        # rule_scoped run's catch number is 🔴 NOT comparable to a pre-F1 (key-absent) run's (§1.4).
+        "catch_attribution": "rule_scoped",
+        # E3F §4 (F4) — the ARM-PARITY口径 the catch AND benign arms shared this run (hard_or_flag /
+        # hard_only). Recorded so a run whose two arms disagreed can be refused (§4.4-4) and so the
+        # benign gate is read on the same basis the catch number was.
+        "arm_parity": arm_parity,
+        # F7 (E3F §7.3-③/§7.4-4) — this run's canary-set identity: a sha256-of-salt handle, 🔴 NEVER the
+        # salt or any canary plaintext. Pins WHICH canary epoch produced the numbers, so two runs stay
+        # comparable (same corpus_sha, rotated canaries). None when nothing was probed / no canary set.
+        "canary_set_id": canary_set_id or None,
     }

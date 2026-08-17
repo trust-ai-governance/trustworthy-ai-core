@@ -694,8 +694,8 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
     assert (
         (CRITERIA_VERSION, CRITERIA_BLOCKERS)
         == (
-            2,  # 1→2: E3-h added missing_run_config; E3-m + E3-n ③ FOLD into it (no re-bump); E3-n ④
-            # adds build_fingerprint_changed — all folded into the SAME uncommitted v2, so VERSION stays 2.
+            3,  # 1→2: E3-h/m/n folded into the then-uncommitted v2 (no re-bump). 🔴 2→3: E3F §8.2-2
+            # adds `build_uncovered` — v2 is now SHIPPED, so a new identity is a REAL bump, not a fold.
             frozenset(
                 {
                     "integrity_broken",
@@ -706,7 +706,8 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
                     "missing_segment_hash",
                     "not_wal_anchored",
                     "missing_run_config",
-                    "build_fingerprint_changed",  # E3-n ④ — the one new identity
+                    "build_fingerprint_changed",  # E3-n ④
+                    "build_uncovered",  # E3F §8.2-2 — fingerprint doesn't cover the detection code path
                 }
             ),
         )

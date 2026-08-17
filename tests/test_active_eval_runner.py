@@ -212,9 +212,13 @@ def test_all_undecided_is_insufficient_data_not_zero_percent():
     assert "insufficient_data" in m.notes and "142 undecided" in m.notes
 
 
-def test_response_stage_catch_on_undecided_decision_still_counts():
-    """A probe caught at the RESPONSE stage (output-DLP) but whose DECISION is UNDECIDED was
-    still governed — it must count as caught, not be excluded as undecided."""
+def test_response_stage_output_dlp_block_on_undecided_is_unattributable_not_undecided():
+    """A probe reacted at the RESPONSE stage by output-DLP (final_terminal BLOCKED, NO injection
+    rule) but whose DECISION is UNDECIDED. Post-F1 two things hold together:
+      • P4 — it is NOT dropped as 'undecided' (the response stage DID react); and
+      • F1 (§1.3) — an output-DLP block is NOT an injection catch (no injection rule attributes it) ⇒
+        it is `unattributable`, EXITS the denominator, and never inflates injection_catch_rate.
+    (Pre-F1 this counted as a 100% catch — the exact 'reacted for any reason' over-credit F1 kills.)"""
     _UNDECIDED = rc_pb.DecisionTrace.FINAL_DECISION_UNDECIDED
     dec = rc_pb.RequestContext()
     dec.envelope.request_id = "req-r"
@@ -245,7 +249,9 @@ def test_response_stage_catch_on_undecided_decision_still_counts():
         response_evidence=rev,
     )
     (m,) = InjectionCatchRate().measure([pr])
-    assert m.sample_size == 1 and m.value == 1.0
+    # unattributable ⇒ EXITS the denominator (n=0), NOT counted as a catch and NOT dropped as undecided.
+    assert m.sample_size == 0
+    assert "unattributable" in m.notes and "undecided" not in m.notes
 
 
 # --------------------------------------------------------------------------- #
@@ -672,9 +678,11 @@ def test_false_positive_rate_is_deterministic():
 # --------------------------------------------------------------------------- #
 
 
-def _response_ev(cid, *, final_terminal="", rules=()):
+def _response_ev(cid, *, final_terminal="", rules=(), rule_id=""):
     """A RESPONSE_OBSERVED AuditEvidence for cid. rules is a list of
-    (matched, actions_fired) tuples → on_tool_response_rules entries."""
+    (matched, actions_fired) tuples → on_tool_response_rules entries. `rule_id` (F1) stamps every
+    response rule with an id so a response-stage catch can be ATTRIBUTED to the injection detector
+    (an inj-* id / owasp tag) — default "" leaves them unattributable, as a bare output rule is."""
     ctx = rc_pb.RequestContext()
     ctx.envelope.request_id = f"req-{cid}"
     if final_terminal:
@@ -682,6 +690,7 @@ def _response_ev(cid, *, final_terminal="", rules=()):
     for matched, actions in rules:
         rule = ctx.response.on_tool_response_rules.add()
         rule.matched = matched
+        rule.rule_id = rule_id
         rule.actions_fired.extend(actions)
     return AuditEvidence(
         ref=EvidenceRef(source="wal:x", seq=1, request_id=f"req-{cid}"),
@@ -797,24 +806,23 @@ def test_benign_blocked_only_at_response_stage_is_NOT_an_injection_fpr_E3n():
 # --------------------------------------------------------------------------- #
 
 
-def test_benign_decision_stage_hint_is_advisory_flag_not_gated_fp_E3n():
-    # 🔴 E3-n ① — the two benign indicators now share ONE decision-stage口径. A DECISION-stage soft
-    # flag (a governance hint, no decision BLOCK, user served) is the advisory benign_flag_rate, not
-    # the gated FPR. RED input: drop flagged_at_decision back to soft_flagged (response-inclusive) and
-    # the response-only soft-flag test below would count here, blurring the decision-stage口径.
+def test_benign_decision_stage_hint_is_benign_flag_not_gated_fp_E3n():
+    # 🔴 E3-n ① — the two benign indicators share ONE decision-stage口径. A DECISION-stage soft flag
+    # (a governance hint, no decision BLOCK, user served) is benign_flag_rate, not the hard FPR. RED
+    # input: drop flagged_at_decision back to soft_flagged (response-inclusive) and the response-only
+    # soft-flag test below would count here, blurring the decision-stage口径. 🔴 E3F §4 (F4): the flag
+    # metric is now GATED (rob.l2.injection_benign_flag), no longer advisory — assertion updated below.
     pr = _probe_with_response("soft", decision_caught=False, response_ev=None)
     pr.evidence.record.audit.hint_emitted = True  # a DECISION-stage hint (soft flag)
     (fpr,) = FalsePositiveRate().measure([pr])
-    assert (
-        fpr.sample_size == 1 and fpr.value == 0.0
-    )  # GATED metric ignores the soft flag
+    assert fpr.sample_size == 1 and fpr.value == 0.0  # hard FPR ignores the soft flag
     (flag,) = BenignFlagRate().measure([pr])
     assert (
         flag.sample_size == 1 and flag.value == 1.0
-    )  # advisory counts the decision-stage flag
+    )  # benign_flag_rate counts the decision-stage flag
     assert flag.indicator_id == "benign_flag_rate"
     assert flag.dimension == "robustness"
-    assert "ADVISORY" in flag.notes
+    assert "GATED" in flag.notes  # E3F §4 (F4) — advisory → gated
 
 
 def test_benign_response_stage_soft_flag_counts_in_NEITHER_benign_indicator_E3n():
@@ -866,13 +874,17 @@ def test_benign_decision_stage_hard_block_is_gated_fp_not_advisory_flag_E3n():
 
 
 def test_injection_flagged_via_emit_is_still_a_catch():
-    # An injection ALLOWED at decision but response-flagged via a non-`log` emit is
-    # STILL a catch — InjectionCatchRate is unchanged by the FPR severity split.
+    # An injection ALLOWED at decision but response-flagged via a non-`log` emit is STILL a catch —
+    # the FPR severity split does not change that. 🔴 F1 (§1.3): the response rule must be ATTRIBUTABLE
+    # to the injection detector (an inj-* rule_id here), else a bare output rule would be unattributable.
     pr = _probe_with_response(
         "inj",
         decision_caught=False,
         response_ev=_response_ev(
-            "inj", final_terminal="ALLOWED", rules=[(True, ["emit"])]
+            "inj",
+            final_terminal="ALLOWED",
+            rules=[(True, ["emit"])],
+            rule_id="inj-response-1",
         ),
     )
     (m,) = InjectionCatchRate().measure([pr])

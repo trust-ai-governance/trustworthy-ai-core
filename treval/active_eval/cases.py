@@ -33,9 +33,16 @@ from collections.abc import Iterable, Mapping, Sequence
 # UI-3 §5.1 — the READ half now lives in the pure, stdlib-only treval.case_contract; re-exported
 # here so every existing `from treval.active_eval.cases import <name>` path is unchanged (the case
 # SERVICE / `cases verify` import the pure module directly and never pull this engine-bound module).
-from treval.active_eval.checks import attribution_cell, evaluate, gateway_undecided
+from treval.active_eval.canary import assert_no_canary_plaintext
+from treval.active_eval.checks import (
+    attribution_cell,
+    evaluate,
+    gateway_undecided,
+    injection_attribution_source,
+)
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import (
+    DEFAULT_ARM_PARITY,
     InjectionCatchRate,
     InjectionDeclinedByModelRate,
     InjectionHardBlockedRate,
@@ -118,6 +125,20 @@ def _governance_reacted(pr: ProbeResult) -> bool:
     return evaluate("blocked_or_flagged", pr)
 
 
+def _row_catch_attribution(pr: ProbeResult) -> str | None:
+    """F1 (E3F §1) — the case row's catch-attribution signal, mirroring the indicator at the DEFAULT
+    (`hard_or_flag`)口径 that aggregates_from_results measures against, so the rows re-add BIT-FOR-BIT
+    (§3.1). Three states:
+      • null                — the gateway did NOT react (a miss: in the denominator, uncaught);
+      • 'unattributable'    — reacted, but NO injection rule matched ⇒ EXITS the catch denominator;
+      • a source string     — 'tag_attack_class' / 'tag_owasp' / 'prefix_fallback' ⇒ an attributed catch.
+    🔴 Kept separate from `governance_reacted` (which stays the bare blocked_or_flagged, still needed by
+    the control-partner exclusion): F1 splits 'reacted' from 'reacted BY an injection rule'."""
+    if not evaluate("blocked_or_flagged", pr):
+        return None  # not reacted — a genuine miss (measurable, uncaught)
+    return injection_attribution_source(pr) or "unattributable"
+
+
 def _evidence_ref(pr: ProbeResult) -> dict | None:
     """A POINTER into the WAL (§2), never content: {source, seq} from the decision record's ref.
     None when the probe carried no WAL record (errored / no-evidence target)."""
@@ -137,6 +158,19 @@ def _fired_rule_ids(pr: ProbeResult) -> list[str]:
     if ev is None:
         return []
     return [r.rule_id for r in ev.record.decision.rules_evaluated if r.matched]
+
+
+def _fired_rule_ids_response(pr: ProbeResult) -> list[str]:
+    """F2 (E3F §2) — the rule_ids that FIRED (matched) on the RESPONSE record
+    (`response.on_tool_response_rules`), the whole stage `_fired_rule_ids` (decision-only) missed.
+    🔴 Kept a SEPARATE field (§2.2 option A: flat `fired_rule_ids` + new `fired_rule_ids_response`)
+    so the two stages stay distinguishable — F1's attribution and the decision-stage FPR口径 read the
+    DECISION field ONLY and are never polluted by a response-side rule. Empty (never None) when there
+    is no response record (no response-stage governance / errored / no-WAL target)."""
+    ev = pr.response_evidence
+    if ev is None:
+        return []
+    return [r.rule_id for r in ev.record.response.on_tool_response_rules if r.matched]
 
 
 def build_cases(
@@ -171,9 +205,17 @@ def build_cases(
             "verdict": case_verdict(pr),
             "observable_via": observable_via(pr),
             "governance_reacted": _governance_reacted(pr),
+            # F1 (E3F §1) — the RULE-SCOPED catch attribution the aggregate now counts. Kept beside
+            # (not replacing) governance_reacted: null=miss, 'unattributable'=reacted-but-not-injection
+            # (exits the catch denominator), source string=attributed catch. recompute_from_cases reads
+            # THIS for the catch num/den; a pre-F1 row without the key falls back to governance_reacted.
+            "catch_attribution": _row_catch_attribution(pr),
             # E3-n ① — the rule_ids that FIRED this run, emitted as bare facts (no categorization),
-            # so a flagged benign case can be inspected for WHICH rules matched.
+            # so a flagged benign case can be inspected for WHICH rules matched. 🔴 DECISION-stage only.
             "fired_rule_ids": _fired_rule_ids(pr),
+            # F2 (E3F §2) — the RESPONSE-stage matched rules, kept separate so the reader is not misled
+            # into "no rule blocked it" when a response-side rule (e.g. output-DLP) did.
+            "fired_rule_ids_response": _fired_rule_ids_response(pr),
             "availability": availability,
             "request_id": pr.request_id or None,
             "evidence_ref": _evidence_ref(pr),
@@ -234,15 +276,27 @@ def serialize_case_contract(
     tenant_id: str,
     generated_at_ns: int,
     include_response_content: bool = False,
+    arm_parity: str = DEFAULT_ARM_PARITY,
 ) -> dict:
     """The EV-R2 case contract envelope (§2). disclosure_class is set here and is MANDATORY:
     Tier 0 ⇒ 'operator_only'; --include-response-content flips it to 'internal_handoff' (Tier 1,
     which the report store refuses, §2.2). Runs the §3.1 recompute guard BEFORE returning — a
     contract that cannot re-add its own aggregates is never emitted.
 
+    🔴 E3F §8.2-3: the aggregates + the rows' `catch_attribution` are built at the DEFAULT
+    (`hard_or_flag`)口径; a `hard_only` run is a DIAGNOSTIC口径 that would fork the contract, so it
+    does NOT produce one — this REFUSES (raise), naming the口径, rather than emitting a contract whose
+    catch silently disagrees with a hard_only report.
+
     🔴 UI-3 §5.2 (v3): `tenant_id` is MANDATORY and must be the tenant the probes ACTUALLY ran as
     (the caller passes `target.tenant_id`, the same tenant `evidence_ref` points at) — it is the
     key the case service scopes access by, so it must never be a second, drifting env read."""
+    if arm_parity != DEFAULT_ARM_PARITY:
+        raise CaseContractError(
+            f"arm_parity={arm_parity!r} is a DIAGNOSTIC口径 — it does not produce a case contract "
+            f"(the contract's aggregates + catch_attribution are built at the default "
+            f"'{DEFAULT_ARM_PARITY}'口径, which a hard_only run would fork). E3F §8.2-3."
+        )
     cases = list(cases)
     results = list(results)
     built = build_cases(
@@ -256,11 +310,15 @@ def serialize_case_contract(
     mismatches = compare_cases_to_aggregates(built, aggregates)
     if mismatches:
         raise CaseContractError(_fork_message(mismatches))
-    return {
+    envelope = {
         "schema_version": SCHEMA_VERSION,
         "disclosure_class": "internal_handoff"
         if include_response_content
         else "operator_only",
+        # E3F §8.2-4 — the epoch marker (mirrors provenance.catch_attribution): a rule_scoped contract
+        # SELF-DECLARES its口径, so validate_case_contract can REFUSE a rule_scoped file whose rows lost
+        # `catch_attribution` instead of silently re-adding it under the pre-F1 fallback.
+        "catch_attribution": "rule_scoped",
         "corpus_sha": corpus_fingerprint(cases),
         "target_kind": target_kind,
         "tenant_id": tenant_id,
@@ -268,3 +326,11 @@ def serialize_case_contract(
         "aggregates": aggregates,
         "cases": built,
     }
+    # F7 (E3F §7.4-5 / §8.3.3) — a Tier-0 (operator_only) contract carries POINTERS only, so it must
+    # contain ZERO canary plaintext (a leak detector printed into a public artifact is burned). 🔴 The
+    # Tier-1 internal_handoff (--include-response-content) is EXEMPT: a case that ACTUALLY leaked has the
+    # canary in its response_text, which IS the evidence — asserting there would fail the one run we
+    # caught a leak.
+    if not include_response_content:
+        assert_no_canary_plaintext(envelope, where="case contract (Tier-0)")
+    return envelope

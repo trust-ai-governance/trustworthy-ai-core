@@ -98,7 +98,11 @@ def test_binomial_ci_rejects_a_non_rate_value():
 def test_rate_indicator_fills_an_interval_bracketing_its_value():
     ctx = rc_pb.RequestContext()
     ctx.decision.final_decision = _BLOCK  # type: ignore[assignment]
-    ctx.decision.rules_evaluated.add().matched = True
+    _rule = (
+        ctx.decision.rules_evaluated.add()
+    )  # F1: an injection-attributable matched rule (inj- id)
+    _rule.rule_id = "inj-1"
+    _rule.matched = True
     ev = AuditEvidence(
         ref=_REF[0],
         integrity=IntegrityStatus.VERIFIED,

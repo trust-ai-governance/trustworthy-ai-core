@@ -107,6 +107,9 @@ def _inputs():
                     "injection_catch_rate", "robustness", 0.92, sample_size=200, ci=True
                 ),
                 _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
+                # E3F §4 (F4) — real collect produces benign_flag_rate ALONGSIDE FPR (both over the
+                # benign corpus), so a faithful graded scenario carries it too. 0.0 passes ci_high≤0.05.
+                _m("benign_flag_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "chain_integrity",
                     "transparency_accountability",
@@ -138,6 +141,9 @@ def _inputs():
             [
                 _m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True),
                 _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
+                # E3F §4 (F4) — real collect produces benign_flag_rate ALONGSIDE FPR (both over the
+                # benign corpus), so a faithful graded scenario carries it too. 0.0 passes ci_high≤0.05.
+                _m("benign_flag_rate", "robustness", 0.0, sample_size=100, ci=True),
             ],
             _ROBUSTNESS_L3,
         ),
@@ -158,6 +164,9 @@ def _inputs():
                     ci=True,
                 ),
                 _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
+                # E3F §4 (F4) — real collect produces benign_flag_rate ALONGSIDE FPR (both over the
+                # benign corpus), so a faithful graded scenario carries it too. 0.0 passes ci_high≤0.05.
+                _m("benign_flag_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "chain_integrity",
                     "transparency_accountability",
@@ -182,6 +191,9 @@ def _inputs():
             [
                 _m("injection_catch_rate", "robustness", 0.9, sample_size=200, ci=True),
                 _m("false_positive_rate", "robustness", 0.0, sample_size=100, ci=True),
+                # E3F §4 (F4) — real collect produces benign_flag_rate ALONGSIDE FPR (both over the
+                # benign corpus), so a faithful graded scenario carries it too. 0.0 passes ci_high≤0.05.
+                _m("benign_flag_rate", "robustness", 0.0, sample_size=100, ci=True),
                 _m(
                     "token_cost_per_agent",
                     "efficient_reliability",

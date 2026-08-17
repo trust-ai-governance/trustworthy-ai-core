@@ -194,8 +194,11 @@ def test_p8_does_not_change_a_governed_run_missing_only_async_records():
     (m,) = Tier2ShadowRecallLift().measure(results)
     assert m.sample_size == 10, "WAL-present probes stay in the denominator"
     assert abs(m.value - 0.1) < 1e-9  # 1 rescued / 10 — unchanged by P8
-    assert "9 probe(s) had NO async record" in m.notes
-    assert "no WAL record" not in m.notes  # nothing was excluded
+    # 🔴 E3F §3.2-3 — the 9 Tier-1-HARD-blocked probes are `skipped_prefiltered` (judge never scores a
+    # blocked request, by design), NOT `no_async`. The old assertion conflated the two; F3 splits them.
+    assert "9 Tier-1-hard-blocked (judge pre-filtered" in m.notes
+    assert "had NO async record" not in m.notes  # none were genuinely missing a record
+    assert "no WAL record" not in m.notes  # nothing was excluded for lack of WAL
 
 
 def test_mixed_wal_and_no_wal_splits_the_denominator():
