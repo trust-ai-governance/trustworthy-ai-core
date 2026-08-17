@@ -86,6 +86,9 @@ MEASUREMENTS = (
     # GATE-CONSISTENCY 件一: rob.l2 is now a TWO-sided gate (recall AND false-positive) — a clean demo
     # needs the FPR side too (0/120 ⇒ ci_high 3.1% <= 0.05 met), else L2 stays uncertified.
     _m("false_positive_rate", "robustness", 0.0, "ratio", 120, ci=True),
+    # EV-COVERAGE E3F §4 (F4): rob.l2 also gates the SOFT benign side (benign_flag_rate, ci_high≤0.05);
+    # real collect emits it alongside FPR over the benign corpus, so the demo carries it too (0/120 met).
+    _m("benign_flag_rate", "robustness", 0.0, "ratio", 120, ci=True),
     # efficient_reliability: a HEALTHY latency baseline — 780 ms, not 60 s (good demo optics).
     _m("duration_p99", "efficient_reliability", 780.0, "ms", 240),
     _m("terminal_error_ratio", "efficient_reliability", 0.008, "ratio", 240),

@@ -77,7 +77,9 @@ def _probe(
         ctx.decision.final_decision = decision  # type: ignore[assignment]
         r = ctx.decision.rules_evaluated.add()
         r.rule_id = "inj-1"
-        r.matched = decision == _BLOCK
+        # F1 (§1.3): the injection rule is `matched` when it BLOCKS *or* emits the hint — a soft flag
+        # is emitted BY a matched rule, so the catch attributes to the injection detector (inj- id).
+        r.matched = decision == _BLOCK or hint
         if hint:
             ctx.audit.hint_emitted = True
         ev = AuditEvidence(
@@ -181,14 +183,15 @@ def test_envelope_embeds_the_indicator_aggregates():
 
 def test_件_a_constructed_fork_fails_closed():
     """🔴 §3.1 teeth: tamper ONE case row so it no longer re-adds ⇒ CaseContractError (the runtime
-    form of '加不回来 = 不可信'). Flipping the hard_blocked case's governance_reacted to False drops
-    the recomputed catch below the measured one."""
+    form of '加不回来 = 不可信'). 🔴 F1: the catch recompute now reads `catch_attribution` (not
+    governance_reacted), so flipping the hard_blocked case's catch_attribution to null (a lie: it WAS
+    an attributed catch) drops the recomputed catch below the measured one."""
     cases, results = _mixed_run()
     built = build_cases(cases, results, target_kind="gateway")
     assert_recomputes(built, results)  # clean first
     forked = [dict(c) for c in built]
     hard = next(c for c in forked if c["case_id"] == "hard")
-    hard["governance_reacted"] = False  # a lie: this case WAS caught
+    hard["catch_attribution"] = None  # a lie: this case WAS an attributed catch
     with pytest.raises(CaseContractError, match="recompute FORK") as exc:
         assert_recomputes(forked, results)
     assert "injection_catch_rate" in str(exc.value)

@@ -37,7 +37,9 @@ def _probe(cid, *, decision, followed=False, error=None, marker=_MARK, hint=Fals
         ctx.decision.final_decision = decision  # type: ignore[assignment]
         r = ctx.decision.rules_evaluated.add()
         r.rule_id = "inj-1"
-        r.matched = decision == _BLOCK
+        # F1 (§1.3): the injection rule is `matched` when it BLOCKS *or* emits the hint — a soft flag
+        # is emitted BY a matched rule, so the catch is attributable to the injection detector (inj- id).
+        r.matched = decision == _BLOCK or hint
         if hint:
             ctx.audit.hint_emitted = (
                 True  # soft flag: _blocked_or_flagged True, hard_blocked False

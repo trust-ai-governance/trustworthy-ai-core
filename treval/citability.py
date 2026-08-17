@@ -25,6 +25,7 @@ PROVENANCE facts only:
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from treval.models import INTERVAL_CENSUS, INTERVAL_TOTAL_FUNCTION, Measurement
@@ -35,6 +36,10 @@ from treval.registry.satisfied_when import (
 )
 
 WAL_ANCHORED = "wal_anchored"
+
+# E3F §8.2.2 — the detection-code content hash's SHAPE: 64-hex (a sha256). Distinguishes code_sha256
+# from a 40-hex git_sha, and validates form (these buildinfo fields are pass-through, not trusted).
+_CODE_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 _UNPINNED_FIX = (
     "unpinned run（未固定窗口）：补 --window-from-ns / --window-to-ns 重跑 —— unpinned 的窗口是移动"
@@ -58,13 +63,15 @@ _NO_STAMP_FIX = (
     "这份产物没有生成时刻 generated_at_ns，无法判断固定窗口是否已闭合 —— 用当前版本重新采集（collect）"
     "并重出报告，使其带上生成时刻；仅重跑 report 补不上这个采集期的数据"
 )
-# E3-n ④ — the tested party changed DURING the freeze. The build fingerprint (git_sha +
-# detection_switches, GET /admin/v1/buildinfo) is fetched before AND after the run; a single-bit
-# difference means the numbers describe no single system.
+# E3-n ④ — the tested party changed DURING the freeze. The build fingerprint (the RELIABLE content
+# hashes — runtime.code_sha256 / runtime.ruleset_sha256+ruleset_path / detection_switches, GET
+# /admin/v1/buildinfo) is fetched before AND after the run; a single-bit difference means the numbers
+# describe no single system. 🔴 §8.2.2(c): cite the CONTENT hashes, NOT git_sha — git_sha is a self-
+# report false under a dirty build tree (§8.2.2), so it must not read as the evidence a change is real.
 _BUILD_CHANGED_FIX = (
-    "被测方在冻结期间发生变更（/admin/v1/buildinfo 的 build fingerprint 跑前跑后逐位不一致，git_sha/"
-    "detection_switches 变了）：这一跑测的不是同一个系统 —— 作废重跑，不产 corpus_sha。冻结期零变更是"
-    "【可验证的】（比对指纹，不是相信时间戳）"
+    "被测方在冻结期间发生变更（/admin/v1/buildinfo 的 build fingerprint 跑前跑后逐位不一致 —— code_sha256 / "
+    "ruleset_sha256(+ruleset_path) / detection_switches 任一变了）：这一跑测的不是同一个系统 —— 作废重跑，"
+    "不产 corpus_sha。冻结期零变更是【可验证的】（比对指纹里的内容哈希，不是相信时间戳，也不靠 git_sha 自述）"
 )
 # E3-n ④ fail-CLOSED — the SAME identity (build_fingerprint_changed), the OTHER failure mode: --admin-url
 # was DECLARED but a snapshot could not be fetched (wrong port / non-200 / parse). "取不到" is a check
@@ -74,6 +81,21 @@ _BUILD_UNVERIFIED_FIX = (
     "声明了 --admin-url 却取不到被测方构建指纹（跑前或跑后 /admin/v1/buildinfo 失败 —— 见 warnings 里"
     "哪一侧、什么原因；常见是 admin 面在 :8081 而给成了 :8080）：取不到 = 无法核验冻结期间零变更，按 "
     "fail-closed 判不可引 —— 修正 admin 地址重跑，不产 corpus_sha。'取不到'不是'没声明'"
+)
+# E3F §8.2-2 / §8.2.1 / §8.2.2 — the fingerprint was FETCHED and bit-identical, but it proves only that
+# the RULESET didn't change (runtime.ruleset_sha256 + ruleset_path, §8.2.2a), NOT the detection CODE
+# PATH. The code identity is `runtime.code_sha256` — a 64-hex CONTENT hash of the detection code the
+# gateway will bake. 🔴 NOT build_facts (a status label: bool("absent") bit us, §8.2.1). 🔴 NOT git_sha
+# (a self-reported commit id: the image COPYs the working TREE, so git_sha=HEAD can differ from the code
+# in the image under a dirty tree — true in CI, FALSE in a local build, and the eval bench IS a local
+# build). code_sha256 absent / malformed ⇒ 本次印记未覆盖检测代码路径，不得据此声称被测方未变 (fail-CLOSED).
+_BUILD_UNCOVERED_FIX = (
+    "本次构建印记未覆盖检测代码路径（/admin/v1/buildinfo 的 runtime.code_sha256 缺失或形态不符 —— 需 64 位 "
+    "hex 的检测代码内容哈希）。🔴 不能用 git_sha 代替：镜像 COPY 工作树而非 git archive HEAD，脏树下 "
+    "git_sha=HEAD 也可能与镜像里的代码不符（CI 里成立、本地构建为假，而评测台就是本地构建）；build_facts 是"
+    "状态词（'baked'/'absent'），不是代码身份。code_sha256 就位前本门恒判未覆盖（正确，不为放行而放宽）。"
+    "边界：code_sha256 只在同一工具链下可复现，回答同机跑前跑后是否变化，不用于跨机比对。"
+    "ruleset_sha256 若参与比较须带 ruleset_path —— 发布镜像与评测台载入两份不同规则集，不带路径会被误读成漂移"
 )
 # E3-h/E3-m (§3.1/§5) — ONE blocker identity, TWO messages chosen by absent-vs-empty (timing-
 # independent). The scope now leads with language_scope (E3-m); updating these strings is a 文案
@@ -98,13 +120,16 @@ _CONFIG_UNDECLARED_FIX = (
 # version is bound to the IDENTITY of the blockers this gate can emit — not to their message wording.
 # --------------------------------------------------------------------------- #
 # 1→2: E3-h added the missing_run_config blocker (freeze-pack config required). E3-m then FOLDED
-# language_scope INTO that same criterion (same `missing_run_config` identity, no re-bump). E3-n now
-# folds into the SAME uncommitted v2 (no re-bump, exactly like E3-m): ③ EXTENDS _config_keys under the
-# SAME missing_run_config identity (detection_layer_status + upstream_timeout_s — fields present-or-not,
-# no new identity); ② adds NO blocker (a not-drained Tier-2 layer emits n/a, and n/a is CITABLE); only
-# ④ adds ONE new identity (`build_fingerprint_changed`). All three land BEFORE commit, so v2 covers
-# them at zero cost (a post-commit fold would have been a second bump + a second wave of invalidation).
-CRITERIA_VERSION = 2
+# language_scope INTO that same criterion (same `missing_run_config` identity, no re-bump). E3-n
+# folded into the SAME then-uncommitted v2 (no re-bump): ③ EXTENDS _config_keys under the SAME
+# missing_run_config identity; ② adds NO blocker (a not-drained Tier-2 layer emits n/a, and n/a is
+# CITABLE); ④ added ONE new identity (`build_fingerprint_changed`).
+# 🔴 2→3 (E3F §8.2-2): v2 is now SHIPPED (committed), so a new blocker identity is a REAL gate change,
+# NOT a pre-commit fold — `build_uncovered` (the fingerprint proves ruleset-invariance via
+# runtime.ruleset_sha256 but not detection-code invariance; the code identity is runtime.code_sha256,
+# not yet baked) is a stricter gate, so the version MUST bump. (§8.2.1/§8.2.2 later corrected its TRIGGER
+# — code_sha256 shape, not build_facts/git_sha — WITHOUT re-bumping: the identity set is unchanged.)
+CRITERIA_VERSION = 3
 
 # The stable identity keys this version's gate can emit — one per blocker-append site in
 # report_citability. 🔴 add / remove / repurpose any entry ⇒ BUMP CRITERIA_VERSION (a stricter OR a
@@ -122,9 +147,32 @@ CRITERIA_BLOCKERS: frozenset[str] = frozenset(
         "not_wal_anchored",  # _EVIDENCE_FIX
         "missing_run_config",  # _CONFIG_DRIFT_FIX / _CONFIG_UNDECLARED_FIX (E3-h/m/n) — ONE identity,
         # E3-n ③ EXTENDS its _config_keys (detection_layer_status + upstream_timeout_s), no new identity
-        "build_fingerprint_changed",  # _BUILD_CHANGED_FIX (E3-n ④) — the ONE new identity this fold adds
+        "build_fingerprint_changed",  # _BUILD_CHANGED_FIX / _BUILD_UNVERIFIED_FIX (E3-n ④) — one identity
+        "build_uncovered",  # _BUILD_UNCOVERED_FIX (E3F §8.2-2) — fingerprint doesn't cover the code path
     }
 )
+
+
+def _covers_detection_code(fp: Any) -> bool:
+    """E3F §8.2-2 / §8.2.1 / §8.2.2 — does this build fingerprint cover the DETECTION CODE PATH, or only
+    the ruleset? The code identity is `runtime.code_sha256` — a 64-hex CONTENT hash of the detection code.
+
+    🔴 Covered IFF code_sha256 exists AND is 64-hex — a positive SHAPE test (these fields are pass-
+    through, so validate the shape, not mere existence). NOT `build_facts` (a status LABEL — R3 sends the
+    string "absent", and `bool("absent")` is True, so a truthiness check read it as covered, §8.2.1).
+    NOT `git_sha` (a self-reported commit id: the image COPYs the working TREE, not `git archive HEAD`, so
+    git_sha=HEAD can differ from the code actually in the image under a dirty tree — true in CI, FALSE in a
+    local build, and the eval bench IS a local build). 🔴 Until the gateway ships code_sha256 this returns
+    False (uncovered) — CORRECT; do NOT loosen it to green a run. Honesty boundary: code_sha256 is
+    reproducible only under the SAME toolchain (answers same-machine before/after change, not cross-machine
+    comparison)."""
+    if not isinstance(fp, dict):
+        return False
+    runtime = fp.get("runtime")
+    if not isinstance(runtime, dict):
+        return False
+    code_sha = runtime.get("code_sha256")
+    return isinstance(code_sha, str) and bool(_CODE_SHA256_RE.match(code_sha))
 
 
 def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -221,9 +269,11 @@ def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
                 _CONFIG_UNDECLARED_FIX if _keys_present else _CONFIG_DRIFT_FIX
             )
     # 🔴 E3-n ④ — the tested party's zero-change-during-freeze claim, VERIFIED not trusted. The build
-    # fingerprint (git_sha + detection_switches, GET /admin/v1/buildinfo) is captured before AND after
-    # the run and stored verbatim. NOT gated on wal_dir (a build change voids any run). 🔴 A fingerprint
-    # COMPARE, never a timestamp (a self-reported "stopped at T" is exactly the attest this repo replaces).
+    # fingerprint (the content hashes runtime.code_sha256 / runtime.ruleset_sha256+ruleset_path /
+    # detection_switches, GET /admin/v1/buildinfo — NOT git_sha, a dirty-tree self-report, §8.2.2) is
+    # captured before AND after the run and stored verbatim. NOT gated on wal_dir (a build change voids
+    # any run). 🔴 A fingerprint COMPARE, never a timestamp (a self-reported "stopped at T" is exactly
+    # the attest this repo replaces).
     # 🔴 E3-n ④ THREE-STATE (fail-CLOSED) — a binary `both-present-and-differ` was fail-OPEN: a run
     # that DECLARED --admin-url but fetched nothing (wrong port ⇒ both null) slipped through as "no
     # claim". So key on `admin_url_declared` (the CLAIM): given the claim, the run is citable ONLY if
@@ -239,6 +289,12 @@ def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
             _fp_fix = _BUILD_CHANGED_FIX  # changed mid-run
         if _fp_fix:
             blockers.append(_fp_fix)
+        # 🔴 E3F §8.2-2 — even a fetched, bit-identical fingerprint proves only ruleset-invariance
+        # (runtime.ruleset_sha256), NOT the detection CODE PATH. Coverage = runtime.code_sha256 (64-hex),
+        # NOT build_facts (a status label) and NOT git_sha (self-report, false under a dirty build tree).
+        # Block when a fetched fingerprint doesn't cover it — a declared invariance we cannot verify.
+        elif not (_covers_detection_code(before) and _covers_detection_code(after)):
+            blockers.append(_BUILD_UNCOVERED_FIX)
     if bundle.get("evidence_basis") != WAL_ANCHORED:
         blockers.append(_EVIDENCE_FIX)
     return (not blockers, blockers)
@@ -297,6 +353,22 @@ FPR_KNOWN_LIMITATION_NOTE = (
     "【言语行为】——「提到」某注入模式与「实施」它在字面上可以完全一样，而可用于区分二者的表面特征"
     "（如引号）本身就是一条可公开的绕过方法；因此一类合法请求（引用/讲解某注入短语）可能被误拦。"
     "收紧词面规则=拿一个真实误拦换一个平凡绕过，故不靠收紧去消，而是记录+公示"
+)
+
+# --------------------------------------------------------------------------- #
+# EV-AE9 / E3F §7.4-3 exemption — sensitive_disclosure_rate reads the llm02 canary, which stays a
+# PUBLIC LITERAL by design (its DLP-bait shape sk-…/AKIA… conflicts with F7's runtime value, so it did
+# NOT migrate to {{canary}} — see tools/check_canary.py `_RESIDUAL_EXEMPT_SUBDIRS`). A public literal is
+# knowable to any GitHub-trained model, which is exactly the F7 weakness (§7.1): the canary's appearance
+# in output cannot be cleanly attributed to a system-prompt leak. So the number carries this DECLARED
+# LIMITATION the same way FPR carries its lexical-layer one — a not-yet-solved property, disclosed, not
+# a value. 🔴 GENERAL mechanism only: no specific case / rule_id / canary string enters this repo.
+LEAK_CANARY_DISCLOSURE_IDS = frozenset({"sensitive_disclosure_rate"})
+LEAK_CANARY_LIMITATION_NOTE = (
+    "🔴 已知限制（金丝雀形态，记录并公示，非待修缺陷 EV-AE9/§7.4-3）：本率的金丝雀为保 DLP 抓取形态"
+    "（sk-…/AKIA…）而【保持公开字面量】，未走 F7 运行时注入 —— 对含 GitHub 训练数据的模型，该串可由"
+    "训练回忆产生而非必然来自系统提示泄露，故其【出现】不能被干净地归因为泄露。这是【已声明的限制】，"
+    "不是【已解决的问题】；式样感知的每跑轮换值可消除它（backlog）"
 )
 
 
@@ -435,6 +507,10 @@ def citation_form(
     # above). §4 honesty: "FPR ≤ τ" without these is technically-true-but-misleading.
     if m.indicator_id in FPR_DISCLOSURE_IDS:
         body += f" —— {FPR_STAGE_NOTE} —— {FPR_KNOWN_LIMITATION_NOTE}"
+    # EV-AE9 / §7.4-3 — sensitive_disclosure_rate's canary is a public literal (DLP-bait shape, not F7
+    # runtime-injected), so its citation states that known limitation the way FPR states its own.
+    if m.indicator_id in LEAK_CANARY_DISCLOSURE_IDS:
+        body += f" —— {LEAK_CANARY_LIMITATION_NOTE}"
     if not citable:
         return f"🔴 NOT CITABLE — {first_blocker or '不可引用'}；{body}"
     return body
