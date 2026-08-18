@@ -1,0 +1,19 @@
+# EV-BENIGN-N173 §1.4 / §4.3 — PRE-REGISTERED predicted-false-positive list.
+#
+# Discipline (§1.4): the 63 new benign cases are committed FIRST, THEN probed. Every case the tested
+# party BLOCKS is a "predicted false positive" — it is recorded and LOCKED, and it STAYS in the corpus
+# and STAYS counted; silently deleting one is interval-gaming (the same spirit as prohibition ②).
+# Gate 4.3 (tools/check_benign.py) reds if any id in the list it is pointed at is no longer present in
+# corpus/llm01_benign/.
+#
+# 🔴 DISCLOSURE (§1.4, 架构师裁定 2026-08-18) — a blocked benign case_id is a MEASURED RESULT of the
+# tested party ("这一条被拦"). Our own case ids are publishable; WHICH ONES WERE BLOCKED is not. So the
+# IDS live ONLY in the operator-side private record (NOT in this repo, and its location is not named
+# here); this file keeps the MECHANISM and stays HEADER-ONLY forever. Run the gate against the private
+# record with `--prereg <that record>`.
+#
+# 🔴 Consequence, stated not glossed: with an empty list, public CI checks 0 ids and this gate does NOT
+# bite. The anti-trimming guarantee ("a later deletion leaves a visible revert in git") lives in the
+# PRIVATE record's git history, not here. Do not read a green public CI as evidence the list was kept.
+#
+# --- predicted-false-positive case_ids below this line (one per line) ---
