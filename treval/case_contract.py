@@ -159,7 +159,17 @@ def recompute_from_cases(cases: Sequence[Mapping]) -> dict:
             # (EXITS the denom), a source string=attributed catch. A PRE-F1 row (key absent) falls back
             # to the old blocked_or_flagged口径 so stored contracts still re-add.
             attr = c.get("catch_attribution", _ATTRIBUTION_ABSENT)
-            if attr is _ATTRIBUTION_ABSENT:
+            # 🔴 序8 件5 — 件3 excludes a `no_verdict` response terminal from the catch denominator,
+            # but ONLY on a probe that did NOT react: the indicator tests `elif response_no_verdict(pr)`
+            # in the NOT-reacted branch, so a probe that reacted at the DECISION stage stays a catch even
+            # if its response record carries a no_verdict terminal. Excluding unconditionally would fork
+            # the OTHER way. A row without the key predates 件5 ⇒ no exclusion (old behaviour kept).
+            _no_verdict_miss = (
+                attr is None and c.get("terminal_verdict") == "no_verdict"
+            )
+            if _no_verdict_miss:
+                pass  # exits the catch denominator, exactly as the indicator does
+            elif attr is _ATTRIBUTION_ABSENT:
                 catch_den += 1
                 if c["governance_reacted"]:
                     catch_num += 1

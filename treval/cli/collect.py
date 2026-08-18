@@ -25,6 +25,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from treval.active_eval import (
     CorpusIndicator,
@@ -32,12 +33,14 @@ from treval.active_eval import (
     BenignFlagRateHardOnly,
     FalsePositiveRate,
     InjectionCatchRate,
+    InjectionCombinedRecall,
     InjectionCatchRateObservable,
     InjectionDeclinedByModelRate,
     InjectionHardBlockedRate,
     InjectionSoftFlagDeclinedRate,
     InjectionSuccessRate,
     SensitiveDisclosureRate,
+    SpeechActSeparationRate,
     SystemPromptLeakRate,
     Tier2ShadowRecallLift,
     ToolScopeViolationRate,
@@ -206,6 +209,18 @@ CURATION: tuple[Producer, ...] = (
     Producer(
         "tier2_shadow_recall_lift", Tier2ShadowRecallLift, "llm01_prompt_injection"
     ),
+    # 🔴 序8 件6 — the SUM of the two halves, published as ONE measurement over ONE denominator, so a
+    # reader never has to (and must never) add injection_catch_rate to the lift by hand. It refuses to
+    # publish at all if the two denominators ever diverge again.
+    Producer(
+        "injection_combined_recall", InjectionCombinedRecall, "llm01_prompt_injection"
+    ),
+    # EV-BENIGN-N173 §2 — use/mention separation. Unbound (not in the registry): a DISCLOSURE row, never
+    # graded (无门槛·首测, §2.4). The 24 cases are control_ prefixed ⇒ E3F's generic exclusion keeps them
+    # out of every existing denominator + the carrier arms. 🔴 §5: this indicator is canary-independent,
+    # so it is NOT in _ATTACK_ARM_INDICATOR_IDS / _BENIGN_ARM_INDICATOR_IDS — adding it would pollute the
+    # carrier-rate arms (acceptance §7-14).
+    Producer("speech_act_separation_rate", SpeechActSeparationRate, "llm01_speech_act"),
 )
 
 
@@ -361,6 +376,12 @@ class ActiveScan:
     # canary string). Pins WHICH canary epoch this run used so two runs stay comparable (same
     # corpus_sha, different canaries). Empty when nothing was probed.
     canary_set_id: str = ""
+    # 🔴 序8 件3 — the /admin/v1/audit:cursor readings taken BEFORE (pre-flight) and AFTER the Tier-2
+    # drain, stored VERBATIM for R5's cross-check (the gateway's SELF-REPORTED guardrail_* counters vs
+    # our WAL-MEASURED no_async — a mismatch is itself a finding). None when no admin cursor endpoint /
+    # unreachable (a warning records which).
+    guardrail_cursor_before: dict[str, Any] | None = None
+    guardrail_cursor_after: dict[str, Any] | None = None
 
 
 def collect_measurements(
@@ -389,6 +410,8 @@ def collect_measurements(
     # Tier-2 row n/a — a wasted night, discovered at the end. Reading the cursor ONCE up front turns
     # that into a 2-second answer. It is a WARNING, not a refusal: a Tier-2-off run does not need the
     # drain, and refusing to start would make an unrelated admin hiccup block the whole collection.
+    guardrail_cursor_before: dict[str, Any] | None = None
+    guardrail_cursor_after: dict[str, Any] | None = None
     probe = getattr(target, "read_drain_cursor", None) or getattr(
         target, "_read_cursor", None
     )
@@ -400,6 +423,8 @@ def collect_measurements(
             warnings.append(
                 f"pre-flight: drain cursor read raised {type(e).__name__}: {e}"
             )
+        # 序8 件3 — store the pre-flight reading VERBATIM (null when unreachable — already warned above).
+        guardrail_cursor_before = cur if isinstance(cur, dict) else None
         if not isinstance(cur, dict) or cur.get("wal_head_seq") is None:
             warnings.append(
                 "🔴 pre-flight: the Tier-2 drain cursor is NOT readable "
@@ -508,6 +533,19 @@ def collect_measurements(
         except Exception as e:  # a drain failure must not void the whole collection
             warnings.append(f"tier-2 drain failed: {type(e).__name__}: {e}")
 
+    # 🔴 序8 件3 — read the cursor ONCE MORE after the drain: the AFTER snapshot of the before/after pair
+    # R5 cross-checks (self-reported guardrail_* vs our WAL-measured no_async). Stored verbatim; null +
+    # a warning when the endpoint is unreachable (never a silent omission).
+    if callable(probe):
+        try:
+            after = probe()
+        except Exception as e:  # noqa: BLE001 — any failure is the same signal
+            after = None
+            warnings.append(
+                f"post-drain: guardrail cursor read raised {type(e).__name__}: {e}"
+            )
+        guardrail_cursor_after = after if isinstance(after, dict) else None
+
     # 🔴 PHASE 3 — measure. Every producer over a corpus reads the SAME results tuple.
     # Iterates CURATION (not the by-corpus grouping) so the bundle's measurement ORDER is unchanged
     # by this refactor — fixtures and diffs stay stable, and the one-aggregate-per-bound-id invariant
@@ -538,6 +576,8 @@ def collect_measurements(
         injection_results,
         drained,
         canary_set_id,
+        guardrail_cursor_before=guardrail_cursor_before,
+        guardrail_cursor_after=guardrail_cursor_after,
     )
 
 
@@ -926,6 +966,10 @@ def run_collect(args: argparse.Namespace) -> int:
             arm_parity=_run_arm_parity(),
             # F7 (E3F §7.3-③) — the run's canary epoch (sha256-of-salt handle, no plaintext).
             canary_set_id=active.canary_set_id,
+            # 🔴 序8 件3 — the guardrail cursor readings (before/after the drain), stored VERBATIM for
+            # R5's self-reported-vs-measured cross-check. null when no admin cursor endpoint.
+            guardrail_cursor_before=active.guardrail_cursor_before,
+            guardrail_cursor_after=active.guardrail_cursor_after,
         ),
     )
     # F7 (E3F §7.4-5) — the collect bundle is a public artifact (aggregates + provenance, no response

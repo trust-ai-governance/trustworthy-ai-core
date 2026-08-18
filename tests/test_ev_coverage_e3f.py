@@ -3,6 +3,8 @@ it (§9). Grows batch by batch: F1–F4 (indicators/attribution), F5 (collect), 
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 import pytest
@@ -79,10 +81,12 @@ def _tier2_ev(cid, *, hint=True):
     )
 
 
-def _response_ev(cid, *, matched_rules=()):
-    """A RESPONSE_OBSERVED record with matched on_tool_response_rules."""
+def _response_ev(cid, *, matched_rules=(), terminal=""):
+    """A RESPONSE_OBSERVED record with matched on_tool_response_rules.
+    `terminal` 默认空串 = protobuf 默认（无响应观测）；传 ERROR/REJECTED 造 no_verdict（序8 件3/6）。"""
     ctx = rc_pb.RequestContext()
     ctx.envelope.request_id = f"req-{cid}"
+    ctx.response.final_terminal = terminal
     for rid in matched_rules:
         r = ctx.response.on_tool_response_rules.add()
         r.rule_id = rid
@@ -635,3 +639,137 @@ def test_two_readings_hard_only_and_hard_or_flag_are_dual_columns():
     (disc,) = BenignFlagRateHardOnly().measure([pr])  # hard_only disclosure row
     assert agg.subject == "" and agg.value == 1.0
     assert disc.subject == "arm_parity:hard_only" and disc.value == 0.0
+
+
+# ── 序8 件6 —— 两个看起来可加、实际不可加的数
+#
+# 🔴 实测触发：injection_catch_rate 报 65/137，tier2_shadow_recall_lift 报 43/143，
+# 而 lift 的 notes 里自己印了一句 "combined recall = 78%"（用 143 算的）。
+# 读者看到 47.4% 与 78%，无法调和，也无从知道分母不同。
+# 修法三条：① lift 套用 catch 的全部排除 ⇒ 分母逐位相同；② lift 不再替读者算 combined；
+# ③ 合并召回是它自己的指标，有自己的分母与区间。
+
+
+def _mixed_injection_probes():
+    """序8 件6 的夹具：一批【形状各异】的注入探针，专门覆盖 catch 的每一条分母出口。
+    🔴 只有全都出现，两个半边的分母是否一致才真的被测到 —— 全是"干净拦下"的夹具测不出分家。"""
+    from treval.active_eval.checks import _BLOCK  # noqa: PLC0415
+
+    inj = {"attack_class": "prompt_injection"}
+    prs = []
+    # ① Tier-1 归因拦下（进分子）
+    for i in range(4):
+        prs.append(
+            _pr(
+                f"t1-{i}",
+                evidence=_decision_ev(
+                    f"t1-{i}", final=_BLOCK, matched_rules=[("inj-a", inj)]
+                ),
+                tier2_drain_executed=True,
+            )
+        )
+    # ② Tier-1 漏、Tier-2 命中（进 lift 分子）
+    for i in range(3):
+        prs.append(
+            _pr(
+                f"t2-{i}",
+                evidence=_decision_ev(f"t2-{i}", matched_rules=[("obs-log", {})]),
+                governance_evidence=_tier2_ev(f"t2-{i}"),
+                tier2_drain_executed=True,
+            )
+        )
+    # ③ 两层都漏（留在分母，算漏检）
+    for i in range(5):
+        prs.append(
+            _pr(
+                f"miss-{i}",
+                evidence=_decision_ev(f"miss-{i}", matched_rules=[("obs-log", {})]),
+                governance_evidence=_tier2_ev(f"miss-{i}", hint=False),
+                tier2_drain_executed=True,
+            )
+        )
+    # ④ 🔴 unattributable —— 反应了但没有注入规则（F1）
+    prs.append(
+        _pr(
+            "unattr",
+            evidence=_decision_ev(
+                "unattr",
+                final=_BLOCK,
+                matched_rules=[("pii-block-request", {"owasp": "LLM02"})],
+            ),
+            tier2_drain_executed=True,
+        )
+    )
+    # ⑤ 🔴 no_verdict —— 未反应且响应终态无判决（件3）
+    prs.append(
+        _pr(
+            "nov",
+            evidence=_decision_ev("nov", matched_rules=[("obs-log", {})]),
+            response_evidence=_response_ev("nov", terminal="ERROR"),
+            governance_evidence=_tier2_ev("nov", hint=False),
+            tier2_drain_executed=True,
+        )
+    )
+    # ⑥ 🔴 undecided —— 网关没判（P4）
+    prs.append(_pr("undec", evidence=_decision_ev("undec"), tier2_drain_executed=True))
+    return prs
+
+
+def test_f6_lift_and_catch_share_one_denominator():
+    """🔴 §件6 旗舰 —— 两个半边的 sample_size 必须逐位相同，否则它们不可相加。
+    什么输入让它红：把 lift 里任一条 catch-identical 排除拿掉（undecided/unattributable/no_verdict）。"""
+    from treval.active_eval.indicators import InjectionCatchRate, Tier2ShadowRecallLift
+
+    prs = _mixed_injection_probes()
+    (catch,) = InjectionCatchRate().measure(prs)
+    (lift,) = Tier2ShadowRecallLift().measure(prs)
+    assert catch.sample_size == lift.sample_size, (
+        f"分母不同 ⇒ 两个数不可相加：catch n={catch.sample_size} vs lift n={lift.sample_size}"
+    )
+
+
+def test_f6_lift_notes_do_not_compute_a_combined_recall():
+    """一个指标不该在自己的 notes 里替读者算另一个数 —— 那正是 47.4% 旁边出现 78% 的来路。"""
+    from treval.active_eval.indicators import Tier2ShadowRecallLift
+
+    (lift,) = Tier2ShadowRecallLift().measure(_mixed_injection_probes())
+    assert "combined recall = " not in lift.notes, (
+        "lift 仍在 notes 里自行计算 combined recall"
+    )
+
+
+def test_f6_combined_recall_is_arithmetically_consistent():
+    """三者算术自洽：combined·n == catch数 + lift数，且三个 n 相同。
+    什么输入让它红：任一半边改了分母而另一半没跟上。"""
+    from treval.active_eval.indicators import (
+        InjectionCatchRate,
+        InjectionCombinedRecall,
+        Tier2ShadowRecallLift,
+    )
+
+    prs = _mixed_injection_probes()
+    (catch,) = InjectionCatchRate().measure(prs)
+    (lift,) = Tier2ShadowRecallLift().measure(prs)
+    (comb,) = InjectionCombinedRecall().measure(prs)
+    assert comb.sample_size == catch.sample_size == lift.sample_size
+    assert round(comb.value * comb.sample_size) == round(
+        catch.value * catch.sample_size
+    ) + round(lift.value * lift.sample_size)
+    assert comb.ci_low is not None and comb.ci_high is not None  # 抽样 ⇒ 必须带区间
+
+
+def test_f6_combined_refuses_to_publish_on_denominator_mismatch(monkeypatch):
+    """🔴 若两个半边的分母将来又分家，合并指标必须【拒绝出数】(n=0 ⇒ insufficient_data)，
+    而不是把加不到一起的数加起来。什么输入让它红：让它退回去照算。"""
+    from treval.active_eval import indicators as I
+
+    prs = _mixed_injection_probes()
+    real = I.Tier2ShadowRecallLift.measure
+
+    def _shrunk(self, results):
+        (m,) = real(self, results)
+        return (replace(m, sample_size=m.sample_size - 1),)
+
+    monkeypatch.setattr(I.Tier2ShadowRecallLift, "measure", _shrunk)
+    (comb,) = I.InjectionCombinedRecall().measure(prs)
+    assert comb.sample_size == 0 and "denominator mismatch" in comb.notes

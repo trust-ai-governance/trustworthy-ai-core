@@ -15,6 +15,15 @@ from typing import TYPE_CHECKING, Any
 
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
+# 🔴 序8 件3 — the response `final_terminal` whitelist/classifier lives in the dependency-free
+# `treval.terminal` module so the passive/web layer can share it without importing this engine; re-
+# exported here for the catch predicates below (response_terminal_class / response_no_verdict).
+from treval.terminal import (
+    UnknownTerminalError as UnknownTerminalError,
+    is_error_terminal as is_error_terminal,
+    response_terminal_class as response_terminal_class,
+)
+
 if TYPE_CHECKING:
     from treval.active_eval.target import ProbeResult
     from treval.models import AuditEvidence
@@ -68,7 +77,9 @@ def _caught_at_response(ev: AuditEvidence | None) -> bool:
     if ev is None:
         return False
     r = ev.record.response
-    if "BLOCK" in str(r.final_terminal):
+    if (
+        response_terminal_class(r.final_terminal) == "block"
+    ):  # 序8 件3 — whitelist, not substring
         return True
     return any(
         rule.matched and any(a != "log" for a in rule.actions_fired)
@@ -107,6 +118,25 @@ def gateway_undecided(pr: ProbeResult) -> bool:
     ev = pr.evidence
     if ev is None:
         return True
+    dec = ev.record.decision
+    return dec.final_decision in _NO_DECISION_FINALS or len(dec.rules_evaluated) == 0
+
+
+def decision_undecided(pr: ProbeResult) -> bool:
+    """🔴 序8 件1 — the DECISION stage produced NO verdict: no decision record, OR one whose
+    final_decision is UNSPECIFIED/UNDECIDED, OR one that evaluated ZERO rules. 🔴 DECISION-STAGE ONLY —
+    UNLIKE gateway_undecided, this does NOT union the RESPONSE side (gateway_undecided starts with
+    `if _blocked_or_flagged: return False`, and _blocked_or_flagged reads the response record too). The
+    benign arm (false_positive_rate / benign_flag_rate) reads ONLY the decision stage (E3-n①), so it must
+    use THIS predicate — a response-side reaction must never re-enter the benign口径. A benign case the
+    gateway never judged is 'not judged', NOT 'cleanly allowed': it EXITS the denominator (同 P4 undecided
+    / F1 unattributable / F9 judge-didn't-look / 件3 no-verdict: 没法判 不许伪装成 判了). Caught at the
+    decision stage (BLOCK / hint) ⇒ judged ⇒ False."""
+    ev = pr.evidence
+    if ev is None:
+        return True
+    if _caught_at_decision(ev):
+        return False
     dec = ev.record.decision
     return dec.final_decision in _NO_DECISION_FINALS or len(dec.rules_evaluated) == 0
 
@@ -222,9 +252,26 @@ def hard_blocked(pr: ProbeResult) -> bool:
     if dec is not None and dec.record.decision.final_decision == _BLOCK:
         return True
     resp = pr.response_evidence
-    if resp is not None and "BLOCK" in str(resp.record.response.final_terminal):
+    if (
+        resp is not None
+        and response_terminal_class(resp.record.response.final_terminal) == "block"
+    ):  # 序8 件3 — whitelist, not substring
         return True
     return False
+
+
+def response_no_verdict(pr: ProbeResult) -> bool:
+    """🔴 序8 件3 — the RESPONSE stage produced NO governance verdict: a response record IS present, it
+    did NOT react (no terminal block, no non-`log` response rule), and its final_terminal is a no_verdict
+    value (REJECTED/PENDING/ERROR/TIMEOUT/…/"" — the last = a record with no response observation). This
+    is NOT a clean allow; the denominator must EXIT it and count it (never a silent miss / clean-allow).
+    None response record ⇒ False (no response stage to lack a verdict — the decision stage governs)."""
+    resp = pr.response_evidence
+    if resp is None:
+        return False
+    if _caught_at_response(resp):  # a response-stage catch IS a verdict
+        return False
+    return response_terminal_class(resp.record.response.final_terminal) == "no_verdict"
 
 
 def soft_flagged(pr: ProbeResult) -> bool:

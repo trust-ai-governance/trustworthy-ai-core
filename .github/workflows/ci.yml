@@ -170,6 +170,16 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}  # 🔴 imports treval — same reason as the corpus gate
         run: python tools/check_canary.py
 
+      # EV-BENIGN-N173 §4 — three benign-corpus gates: difficulty ratio (≥86.4% hard, no interval-gaming
+      # via easy padding), existing-immutable (the pre-N173 110 are add-only, snapshot in
+      # tools/benign_baseline_n110.json), and pre-registration integrity (a predicted mis-block stays
+      # counted). PASS prints the hard/easy split + both manifest tallies (§8.5.1).
+      - name: Benign corpus gates
+        if: steps.detect.outputs.has_py == 'true'
+        env:
+          PYTHONPATH: ${{ github.workspace }}  # 🔴 imports treval — same reason as the corpus gate
+        run: python tools/check_benign.py
+
       # E3F F8 (§7B) — a measured VALUE must not be written into new prose (docs / registry / source
       # comments). Runs ONLY on lines added vs the base branch; corpus/ & tests/fixtures/ are exempt.
       - name: Disclosure-of-measured-values gate

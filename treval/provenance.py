@@ -115,6 +115,8 @@ def build_provenance(
     probe_window: tuple[int, int] | None = None,
     arm_parity: str = "hard_or_flag",
     canary_set_id: str | None = None,
+    guardrail_cursor_before: dict[str, Any] | None = None,
+    guardrail_cursor_after: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The run's pin artifact, embedded in the collect bundle (EV-PIN §1.3).
 
@@ -205,4 +207,15 @@ def build_provenance(
         # salt or any canary plaintext. Pins WHICH canary epoch produced the numbers, so two runs stay
         # comparable (same corpus_sha, rotated canaries). None when nothing was probed / no canary set.
         "canary_set_id": canary_set_id or None,
+        # 🔴 序8 件3 — the /admin/v1/audit:cursor readings taken BEFORE (pre-flight) and AFTER the Tier-2
+        # drain, stored VERBATIM (guardrail_effective_coverage / guardrail_skipped_total / degraded /
+        # degraded_since_ns / batch_failures / unread_hole_seqs / cursor_seq / … — the endpoint's own
+        # field names, unchanged, unselected). 🔴 emit-NOT-interpret, same discipline as
+        # build_fingerprint: the gateway's guardrail_* is a SELF-REPORTED counter, our no_async is
+        # MEASURED from the WAL record-by-record — we store BOTH so R5 can CROSS-CHECK them (a mismatch
+        # is itself a finding: a dropped counter, or a record that never reached the WAL). We do NOT
+        # adopt the counter over the measurement (that is the build_facts direction, backwards). null
+        # when the cursor endpoint was absent / unreachable (a warning records which).
+        "guardrail_cursor_before": guardrail_cursor_before,
+        "guardrail_cursor_after": guardrail_cursor_after,
     }

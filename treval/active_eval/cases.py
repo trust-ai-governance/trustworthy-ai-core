@@ -38,9 +38,11 @@ from treval.active_eval.checks import (
     attribution_cell,
     evaluate,
     gateway_undecided,
+    hard_blocked,
     injection_attribution_source,
 )
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
+from treval.terminal import response_terminal_class
 from treval.active_eval.indicators import (
     DEFAULT_ARM_PARITY,
     InjectionCatchRate,
@@ -125,6 +127,44 @@ def _governance_reacted(pr: ProbeResult) -> bool:
     return evaluate("blocked_or_flagged", pr)
 
 
+def _tier2_scored(pr: ProbeResult) -> str:
+    """🔴 序8 件4 — did the async Tier-2 shadow judge SCORE this row? Three states, ALL WAL-derived
+    (no gateway field): 'scored' (a type-3 governance record exists), 'prefiltered' (Tier-1 HARD-blocked
+    it, so the judge is by design not sent it — NOT a drain gap), 'not_scored' (no record AND Tier-1 did
+    not block = our `no_async` — the ONLY drain-incompleteness signal). 🔴 Uses the SAME predicates
+    Tier2ShadowRecallLift splits on (governance_evidence / hard_blocked), so the rows' three-state counts
+    re-add to that indicator's no_async / skipped_prefiltered totals (§件4 acceptance ④: 契约自洽).
+    'prefiltered' must NEVER fold into 'not_scored' — 'the judge skipped it by design' ≠ 'a record is
+    missing', the F2-shaped defect this field exists to close."""
+    if pr.governance_evidence is not None:
+        return "scored"
+    if hard_blocked(pr):
+        return "prefiltered"
+    return "not_scored"
+
+
+def _terminal_verdict(pr: ProbeResult) -> str:
+    """🔴 序8 件5 — the RESPONSE stage's governance class for this row, from the ONE whitelist
+    (`treval.terminal`), never a second copy: 'blocked' / 'allowed' / 'no_verdict' / 'none'.
+
+    Why the row needs it: 件3 added a `no_verdict` EXCLUSION to the catch denominator (a response
+    terminal of REJECTED/PENDING/ERROR/"" is NOT a clean allow), but the case row carried no signal for
+    it ⇒ recompute_from_cases could not reproduce the exclusion ⇒ the contract FORKED and refused to
+    write (observed live: rows re-added 65/139 against an aggregate 65/137).
+
+    🔴 This is the F1 shape a second time: F1 added `unattributable` to the denominator AND
+    `catch_attribution` to the row together, so it never forked; 件3 added the exclusion without the
+    field. THE RULE, stated once: every denominator exclusion the indicator makes must have a case-row
+    signal that reproduces it — enforced by test_every_catch_exclusion_has_a_case_row_signal.
+
+    'none' = no response record at all (the decision stage governs) — distinct from 'no_verdict',
+    which means a record EXISTS and reached no clean terminal."""
+    resp = pr.response_evidence
+    if resp is None:
+        return "none"
+    return response_terminal_class(resp.record.response.final_terminal)
+
+
 def _row_catch_attribution(pr: ProbeResult) -> str | None:
     """F1 (E3F §1) — the case row's catch-attribution signal, mirroring the indicator at the DEFAULT
     (`hard_or_flag`)口径 that aggregates_from_results measures against, so the rows re-add BIT-FOR-BIT
@@ -205,6 +245,14 @@ def build_cases(
             "verdict": case_verdict(pr),
             "observable_via": observable_via(pr),
             "governance_reacted": _governance_reacted(pr),
+            # 🔴 序8 件4 — did the async Tier-2 judge SCORE this row (scored / not_scored / prefiltered)?
+            # So "why wasn't this one's Tier-2 hint counted" is answerable PER CASE, not just as a total
+            # in tier2_shadow_recall_lift's notes. Pure WAL read (governance_evidence / hard_blocked).
+            "tier2_scored": _tier2_scored(pr),
+            # 🔴 序8 件5 — the response-stage governance class, so recompute_from_cases can reproduce
+            # 件3's `no_verdict` denominator exclusion. Without it the contract FORKS (live: 65/139 vs
+            # 65/137). Same whitelist as the indicator — one source of truth, never a second copy.
+            "terminal_verdict": _terminal_verdict(pr),
             # F1 (E3F §1) — the RULE-SCOPED catch attribution the aggregate now counts. Kept beside
             # (not replacing) governance_reacted: null=miss, 'unattributable'=reacted-but-not-injection
             # (exits the catch denominator), source string=attributed catch. recompute_from_cases reads

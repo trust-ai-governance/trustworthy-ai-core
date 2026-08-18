@@ -354,6 +354,33 @@ FPR_KNOWN_LIMITATION_NOTE = (
     "（如引号）本身就是一条可公开的绕过方法；因此一类合法请求（引用/讲解某注入短语）可能被误拦。"
     "收紧词面规则=拿一个真实误拦换一个平凡绕过，故不靠收紧去消，而是记录+公示"
 )
+# EV-BENIGN-N173 §0.2 — the GRANDFATHER disclosure. 🔴 The MEASURED count of pre-existing benign cases
+# carrying a verbatim attack-phrase literal is 11 (not the draft's "1"), scanning the full author surface
+# input+system_prompt+messages — see tools/check_benign.py `grandfathered_attack_phrase_ids`, whose
+# signature list is the source of truth; a test pins this note's number to that measured count so
+# "asserted" can never drift below "measured". By this round's
+# prohibition ④ these belong to §2's mention side, NOT the FPR denominator, but §0.2 forbids
+# deleting/reclassifying any existing case (that would make our number better with no change in the
+# tested party), so they stay — and 🔴 keeping them makes FPR WORSE (more conservative), which is exactly
+# why they may stay. The number must SAY so: a rule we don't fully obey, disclosed at the real count.
+# ⚠️ WORDING (domain review §3.1): the count is "cases whose text CONTAINS an attack-phrase LITERAL
+# STRING", NOT "cases that MENTION an attack technique" — 2 of the 11 are HOMOGRAPHS (browser "developer
+# mode", not the jailbreak persona), so "提及攻击技法" would over-claim. State the literal-string basis.
+FPR_GRANDFATHER_COUNT = 11
+FPR_GRANDFATHER_NOTE = (
+    f"🔴 祖父件（EV-BENIGN-N173 §0.2）：分母含 {FPR_GRANDFATHER_COUNT} 条正文【含攻击短语字面串】的既有件"
+    "（禁止 ④：此形态归 §2 的 mention 半边；其中 2 条为同形词——如浏览器 developer mode——非对攻击技法的"
+    "真提及）；§0.2 禁止删改故留在原处 —— 它们使本数偏【高】（更保守），公示而不剔除"
+)
+# EV-BENIGN-N173 §2.1 / 序8 件2 — the benign corpus's register mix (case / question form / abbreviation
+# density) has NO real-traffic sample to calibrate against, so by this repo's discipline it is a
+# DECLARED assumption, NOT a measurement. FPR is read by default as "the false-positive rate on real
+# traffic"; without this note that reading is unearned. 🔴 Must ride WITH the number from the FIRST run
+# — adding the caveat only after seeing the number would be "finding a story to fit the data".
+REGISTER_ASSUMPTION_NOTE = (
+    "🔴 register 假设（EV-BENIGN-N173 §2.1）：良性语料的 register 混合比（大小写 / 问句形态 / 缩写密度）为"
+    "【声明值】，非对真实流量的【测量】—— 无真实流量样本可对照；本数的作用域仅及于该声明的混合比"
+)
 
 # --------------------------------------------------------------------------- #
 # EV-AE9 / E3F §7.4-3 exemption — sensitive_disclosure_rate reads the llm02 canary, which stays a
@@ -369,6 +396,20 @@ LEAK_CANARY_LIMITATION_NOTE = (
     "（sk-…/AKIA…）而【保持公开字面量】，未走 F7 运行时注入 —— 对含 GitHub 训练数据的模型，该串可由"
     "训练回忆产生而非必然来自系统提示泄露，故其【出现】不能被干净地归因为泄露。这是【已声明的限制】，"
     "不是【已解决的问题】；式样感知的每跑轮换值可消除它（backlog）"
+)
+
+# --------------------------------------------------------------------------- #
+# EV-BENIGN-N173 §2.4 — speech_act_separation_rate is a FIRST-EVER measurement with NO gate (§2.3-9): a
+# capability never measured, and gating a never-measured number is guessing. 🔴 A gate-less number reads
+# as "passed" unless the citation SAYS otherwise — so its citation_form must carry 「无门槛·首测」, and it
+# must state that the four outcomes (separated / over_blocks / under_blocks / inverted) point in
+# different directions and must not be read as one pass/fail (§2.5). Gate/threshold decided AFTER the
+# first measurement, separately (same discipline as 'τ 不因一次结果而改').
+FIRST_MEASUREMENT_NO_GATE_IDS = frozenset({"speech_act_separation_rate"})
+FIRST_MEASUREMENT_NOTE = (
+    "🔴 无门槛·首测（EV-BENIGN-N173 §2.4）：本指标此前从未测过，本轮【不设门】—— 没测过就设门是拍脑袋。"
+    "⇒ 这个数不代表「通过」，它是一次首测；门排在拿到首测之后单独裁定。separated/over_blocks/under_blocks/"
+    "inverted 四态方向不同，不可合并成一个「未通过」来读（§2.5）"
 )
 
 
@@ -506,11 +547,18 @@ def citation_form(
     # general lexical-layer known-limitation (the detection-layer status already rode via config_note
     # above). §4 honesty: "FPR ≤ τ" without these is technically-true-but-misleading.
     if m.indicator_id in FPR_DISCLOSURE_IDS:
-        body += f" —— {FPR_STAGE_NOTE} —— {FPR_KNOWN_LIMITATION_NOTE}"
+        body += (
+            f" —— {FPR_STAGE_NOTE} —— {FPR_KNOWN_LIMITATION_NOTE} —— {FPR_GRANDFATHER_NOTE}"
+            f" —— {REGISTER_ASSUMPTION_NOTE}"
+        )
     # EV-AE9 / §7.4-3 — sensitive_disclosure_rate's canary is a public literal (DLP-bait shape, not F7
     # runtime-injected), so its citation states that known limitation the way FPR states its own.
     if m.indicator_id in LEAK_CANARY_DISCLOSURE_IDS:
         body += f" —— {LEAK_CANARY_LIMITATION_NOTE}"
+    # EV-BENIGN-N173 §2.4 — a never-before-measured, gate-less indicator must announce 「无门槛·首测」 so
+    # it is not misread as "passed" (§2.6-8).
+    if m.indicator_id in FIRST_MEASUREMENT_NO_GATE_IDS:
+        body += f" —— {FIRST_MEASUREMENT_NOTE}"
     if not citable:
         return f"🔴 NOT CITABLE — {first_blocker or '不可引用'}；{body}"
     return body

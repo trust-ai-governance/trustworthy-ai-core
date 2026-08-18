@@ -272,6 +272,9 @@ def test_default_deny_total_function_carries_NO_interval_but_detectors_do():
     ctx.decision.authorization.allowed = (
         False  # gateway DENIED the out-of-scope call ⇒ enforced
     )
+    ctx.decision.rules_evaluated.add().rule_id = (
+        "r0"  # 序8 件1 — a rule ran ⇒ JUDGED (not zero-rules)
+    )
     ev = AuditEvidence(
         ref=_REF[0],
         integrity=IntegrityStatus.VERIFIED,

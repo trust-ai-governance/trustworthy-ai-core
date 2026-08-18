@@ -1089,3 +1089,203 @@ def test_f5_duplicate_probe_assertion_raises_not_warns():
     _assert_probed_once((ok,))  # unique ⇒ no raise
     with pytest.raises(DuplicateProbeError, match="probed more than once"):
         _assert_probed_once((ok, dup))
+
+
+# --------------------------------------------------------------------------- #
+# 序8 件3 — the guardrail /admin/v1/audit:cursor readings (before/after the drain) ride into
+# provenance VERBATIM, for R5's self-reported-vs-WAL-measured cross-check.
+# --------------------------------------------------------------------------- #
+_CURSOR_FIELDS = {
+    "wal_head_seq": 100,
+    "cursor_seq": 100,
+    "guardrail_effective_coverage": 0.95,
+    "guardrail_skipped_total": 3,
+    "degraded": False,
+    "degraded_since_ns": 0,
+    "batch_failures": 0,
+    "unread_hole_seqs": [],
+}
+
+
+class _DrainTarget(_FakeTarget):
+    """A _FakeTarget that also drains (no-op) and serves cursor readings — or raises on read."""
+
+    def __init__(self, reads):
+        self._reads = list(reads)
+        self._i = 0
+
+    def read_drain_cursor(self):
+        v = self._reads[min(self._i, len(self._reads) - 1)]
+        self._i += 1
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    def drain_governance(self, results):
+        return list(results)  # no-op drain (same length ⇒ collect re-splits cleanly)
+
+
+def test_guardrail_cursor_captured_before_and_after_acceptance1_3():
+    before = {**_CURSOR_FIELDS, "cursor_seq": 100}
+    after = {**_CURSOR_FIELDS, "cursor_seq": 142, "guardrail_skipped_total": 5}
+    scan = collect_measurements(
+        _DrainTarget([before, after]), corpus_root=_CORPUS, warnings=[]
+    )
+    # ① both readings captured
+    assert scan.guardrail_cursor_before == before
+    assert scan.guardrail_cursor_after == after
+    # ③ 🔴 verbatim field names — stored unchanged, unselected
+    assert scan.guardrail_cursor_before["guardrail_effective_coverage"] == 0.95
+    assert scan.guardrail_cursor_after["guardrail_skipped_total"] == 5
+    assert set(scan.guardrail_cursor_before) == set(_CURSOR_FIELDS)  # no field dropped
+
+
+def test_guardrail_cursor_unreachable_stores_null_and_warns_acceptance2():
+    warnings: list[str] = []
+    scan = collect_measurements(
+        _DrainTarget([RuntimeError("admin down"), RuntimeError("admin down")]),
+        corpus_root=_CORPUS,
+        warnings=warnings,
+    )
+    # ② null (not silently omitted) + a warning explaining which
+    assert scan.guardrail_cursor_before is None and scan.guardrail_cursor_after is None
+    assert any("cursor read raised" in w for w in warnings)
+
+
+def test_build_provenance_stores_guardrail_cursor_verbatim():
+    from treval.provenance import build_provenance
+
+    before = {
+        "guardrail_effective_coverage": 0.9,
+        "guardrail_skipped_total": 5,
+        "cursor_seq": 10,
+        "unread_hole_seqs": [7, 8],
+    }
+    prov = build_provenance(
+        wal_dir=None,
+        window=None,
+        pinned=False,
+        tenant_id="t",
+        record_count=0,
+        guardrail_cursor_before=before,
+        guardrail_cursor_after=None,
+    )
+    assert (
+        prov["guardrail_cursor_before"] == before
+    )  # verbatim — no renaming, no cherry-picking
+    assert prov["guardrail_cursor_after"] is None
+    # no admin endpoint ⇒ both keys PRESENT but null (a pre-序8 bundle has them absent)
+    bare = build_provenance(
+        wal_dir=None, window=None, pinned=False, tenant_id="t", record_count=0
+    )
+    assert (
+        bare["guardrail_cursor_before"] is None
+        and bare["guardrail_cursor_after"] is None
+    )
+
+
+# ── 序8 件5 —— 契约自洽的【离线冒烟】。
+# 🔴 为什么存在：件3 给 catch 分母加了 `no_verdict` 排除，案级行没有对应字段 ⇒ 契约 fork ⇒
+# `--cases-out` 拒绝落盘。而这一切是在一次 41 分钟的全语料真跑之后才发现的。
+# 根因不是那个漏字段，是【既有的端到端契约测试用的 fake target 一条响应记录都不造】——
+# 于是整条响应侧路径（终态分类 → no_verdict 排除）从未被离线覆盖，测的是一个想象中的世界。
+# 这个冒烟造出四类响应终态，秒级跑完，把那 41 分钟换成 1 秒。
+class _MixedTerminalTarget:
+    """🔴 序8 件5 —— 四种【真实存在】的探针形状，专门走到 `no_verdict` 所在的那条分支。
+
+    第一版我写错过一次：让每条探针都在决策阶段 BLOCK ⇒ 全部走"已反应"分支 ⇒
+    `response_no_verdict` 永远不被求值 ⇒ 变异掉修复它照样绿。**那就是它要防的那种检查本身。**
+    正确形状必须包含【决策阶段放行】的探针 —— no_verdict 只在未反应时才被查。"""
+
+    target_id = "gateway"
+    tenant_id = "acme"
+
+    # (决策是否拦, 响应终态)
+    _SHAPES = (
+        (True, "BLOCKED"),  # 反应了 ⇒ 计 catch
+        (False, "ALLOWED"),  # 判过、放行 ⇒ 真漏检，留在分母
+        (False, ""),  # 🔴 无响应观测 ⇒ no_verdict，退出分母
+        (False, "REJECTED"),  # 🔴 协议/身份 400 ⇒ no_verdict，退出分母
+    )
+
+    def probe(self, case):
+        from trustworthy_ai.v1 import request_context_pb2 as rc_pb
+
+        from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
+
+        # 确定性取模（不用 hash()：PYTHONHASHSEED 会让它跑间不同 ⇒ 一条时红时绿的测试）
+        blocked, terminal = self._SHAPES[sum(case.id.encode()) % len(self._SHAPES)]
+
+        dec = rc_pb.RequestContext()
+        dec.envelope.request_id = f"req-{case.id}"
+        r = dec.decision.rules_evaluated.add()
+        r.rule_id = "inj-1"
+        r.matched = blocked
+        if blocked:
+            r.actions_fired.append("block")
+            r.tags["attack_class"] = "prompt_injection"
+            dec.decision.final_decision = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
+        else:
+            dec.decision.final_decision = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
+
+        resp = rc_pb.RequestContext()
+        resp.envelope.request_id = f"req-{case.id}"
+        resp.response.final_terminal = terminal
+
+        def _ev(ctx, seq):
+            return AuditEvidence(
+                ref=EvidenceRef(
+                    source="wal:/w/000.wal", seq=seq, request_id=f"req-{case.id}"
+                ),
+                integrity=IntegrityStatus.VERIFIED,
+                tenant_id="acme",
+                received_at_ns=0,
+                record=ctx,
+            )
+
+        return ProbeResult(
+            case_id=case.id,
+            request_id=f"req-{case.id}",
+            decision="BLOCK" if blocked else "ALLOW",
+            response_text="",
+            evidence=_ev(dec, 1),
+            response_evidence=_ev(resp, 2),
+        )
+
+
+def test_smoke_case_contract_re_adds_across_every_response_terminal(tmp_path):
+    """🔴 序8 件5 旗舰 —— 秒级冒烟，替掉"跑 41 分钟才发现契约 fork"。
+
+    什么输入让它红：把 cases.py 的 `terminal_verdict` 字段拿掉（或让 recompute 忽略它）⇒
+    带 no_verdict 终态的行进了分母、聚合没有 ⇒ compare_cases_to_aggregates 报 FORK。
+    这正是真跑里发生的事（行侧 65/139 vs 聚合 65/137）。"""
+    from treval.case_contract import compare_cases_to_aggregates
+    from treval.cli.collect import _write_case_contract, collect_measurements
+
+    warnings: list[str] = []
+    active = collect_measurements(
+        _MixedTerminalTarget(), corpus_root=_CORPUS, warnings=warnings
+    )
+    assert active.injection_results, "no injection run captured"
+    # 四类终态都真的出现了，否则这个冒烟测的还是一个想象中的世界
+    seen = {
+        r.response_evidence.record.response.final_terminal
+        for r in active.injection_results
+        if r.response_evidence is not None
+    }
+    assert {"", "REJECTED"} <= seen, f"no_verdict 终态未被覆盖: {seen}"
+
+    path = tmp_path / "cases.json"
+    _write_case_contract(
+        active.injection_cases,
+        active.injection_results,
+        "acme",
+        str(path),
+        warnings=warnings,
+    )
+    assert path.exists(), f"契约未落盘（fork?）: {warnings}"
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    assert compare_cases_to_aggregates(contract["cases"], contract["aggregates"]) == []
+    # 行里确实带上了那个信号，且 no_verdict 真的出现过
+    tv = {c.get("terminal_verdict") for c in contract["cases"]}
+    assert "no_verdict" in tv, f"terminal_verdict 未记录 no_verdict: {tv}"
