@@ -35,6 +35,17 @@ def _decision(cid: str, *, block: bool) -> AuditEvidence:
     ctx = rc_pb.RequestContext()
     ctx.envelope.request_id = f"req-{cid}"
     ctx.decision.final_decision = _BLOCK if block else _ALLOW  # type: ignore[assignment]
+    # 🔴 序8 件6 — a rule MUST have run: a real gateway that reached a decision always evaluated its
+    # rule engine, so a zero-rules record means "never judged" (P4 undecided) and now correctly EXITS
+    # the denominator. These fixtures used to emit zero rules — modelling a world that does not occur,
+    # which is exactly the defect shape this program keeps finding. A blocked probe additionally carries
+    # a matched injection rule so F1's rule-scoped attribution can attribute it.
+    r = ctx.decision.rules_evaluated.add()
+    r.rule_id = "inj-fixture"
+    r.matched = block
+    if block:
+        r.actions_fired.append("block")
+        r.tags["attack_class"] = "prompt_injection"
     return _ev(ctx, cid)
 
 
@@ -116,7 +127,14 @@ def test_tier2_lift_counts_only_lexical_missed_rescues():
     assert m.sample_size == 4
     assert m.value == 0.25  # 1 rescued / 4 measurable
     assert "rescued 1 of 3" in m.notes  # 3 lexical-missed (b, c, d)
-    assert "combined recall = 50%" in m.notes  # (1 Tier-1 + 1 rescue) / 4
+    # 🔴 序8 件6 — the lift no longer computes a combined recall of its own (that is how a 78% (n=143)
+    # ended up printed beside a 47.4% (n=137)). The sum is its own indicator, over the SAME denominator.
+    assert "combined recall = " not in m.notes
+    from treval.active_eval.indicators import InjectionCombinedRecall
+
+    (comb,) = InjectionCombinedRecall().measure(results)
+    assert comb.sample_size == m.sample_size  # 同一个分母，才谈得上相加
+    assert round(comb.value * comb.sample_size) == 2  # 1 Tier-1 + 1 rescue
     assert "1 probe(s) had NO async record" in m.notes
 
 
