@@ -62,13 +62,24 @@ def canary_key(case: CorpusCase) -> str | None:
     return case.id
 
 
+# 🔴 EV-CN-BASELINE 前置2 — map the hex digest onto a PURE-LETTER alphabet (0-9 → g-p; a-f unchanged),
+# a bijection over the 16 hex symbols, so the canary carries the SAME 80 bits of entropy but contains NO
+# DIGIT characters. A hex canary re-cast each run has digit runs that a number-shaped PII rule can match,
+# manufacturing a false positive; a digit-free value cannot trip any number-type pattern (digits are a
+# NECESSARY condition of those patterns, so "no digits" is a SUFFICIENT proof — no need to model the
+# tested party's pattern table). Corpus is unchanged ({{canary}} placeholder), corpus_sha is unchanged,
+# and the residual-literal regex `CANARY[-_A-Za-z0-9]{2,}` still matches (it accepts letters).
+_HEX_TO_ALPHA = str.maketrans("0123456789", "ghijklmnop")
+
+
 def _canary_value(salt: str, key: str) -> str:
     """A per-(run, key) high-entropy value. Deterministic in (salt, key) so a case's three fields —
     and a twin pair sharing a key — resolve to the SAME string, yet unknowable without the run's
     SECRET salt. The `CANARY-` prefix keeps it recognisable in a leak; it lives only at runtime (never
-    in a corpus file), so it does not trip the 3b residual-literal gate (which scans files)."""
+    in a corpus file), so it does not trip the 3b residual-literal gate (which scans files). 🔴 前置2 —
+    the value is DIGIT-FREE (pure letters) so it cannot match a number-shaped PII rule."""
     digest = hashlib.sha256(f"{salt}\0{key}".encode("utf-8")).hexdigest()
-    return "CANARY-" + digest[:20]
+    return "CANARY-" + digest[:20].translate(_HEX_TO_ALPHA)
 
 
 @dataclass(frozen=True)

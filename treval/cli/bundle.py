@@ -261,6 +261,7 @@ def build_bundle(
     target_url_host: str | None = None,
     corpus_sha: dict[str, str] | None = None,
     traffic_tier: str = "b_assumed_mix",
+    corpus_set: str = "en",
 ) -> dict[str, Any]:
     """The bundle `collect` writes: measurements[] + run metadata (no graded `report`;
     `report` produces that). Reuses the EV-7 serializer for the measurement shape.
@@ -279,10 +280,20 @@ def build_bundle(
     This is the SECOND serialization path (the report envelope is the first); both must derive
     availability the same way (R1's "two schemas, one truth" discipline)."""
     from treval.active_eval import EVIDENCE_REQUIREMENTS
-    from treval.rubric.serialize import derive_evidence_basis, serialize_measurement
+    from treval.rubric.serialize import (
+        assert_offline_recomputable_derived,
+        derive_evidence_basis,
+        derive_offline_recomputable,
+        serialize_measurement,
+    )
 
     ordered = sorted(measurements, key=lambda m: (m.indicator_id, m.subject))
     sha_map = corpus_sha or {}
+    # 🔴 EV-CN-BASELINE 前置3 — the offline-recomputability tier is DERIVED from the corpus set (its single
+    # source), stamped PER measurement (§1.3 "逐 measurement 带") so a later report that flattens en + cn
+    # bundles into one table keeps each number's class. Machine-gated against independent storage.
+    offline_marker = derive_offline_recomputable(corpus_set)
+    assert_offline_recomputable_derived(corpus_set, offline_marker)
     serialized = []
     for m in ordered:
         entry = serialize_measurement(
@@ -292,11 +303,15 @@ def build_bundle(
         # indicator, so "only one indicator changed corpus" cannot pass unnoticed.
         if m.indicator_id in sha_map:
             entry["corpus_sha"] = sha_map[m.indicator_id]
+        entry["offline_recomputable"] = offline_marker  # 前置3 — corpus_sha's sibling
         serialized.append(entry)
     doc: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "target_kind": target_kind,
         "evidence_basis": derive_evidence_basis(target_kind),
+        # 🔴 前置3 — the run-level offline-recomputability tier (all this run's measurements share it,
+        # since one collect run is one corpus_set); each measurement ALSO carries it, for combined reports.
+        "offline_recomputable": offline_marker,
         "tenant_id": tenant_id,
         "window": list(window),
         "mode": mode,

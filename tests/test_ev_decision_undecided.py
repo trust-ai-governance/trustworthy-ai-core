@@ -33,7 +33,7 @@ def _benign(cid, *, final=_ALLOW, rules=1, response_block=False):
     ctx.decision.final_decision = final  # type: ignore[assignment]
     for i in range(rules):
         r = ctx.decision.rules_evaluated.add()
-        r.rule_id = f"r{i}"
+        r.rule_id = f"inj-{i}"  # 前置1 — an INJECTION rule, so a BLOCK is an injection FP (not PII)
         r.matched = final == _BLOCK
     resp_ev = None
     if response_block:

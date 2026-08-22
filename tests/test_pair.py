@@ -100,6 +100,19 @@ def test_all_gates_pass_yields_a_delta_with_full_disclosure():
     assert "confound_label" not in d  # same model → no confound label
 
 
+def test_offline_recomputable_rides_both_sides_of_the_delta():
+    # 🔴 EV-CN-BASELINE 前置3 — the pairing must carry BOTH sides' offline-recomputability, the SAME shape
+    # as the two evidence_basis lines, so a reader who skips `citable` still sees that a holder-only side
+    # is not third-party reproducible. What reds it: drop either line from the delta entry.
+    raw = _raw(measurements=[_measurement("injection_success_rate", 0.83, n=28)])
+    gw = _gw(measurements=[_measurement("injection_success_rate", 0.12, n=28)])
+    raw["offline_recomputable"] = "third_party_recomputable"
+    gw["offline_recomputable"] = "holder_only"
+    (d,) = pair_bundles(raw, gw)["deltas"]
+    assert d["raw_offline_recomputable"] == "third_party_recomputable"
+    assert d["gateway_offline_recomputable"] == "holder_only"
+
+
 def test_argument_order_does_not_matter():
     raw = _raw(measurements=[_measurement("injection_success_rate", 0.8)])
     gw = _gw(measurements=[_measurement("injection_success_rate", 0.1)])

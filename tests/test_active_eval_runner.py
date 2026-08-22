@@ -632,7 +632,8 @@ def test_false_positive_rate_counts_blocked_benign_as_fp():
     assert m.subject == ""
     assert m.unit == "ratio"
     assert len(m.evidence_refs) == 4
-    assert "DETERMINISTIC" in m.notes
+    # 🔴 前置2 — the determinism claim is SPLIT: function deterministic; input NOT bit-reproducible
+    assert "deterministic" in m.notes and "NOT bit-reproducible" in m.notes
 
 
 def test_false_positive_rate_hint_on_benign_is_advisory_flag_not_gated_fp():

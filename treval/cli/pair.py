@@ -305,6 +305,13 @@ def pair_bundles(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
             "gateway_ci": gw_ci,
             "raw_evidence_basis": raw.get("evidence_basis"),
             "gateway_evidence_basis": gw.get("evidence_basis"),
+            # 🔴 EV-CN-BASELINE 前置3 — carry BOTH sides' offline-recomputability, the SAME shape as the
+            # two evidence_basis lines. gate3 refuses to mark a mixed-corpus pairing `citable`, but the
+            # delta is emitted either way (§5.4); a reader who skips `citable` would otherwise get a number
+            # silently spanning an in-repo and a holder-only corpus. The pair header already insists the
+            # reader see the two sides are not the same thing — recomputability is the same kind of thing.
+            "raw_offline_recomputable": raw.get("offline_recomputable"),
+            "gateway_offline_recomputable": gw.get("offline_recomputable"),
             "traffic_tier": raw_tier,
             "statistical": True,  # output-side rates are model-nondeterministic; small n ≠ conclusion
             "citable": not blockers,  # disclosure verdict; the delta is emitted either way (§5.4)

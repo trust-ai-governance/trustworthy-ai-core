@@ -407,6 +407,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     store_cases.set_defaults(func=_cmd_cases_store)
 
+    from treval.cli.collect import (
+        CORPUS_SETS,
+    )  # 件2 — the closed corpus-set enum (single source)
+
     for name, help_text in (
         ("collect", "drive the live gateway → Measurement bundle (operator)"),
         ("run", "collect ∘ report (convenience)"),
@@ -430,6 +434,11 @@ def build_parser() -> argparse.ArgumentParser:
         )
         col.add_argument("--wal", default=os.environ.get("TREVAL_EVAL_WAL_DIR"))
         col.add_argument("--corpus", default=None)
+        # 🔴 EV-CN-BASELINE 件2 — which curated producer set to run. `en` (default) is CURATION,
+        # bit-identical to every existing run; `cn` is CURATION_CN (the out-of-repo Chinese diagnostic
+        # batch). NEVER inferred — a CN run must be declared, so an English `--language-scope` can never
+        # silently probe the Chinese corpus.
+        col.add_argument("--corpus-set", choices=CORPUS_SETS, default="en")
         col.add_argument(
             "--tenant", default=os.environ.get("TREVAL_EVAL_TENANT", "__eval__")
         )
@@ -472,6 +481,14 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="also write the EV-R2 Tier-0 LLM01 injection case contract here (gateway run "
             "only; POINTERS only, disclosure_class=operator_only — do NOT publish)",
+        )
+        # 🔴 EV-CN-BASELINE 件4 — the BENIGN-side mirror: a Tier-0 case table so a blocked benign case is
+        # answerable by case_id (拦截来源 via decision_injection_source). Gateway-only, POINTERS only.
+        col.add_argument(
+            "--benign-cases-out",
+            default=None,
+            help="also write the 件4 Tier-0 benign case table here (gateway run only; POINTERS + "
+            "decision-stage FPR/flag口径 per case, disclosure_class=operator_only — do NOT publish)",
         )
         # EV-PIN: freeze the run's window. Supplying BOTH bounds makes the run reproducible
         # (same WAL + same bounds ⇒ same records) and stamps `pinned: true`. Bounds are
