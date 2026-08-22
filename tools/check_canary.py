@@ -33,7 +33,7 @@ from treval.active_eval.canary import (
     residual_literal_canaries,
 )
 from treval.active_eval.corpus import CorpusError, load_corpus_tree
-from treval.cli.collect import carrier_arm_dirs
+from treval.cli.collect import CORPUS_SETS, carrier_arm_dirs, curation_for
 
 _ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_CORPUS = _ROOT / "corpus"
@@ -113,7 +113,7 @@ def _carrier_report(
     """(scope-line, measurement-line) — 🔴 §8.5.1: what the gate MEASURED and which dirs it READ. The
     scope is the SAME derived tuple used to select the cases, never a second hardcoded copy (§8.5.2③)."""
     scope = (
-        f"作用域（从 CURATION 推导）：攻击臂 = {', '.join(attack_dirs)} · "
+        f"作用域（从当前 corpus-set 推导）：攻击臂 = {', '.join(attack_dirs)} · "
         f"良性臂 = {', '.join(benign_dirs)}"
     )
     meas = (
@@ -143,8 +143,11 @@ def _carrier_violation(gap: CarrierRateGap) -> list[Violation]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="check_canary", description=__doc__)
     ap.add_argument("--corpus", type=Path, default=_DEFAULT_CORPUS)
+    # 🔴 EV-CN-BASELINE 件3 — the arms are per corpus-set; `cn` compares the CN dirs, never across a
+    # language. Default `en` is bit-identical to the pre-change gate.
+    ap.add_argument("--corpus-set", choices=CORPUS_SETS, default="en")
     args = ap.parse_args(argv)
-    attack_dirs, benign_dirs = carrier_arm_dirs()
+    attack_dirs, benign_dirs = carrier_arm_dirs(curation_for(args.corpus_set))
     try:
         residual = _residual_violations(args.corpus)
         gap = _carrier_gap(args.corpus, attack_dirs, benign_dirs)
@@ -152,8 +155,38 @@ def main(argv: list[str] | None = None) -> int:
         print(f"canary gate: ERROR — {e}", file=sys.stderr)
         return 2
     scope, meas = _carrier_report(gap, attack_dirs, benign_dirs)
-    violations = residual + _carrier_violation(gap)
+    # 🔴 EV-CN-BASELINE 件5 — the selected set's dirs held ZERO cases in this root: the CN batch is
+    # out-of-repo, so a public-CI run never sees it. This gate must NOT silently PASS a check it did not
+    # run — a green CI is NOT evidence the CN carrier symmetry was ever verified (§6 / §8.5). Say so.
+    carrier_absent = gap.attack[1] == 0 and gap.benign[1] == 0
+    # 🔴 架构师裁定三-① — cases EXIST but NEITHER arm carries the canary (0/N vs 0/M). The 0pp gap is then
+    # a TRIVIAL truth (nothing to compare), NOT a verified symmetry. Say "空过" LOUD, exactly like the
+    # 件5 not-verified pattern — a bare "差 0pp PASS" would read as a real two-arm comparison.
+    no_carriers = not carrier_absent and gap.attack[0] == 0 and gap.benign[0] == 0
+    violations = residual + ([] if carrier_absent else _carrier_violation(gap))
     if not violations:
+        if carrier_absent:
+            print(
+                "canary gate: PASS（residual 已查）—— 🔴 本批语料不在本仓，carrier-rate 本项未校验"
+            )
+            print(f"    {scope}")
+            print(
+                "    carrier-rate：本根未找到所选集的语料目录（0 件）—— 仅跑前预检指向仓外时才校验；"
+                "绿色公开 CI 不构成携带率合规的证据"
+            )
+            return 0
+        if no_carriers:
+            print(
+                "canary gate: PASS（residual 已查）—— 🔴 两臂均无金丝雀，携带率对称是【空过】（0/0），"
+                "非真正的两臂比较"
+            )
+            print(f"    {scope}")
+            print(f"    {meas}")
+            print(
+                "    🔴 本批不带金丝雀（CURATION_CN 只三个决策侧 producer，功能无碍）；此门空过，"
+                "并非验过携带率对称"
+            )
+            return 0
         # 🔴 §8.5.1 — a green gate STILL prints its measurement + scope (no early return before these
         # lines, even when both arms carry 0 ⇒ gap 0pp): green must be falsifiable, not a bare "PASS".
         print(

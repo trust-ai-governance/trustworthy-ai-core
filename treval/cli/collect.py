@@ -23,7 +23,7 @@ import argparse
 import secrets
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,8 +48,15 @@ from treval.active_eval import (
     load_corpus,
     run_corpus,
 )
-from treval.active_eval.canary import CanarySet, assert_no_canary_plaintext
-from treval.active_eval.cases import serialize_case_contract
+from treval.active_eval.canary import (
+    CanaryLeakError,
+    CanarySet,
+    assert_no_canary_plaintext,
+)
+from treval.active_eval.cases import (
+    serialize_benign_case_table,
+    serialize_case_contract,
+)
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import DEFAULT_ARM_PARITY, check_arm_parity
 from treval.active_eval.target import ProbeResult
@@ -94,6 +101,30 @@ def _assert_probed_once(results: tuple[ProbeResult, ...]) -> None:
             f"F5: case_id(s) probed more than once in one collection: {dups[:5]} — the case-level "
             "dedup broke (a case's decision- and output-side numbers would read different executions)"
         )
+
+
+def _apply_declared_subject(prod: Producer, m: Measurement) -> Measurement:
+    """🔴 件2 fix — the producer's DECLARED `subject` must REACH the row, and be CHECKED that it did.
+
+    It used to be pure documentation: `Producer.subject` said "MUST match what factory().measure()
+    stamps" and NOTHING enforced it, so the `cn` producers declared subject="language:zh" while the
+    indicators stamped "". The CN rows came out as AGGREGATE rows — which BIND to rubric objectives.
+    Observed live on the first CN baseline: the report graded rob.l2 off 54 diagnostic Chinese cases
+    and printed 「能力缺口 · 任何样本量都过不了线」 for a batch declared NOT citable.
+    🔴 A declaration nobody enforces is not a declaration.
+
+    FILLS an empty subject only, so an indicator that stamps its own (the outcome_observable
+    disclosure row) still wins — the two never fight. Then RAISES if the declared value did not end
+    up on the row, so this can never silently regress to documentation again."""
+    if prod.subject and not m.subject:
+        m = replace(m, subject=prod.subject)
+    if prod.subject and m.subject != prod.subject:
+        raise ValueError(
+            f"producer {prod.indicator_id} declares subject={prod.subject!r} but the measurement "
+            f"carries {m.subject!r} — a declared subject that does not reach the row is how a "
+            "diagnostic batch silently becomes a graded aggregate"
+        )
+    return m
 
 
 def _run_arm_parity() -> str:
@@ -224,6 +255,67 @@ CURATION: tuple[Producer, ...] = (
 )
 
 
+# 🔴 EV-CN-BASELINE 件2 — the CN diagnostic batch is a SEPARATE producer set, NEVER folded into
+# CURATION. CURATION is全量: adding a CN row would make EVERY run (the English frozen/paired runs
+# included) probe the Chinese corpus ⇒ `--language-scope 英文…` becomes a lie and the run gets longer.
+# So CN lives in its own tuple, selected by `--corpus-set cn`; the DEFAULT (`en`) leaves CURATION — and
+# therefore every existing run — BIT-IDENTICAL. The three CN producers ride the EXISTING ids as
+# subject="language:zh" DISCLOSURE rows (§2): a subject-bearing row never binds a rubric objective and
+# never trips DuplicateIndicatorError, so the CN numbers can never be graded (a diagnostic batch must
+# not). The out-of-repo corpus root is passed at runtime via `--corpus`; this file names no path.
+CURATION_CN: tuple[Producer, ...] = (
+    Producer(
+        "injection_catch_rate",
+        InjectionCatchRate,
+        "llm01_cn_injection",
+        subject="language:zh",
+    ),
+    Producer(
+        "false_positive_rate",
+        FalsePositiveRate,
+        "llm01_cn_benign",
+        subject="language:zh",
+    ),
+    Producer(
+        "benign_flag_rate", BenignFlagRate, "llm01_cn_benign", subject="language:zh"
+    ),
+)
+
+CORPUS_SETS: tuple[str, ...] = ("en", "cn")
+_CURATION_BY_SET: dict[str, tuple[Producer, ...]] = {"en": CURATION, "cn": CURATION_CN}
+
+
+def curation_for(corpus_set: str) -> tuple[Producer, ...]:
+    """The active producer set for a run — `en` ⇒ CURATION (the default, bit-identical to every existing
+    run), `cn` ⇒ CURATION_CN (件2). Fail-closed on an unknown set so a typo can never silently fall back
+    to the English corpus and mislabel a CN run."""
+    try:
+        return _CURATION_BY_SET[corpus_set]
+    except KeyError:
+        raise ValueError(
+            f"unknown --corpus-set {corpus_set!r}; expected one of {CORPUS_SETS}"
+        ) from None
+
+
+def _assert_no_id_subdir_collision(producers: tuple[Producer, ...]) -> None:
+    """🔴 EV-CN-BASELINE 件1 — a GUARD, not a restructure. `corpus_sha` is keyed by indicator_id alone,
+    so two producers sharing an indicator_id but pointing at DIFFERENT corpus_subdirs would silently
+    overwrite each other's fingerprint (today safe only by the COINCIDENCE that same-id producers share a
+    subdir — nothing enforced it). 件2 makes the collision impossible in practice (CN is its own set, one
+    set active per run), so this does NOT change the data structure; it fails CLOSED if the invariant is
+    ever violated, rather than shipping a bundle whose corpus_sha lies about which corpus a producer ran.
+    Same-id/same-subdir (the aggregate + its disclosure rows) is fine — only a subdir SPLIT raises."""
+    by_id: dict[str, str] = {}
+    for p in producers:
+        prior = by_id.setdefault(p.indicator_id, p.corpus_subdir)
+        if prior != p.corpus_subdir:
+            raise ValueError(
+                f"indicator_id {p.indicator_id!r} bound to two corpus_subdirs "
+                f"({prior!r} and {p.corpus_subdir!r}) in one producer set — corpus_sha is keyed by "
+                "indicator_id, so this would silently overwrite one fingerprint (EV-CN-BASELINE 件1)"
+            )
+
+
 # §8.5.2 — the §6.2-3 carrier-rate gate's two arms are DERIVED from CURATION, never hand-listed. The
 # ATTACK arm is whatever corpus the injection indicators bind to; the BENIGN arm whatever the benign
 # indicators bind to. A hand-list is correct only by COINCIDENCE — the day someone binds a benign
@@ -237,14 +329,24 @@ _ATTACK_ARM_INDICATOR_IDS = frozenset(
 _BENIGN_ARM_INDICATOR_IDS = frozenset({"false_positive_rate", "benign_flag_rate"})
 
 
-def carrier_arm_dirs() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(attack_dirs, benign_dirs) for the carrier-rate gate, derived from CURATION so the arms track the
-    indicator↔corpus bindings (the single source of truth, §8.5.2). Each sorted + de-duplicated. Today
-    == (("llm01_prompt_injection",), ("llm01_benign",))."""
+def carrier_arm_dirs(
+    producers: tuple[Producer, ...] | None = None,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(attack_dirs, benign_dirs) for the carrier-rate gate, derived from `producers` so the arms track
+    the indicator↔corpus bindings (the single source of truth, §8.5.2). Each sorted + de-duplicated.
+    `producers=None` ⇒ the module CURATION global (resolved at CALL time, so a monkeypatch of CURATION is
+    honoured) == (("llm01_prompt_injection",), ("llm01_benign",)).
+
+    🔴 EV-CN-BASELINE 件3 — pass the ACTIVE corpus-set's tuple (CURATION_CN) and both arms become the CN
+    dirs, so the "carrier-rate gap ≤ 20pp" is measured WITHIN a language, never across one. Fold the CN
+    dirs into the English arms and that gap stops being the quantity it claims to be (a judge could then
+    separate the arms by language, not by whether the canary is carried)."""
+    if producers is None:
+        producers = CURATION
 
     def _dirs(ids: frozenset[str]) -> tuple[str, ...]:
         return tuple(
-            sorted({p.corpus_subdir for p in CURATION if p.indicator_id in ids})
+            sorted({p.corpus_subdir for p in producers if p.indicator_id in ids})
         )
 
     return _dirs(_ATTACK_ARM_INDICATOR_IDS), _dirs(_BENIGN_ARM_INDICATOR_IDS)
@@ -368,6 +470,11 @@ class ActiveScan:
     # no llm01_prompt_injection subdir).
     injection_cases: tuple[CorpusCase, ...] = ()
     injection_results: tuple[ProbeResult, ...] = ()
+    # 🔴 EV-CN-BASELINE 件4 — the BENIGN corpus + its ProbeResults, captured from the false_positive_rate
+    # producer's run (llm01_benign for `en`, llm01_cn_benign for `cn`), for the benign-side case-level
+    # table (--benign-cases-out). Empty when no benign producer ran.
+    benign_cases: tuple[CorpusCase, ...] = ()
+    benign_results: tuple[ProbeResult, ...] = ()
     # G1 — did PHASE 2 actually drain the async Tier-2 records? False ⇒ the Tier-2 rows are
     # UNMEASURED (n/a), never 0: "the judge scored below τ" and "we never looked" must not
     # collapse into the same number (the fail-open shape this ticket exists to close).
@@ -389,11 +496,17 @@ def collect_measurements(
     *,
     corpus_root: Path,
     warnings: list[str],
+    corpus_set: str = "en",
 ) -> ActiveScan:
     """Run every curated producer against `target`. A producer exception is caught, noted
     in `warnings`, and skipped (best-effort collection — §5). Pure w.r.t. `target`: pass a
     fake Target in tests to exercise this without a gateway. Also tallies probe-level errors
-    across the run for the whole-run guard (EV-PAIR-A2 §1)."""
+    across the run for the whole-run guard (EV-PAIR-A2 §1).
+
+    🔴 EV-CN-BASELINE 件2 — `corpus_set` selects the producer set (`en` default ⇒ CURATION, bit-identical
+    to every existing run; `cn` ⇒ CURATION_CN). 件1 — the set is guarded for id↔subdir collisions first."""
+    producers = curation_for(corpus_set)
+    _assert_no_id_subdir_collision(producers)
     measurements: list[Measurement] = []
     probe_count = 0
     error_count = 0
@@ -401,6 +514,8 @@ def collect_measurements(
     corpus_sha: dict[str, str] = {}
     injection_cases: tuple[CorpusCase, ...] = ()
     injection_results: tuple[ProbeResult, ...] = ()
+    benign_cases: tuple[CorpusCase, ...] = ()  # 件4 — the benign case-table source
+    benign_results: tuple[ProbeResult, ...] = ()
 
     # 🔴 PHASE 0 — PRE-FLIGHT the drain path, in SECONDS, before spending hours probing.
     #
@@ -444,7 +559,7 @@ def collect_measurements(
     # in its own case contract — two answers, one run. Probing once makes every producer over a corpus
     # read ONE observation, which is what "catch and success on one denominator" always claimed.
     by_subdir: dict[str, list[Producer]] = {}
-    for prod in CURATION:
+    for prod in producers:
         by_subdir.setdefault(prod.corpus_subdir, []).append(prod)
 
     probed: dict[str, tuple[CorpusCase, ...]] = {}
@@ -547,21 +662,44 @@ def collect_measurements(
         guardrail_cursor_after = after if isinstance(after, dict) else None
 
     # 🔴 PHASE 3 — measure. Every producer over a corpus reads the SAME results tuple.
-    # Iterates CURATION (not the by-corpus grouping) so the bundle's measurement ORDER is unchanged
-    # by this refactor — fixtures and diffs stay stable, and the one-aggregate-per-bound-id invariant
-    # is still read straight off CURATION.
-    if "llm01_prompt_injection" in runs:
+    # Iterates the ACTIVE producer set (not the by-corpus grouping) so the bundle's measurement ORDER is
+    # unchanged by this refactor — fixtures and diffs stay stable, and the one-aggregate-per-bound-id
+    # invariant is still read straight off the set (件2: CURATION for `en`, CURATION_CN for `cn`).
+    # 🔴 件2 fix — the ATTACK subdir is DERIVED from the active producer set, exactly like `benign_subdir`
+    # below. It used to be hardcoded `"llm01_prompt_injection"`, which made the pair ASYMMETRIC: on a `cn`
+    # run the benign table wrote and the attack contract silently skipped ("no results to serialize"), so
+    # a run could satisfy every other void-condition while its attack rows — the ones the §3.1 recompute
+    # guard re-adds — did not exist. Observed live on the first CN baseline run, which the pre-declared
+    # conditions therefore VOIDED. Derive it, so a new corpus set can never lose the contract by omission.
+    injection_subdir = next(
+        (
+            p.corpus_subdir
+            for p in producers
+            if p.indicator_id == "injection_catch_rate"
+        ),
+        None,
+    )
+    if injection_subdir is not None and injection_subdir in runs:
         # EV-R2 — the contract is built from the SAME single run the aggregates are measured over
         # (that identity is now structural, not a "capture the first pass" convention).
-        injection_cases = probed["llm01_prompt_injection"]
-        injection_results = runs["llm01_prompt_injection"]
-    for prod in CURATION:
+        injection_cases = probed[injection_subdir]
+        injection_results = runs[injection_subdir]
+    # 🔴 件4 — capture the BENIGN run (the FPR producer's corpus: llm01_benign for `en`, llm01_cn_benign
+    # for `cn`) from the SAME single probe pass, so the benign case table re-reads exactly what FPR did.
+    benign_subdir = next(
+        (p.corpus_subdir for p in producers if p.indicator_id == "false_positive_rate"),
+        None,
+    )
+    if benign_subdir is not None and benign_subdir in runs:
+        benign_cases = probed[benign_subdir]
+        benign_results = runs[benign_subdir]
+    for prod in producers:
         shared = runs.get(prod.corpus_subdir)
         if shared is None:
             continue  # its corpus failed to load/probe — already warned in PHASE 1
         try:
             (m,) = prod.factory().measure(shared)
-            measurements.append(m)
+            measurements.append(_apply_declared_subject(prod, m))
         except Exception as e:
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
@@ -574,6 +712,8 @@ def collect_measurements(
         corpus_sha,
         injection_cases,
         injection_results,
+        benign_cases,
+        benign_results,
         drained,
         canary_set_id,
         guardrail_cursor_before=guardrail_cursor_before,
@@ -597,7 +737,7 @@ def _write_case_contract(
     content — disclosure_class=operator_only."""
     if not results:
         warnings.append(
-            "--cases-out: no llm01_prompt_injection results to serialize (contract skipped)"
+            "--cases-out: no injection-arm results to serialize (contract skipped)"
         )
         return
     try:
@@ -623,6 +763,50 @@ def _write_case_contract(
     print(
         f"wrote {dest}: EV-R2 case contract "
         f"(disclosure_class={contract['disclosure_class']}, {len(contract['cases'])} cases "
+        "— operator_only, do NOT publish)",
+        file=sys.stderr,
+    )
+
+
+def _write_benign_case_table(
+    cases: tuple[CorpusCase, ...],
+    results: tuple[ProbeResult, ...],
+    tenant_id: str,
+    path: str,
+    *,
+    warnings: list[str],
+) -> None:
+    """🔴 EV-CN-BASELINE 件4 (--benign-cases-out) — serialize + write the Tier-0 benign case-level table
+    from THIS run, the mirror of `_write_case_contract`. It carries POINTERS + the decision-stage FPR/flag
+    口径 per case (拦截来源 = decision_injection_source), so a blocked benign case is answerable by case_id.
+    serialize_benign_case_table refuses to emit if any canary plaintext reached a row (§7.4-5). Best-effort
+    (§5): a missing benign run is a warning, not a crashed collection."""
+    if not results:
+        warnings.append(
+            "--benign-cases-out: no benign results to serialize (table skipped)"
+        )
+        return
+    try:
+        table = serialize_benign_case_table(
+            cases,
+            results,
+            target_kind="gateway",
+            tenant_id=tenant_id,
+            generated_at_ns=time.time_ns(),
+        )
+    except CanaryLeakError as e:
+        warnings.append(f"--benign-cases-out: refused (canary plaintext): {e}")
+        return
+    import json
+
+    dest = Path(path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(table, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"wrote {dest}: 件4 benign case table "
+        f"(disclosure_class={table['disclosure_class']}, {len(table['cases'])} cases "
         "— operator_only, do NOT publish)",
         file=sys.stderr,
     )
@@ -748,6 +932,18 @@ def run_collect(args: argparse.Namespace) -> int:
                 )
                 return EXIT_IO
 
+        # 🔴 EV-CN-BASELINE 架构师裁定三-② — a CN run measures ONLY the decision-side arm (catch / FPR /
+        # benign_flag); CURATION_CN has NO injection_success_rate producer, so the bundle carries catch
+        # WITHOUT success. Declare that scope UP FRONT — a reader who sees catch and no success would else
+        # read the absence as "no attack succeeded" (false). Pre-run, never after-the-fact.
+        if args.corpus_set == "cn":
+            print(
+                "🔴 作用域声明（跑前）：本批为中文诊断批，只测决策侧（injection_catch_rate / "
+                "false_positive_rate / benign_flag_rate）；【本批不测输出侧成功率】—— 没有 "
+                "injection_success_rate，catch 无 success 相伴不等于『没有攻击得逞』。",
+                file=sys.stderr,
+            )
+
         # Lazy — the targets pull httpx only when we actually collect.
         from treval.active_eval import GatewayTarget, OpenAITarget
 
@@ -795,7 +991,10 @@ def run_collect(args: argparse.Namespace) -> int:
         # distinguishable from observed_window (the whole WAL the passive scan read, incl. history).
         scan_start_ns = time.time_ns()
         active = collect_measurements(
-            target, corpus_root=corpus_root, warnings=warnings
+            target,
+            corpus_root=corpus_root,
+            warnings=warnings,
+            corpus_set=args.corpus_set,
         )
         # E3-n ④ — snapshot the build fingerprint AFTER the run (isinstance narrows target →
         # GatewayTarget for mypy). citability blocks the run if before != after (a mid-run change),
@@ -820,6 +1019,25 @@ def run_collect(args: argparse.Namespace) -> int:
                 active.injection_results,
                 args.tenant,
                 cases_out,
+                warnings=warnings,
+            )
+        # 🔴 件4 (--benign-cases-out): the benign case-level table from THIS run. Gateway-only for the
+        # same reason (it reads WAL decision records for the FPR/flag口径). Independent of --cases-out so
+        # a benign-only diagnostic run can still emit it.
+        benign_cases_out = getattr(args, "benign_cases_out", None)
+        if benign_cases_out:
+            if target_kind != "gateway":
+                print(
+                    "error: --benign-cases-out needs a gateway run (the table carries WAL decision "
+                    "pointers a bare model has no record for)",
+                    file=sys.stderr,
+                )
+                return EXIT_IO
+            _write_benign_case_table(
+                active.benign_cases,
+                active.benign_results,
+                args.tenant,
+                benign_cases_out,
                 warnings=warnings,
             )
     # EV-PAIR-A2 §1: did the WHOLE run get zero model responses? (every probe errored). Computed
@@ -928,6 +1146,7 @@ def run_collect(args: argparse.Namespace) -> int:
         temperature=0.0,  # pinned for the statistical verticals — recorded, not assumed
         target_url_host=target_url_host,
         corpus_sha=active.corpus_sha,
+        corpus_set=args.corpus_set,  # 前置3 — derives the offline-recomputability tier
         pinned=pinned,
         provenance=build_provenance(
             wal_dir=args.wal,
@@ -1004,7 +1223,7 @@ def run_collect(args: argparse.Namespace) -> int:
     for w in warnings:
         print(f"  ⚠ {w}", file=sys.stderr)
     print(
-        f"wrote {out}: {len(active.measurements)}/{len(CURATION)} active producer(s) + "
+        f"wrote {out}: {len(active.measurements)}/{len(curation_for(args.corpus_set))} active producer(s) + "
         f"{len(passive)} passive measurement(s)",
         file=sys.stderr,
     )
