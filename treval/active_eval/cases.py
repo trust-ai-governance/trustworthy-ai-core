@@ -36,10 +36,14 @@ from collections.abc import Iterable, Mapping, Sequence
 from treval.active_eval.canary import assert_no_canary_plaintext
 from treval.active_eval.checks import (
     attribution_cell,
+    decision_injection_source,
+    denied_at_decision,
     evaluate,
+    flagged_at_decision,
     gateway_undecided,
     hard_blocked,
     injection_attribution_source,
+    injection_rule_evaluated,
 )
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.terminal import response_terminal_class
@@ -168,15 +172,24 @@ def _terminal_verdict(pr: ProbeResult) -> str:
 def _row_catch_attribution(pr: ProbeResult) -> str | None:
     """F1 (E3F §1) — the case row's catch-attribution signal, mirroring the indicator at the DEFAULT
     (`hard_or_flag`)口径 that aggregates_from_results measures against, so the rows re-add BIT-FOR-BIT
-    (§3.1). Three states:
-      • null                — the gateway did NOT react (a miss: in the denominator, uncaught);
-      • 'unattributable'    — reacted, but NO injection rule matched ⇒ EXITS the catch denominator;
+    (§3.1). States (🔴 A3 splits the old 'unattributable' in two, matching _catch_counts exactly):
+      • null                — a MISS in the denominator (uncaught). Either the gateway did NOT react, OR
+                              it reacted via a non-injection rule while an injection rule WAS evaluated
+                              (the detector looked and did not catch — 判了 不许伪装成 没法判);
+      • 'unattributable'    — reacted, but NO injection rule even ran ⇒ truly unmeasurable, EXITS the
+                              catch denominator (没法判 不许伪装成 判了);
       • a source string     — 'tag_attack_class' / 'tag_owasp' / 'prefix_fallback' ⇒ an attributed catch.
-    🔴 Kept separate from `governance_reacted` (which stays the bare blocked_or_flagged, still needed by
-    the control-partner exclusion): F1 splits 'reacted' from 'reacted BY an injection rule'."""
+    🔴 recompute_from_cases tells a null-miss from an 'unattributable' exit purely from these values, and
+    tells the two kinds of null apart via `governance_reacted` (needed only for the 件5 no_verdict guard).
+    Kept separate from `governance_reacted` (the bare blocked_or_flagged, still needed by the
+    control-partner exclusion): F1 splits 'reacted' from 'reacted BY an injection rule'."""
     if not evaluate("blocked_or_flagged", pr):
         return None  # not reacted — a genuine miss (measurable, uncaught)
-    return injection_attribution_source(pr) or "unattributable"
+    source = injection_attribution_source(pr)
+    if source is not None:
+        return source  # reacted via an injection rule — an attributed catch
+    # reacted, but NOT via an injection rule: a MISS if the detector was evaluated, else truly unmeasurable
+    return None if injection_rule_evaluated(pr) else "unattributable"
 
 
 def _evidence_ref(pr: ProbeResult) -> dict | None:
@@ -381,4 +394,85 @@ def serialize_case_contract(
     # caught a leak.
     if not include_response_content:
         assert_no_canary_plaintext(envelope, where="case contract (Tier-0)")
+    return envelope
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 EV-CN-BASELINE 件4 — the BENIGN-side case-level table (CN and English share it)
+# --------------------------------------------------------------------------- #
+def build_benign_cases(
+    cases: Iterable[CorpusCase],
+    results: Iterable[ProbeResult],
+    *,
+    target_kind: str,
+) -> list[dict]:
+    """One row per benign probe, the MIRROR of the attack arm's case table but framed on the FPR /
+    benign_flag decision-stage口径 (E3-n①). The English side had NONE, and it cost a real run: a benign
+    case was blocked and "which one" was answerable from NO artifact — only by walking the WAL evidence_ref
+    by evidence_ref. CN FPR is a first-of-its-kind measurement, so every k MUST be answerable per case, or
+    §5's "良性 FPR 低" cannot be verified.
+
+    🔴 拦截来源 reuses the A1 predicate `decision_injection_source` (NOT a newly-minted word): paired with
+    `denied_at_decision`, a blocked benign case reads as an injection FALSE POSITIVE (source ≠ None) or a
+    non-injection block (source None — a PII/content rule, NOT an injection FP), exactly as FPR counts it.
+    🔴 Tier-0: POINTERS only (request_id + evidence_ref) and bare rule_ids — ZERO response content and, in
+    particular, ZERO canary plaintext (assert_no_canary_plaintext guards the envelope, as the attack table
+    does). A probe whose case is absent is skipped (like build_cases / reporting.py)."""
+    by_id = {c.id: c for c in cases}
+    availability = derive_availability(target_kind, None)
+    out: list[dict] = []
+    for pr in results:
+        case = by_id.get(pr.case_id)
+        if case is None:
+            continue
+        out.append(
+            {
+                "case_id": case.id,
+                "attack_class": case.attack_class,  # benign_hard_negative / benign_* — never a value
+                "verdict": case_verdict(pr),
+                # the FPR口径, per case: was the user DENIED at the DECISION stage, and if so BY WHOM —
+                "denied_at_decision": denied_at_decision(pr),
+                # 🔴 A1's predicate: the injection-attribution source of a decision-stage block (None ⇒ a
+                # non-injection rule blocked ⇒ NOT an injection FP; a source string ⇒ an injection FP).
+                "decision_block_source": decision_injection_source(pr),
+                # the benign_flag_rate口径 companion: a decision-stage SOFT flag (user still served).
+                "flagged_at_decision": flagged_at_decision(pr),
+                # 序8 件5 — the response-stage governance class (blocked/allowed/no_verdict/none).
+                "terminal_verdict": _terminal_verdict(pr),
+                # E3-n① — the rule_ids that FIRED this run, as bare facts (no categorization): so a
+                # flagged/blocked benign case can be inspected for WHICH rules matched. DECISION-stage only.
+                "fired_rule_ids": _fired_rule_ids(pr),
+                "availability": availability,
+                "request_id": pr.request_id or None,
+                "evidence_ref": _evidence_ref(pr),
+            }
+        )
+    return out
+
+
+def serialize_benign_case_table(
+    cases: Iterable[CorpusCase],
+    results: Iterable[ProbeResult],
+    *,
+    target_kind: str,
+    tenant_id: str,
+    generated_at_ns: int,
+) -> dict:
+    """件4 — the Tier-0 (operator_only) benign case-level table envelope. Unlike the attack case CONTRACT,
+    it carries NO §3.1 aggregate recompute (FPR is not a re-addable contract); it is a queryable table so
+    a blocked benign case is answerable per case_id. 🔴 Canary-safe: assert_no_canary_plaintext refuses to
+    emit if any canary plaintext reached a row (the same guard the attack Tier-0 table守着)."""
+    cases = list(cases)
+    rows = build_benign_cases(cases, results, target_kind=target_kind)
+    envelope = {
+        "schema_version": SCHEMA_VERSION,
+        "disclosure_class": "operator_only",
+        "table_kind": "benign_case_table",  # NOT a recompute contract — a per-case FPR/flag disclosure
+        "corpus_sha": corpus_fingerprint(cases),
+        "target_kind": target_kind,
+        "tenant_id": tenant_id,
+        "generated_at_ns": generated_at_ns,
+        "cases": rows,
+    }
+    assert_no_canary_plaintext(envelope, where="benign case table (Tier-0, 件4)")
     return envelope

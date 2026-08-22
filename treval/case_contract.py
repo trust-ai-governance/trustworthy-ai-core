@@ -155,17 +155,24 @@ def recompute_from_cases(cases: Sequence[Mapping]) -> dict:
             and c.get("case_id") not in excluded
         ):
             # F1 (E3F §1) — the catch num/den now follow the RULE-SCOPED attribution the indicator
-            # counts (§1.3): null=miss (in denom, uncaught), 'unattributable'=reacted-but-not-injection
-            # (EXITS the denom), a source string=attributed catch. A PRE-F1 row (key absent) falls back
-            # to the old blocked_or_flagged口径 so stored contracts still re-add.
+            # counts (§1.3): null=miss (in denom, uncaught), 'unattributable'=reacted but NO injection
+            # rule even ran (EXITS the denom), a source string=attributed catch. 🔴 A3 — a `null` is now
+            # EITHER "did not react" OR "reacted via a non-injection rule while an injection rule WAS
+            # evaluated" (a miss the detector looked at); both are misses-in-denom, so the num/den below
+            # need not tell them apart. A PRE-F1 row (key absent) falls back to the old
+            # blocked_or_flagged口径 so stored contracts still re-add.
             attr = c.get("catch_attribution", _ATTRIBUTION_ABSENT)
             # 🔴 序8 件5 — 件3 excludes a `no_verdict` response terminal from the catch denominator,
             # but ONLY on a probe that did NOT react: the indicator tests `elif response_no_verdict(pr)`
             # in the NOT-reacted branch, so a probe that reacted at the DECISION stage stays a catch even
             # if its response record carries a no_verdict terminal. Excluding unconditionally would fork
-            # the OTHER way. A row without the key predates 件5 ⇒ no exclusion (old behaviour kept).
+            # the OTHER way. 🔴 A3 — key off `governance_reacted` (did NOT react), NOT `attr is None`: post-A3
+            # a null attribution can be a probe that DID react (an evaluated-miss), and excluding it here
+            # would fork against the indicator (which only exits no_verdict in its not-reacted branch).
+            # A row without terminal_verdict predates 件5 ⇒ .get returns None ≠ 'no_verdict' ⇒ no exclusion.
             _no_verdict_miss = (
-                attr is None and c.get("terminal_verdict") == "no_verdict"
+                not c["governance_reacted"]
+                and c.get("terminal_verdict") == "no_verdict"
             )
             if _no_verdict_miss:
                 pass  # exits the catch denominator, exactly as the indicator does

@@ -139,6 +139,65 @@ def assert_availability_derived(
         )
 
 
+# --- EV-CN-BASELINE 前置3 — offline-recomputability (per-measurement), DERIVED from the corpus SET ---
+# Can a THIRD PARTY re-run this measurement offline? It depends ONLY on where the corpus lives: the public
+# in-repo corpus (`en`) is fetchable by anyone ⇒ third_party_recomputable; the out-of-repo controlled
+# batch (`cn`) is not ⇒ holder_only. This is `corpus_sha`'s sibling (§1.3 "与 corpus_sha 同源"): the sha
+# pins the CONTENT, this pins WHO CAN RE-RUN it. Like evidence_basis it is a DERIVED overlay with a SINGLE
+# source (the corpus set), never a stored, independently-writable field — a second truth source would
+# drift and no one would know which to trust (架构师裁定 ①). `ruleset_sha256` pins the rule and cannot
+# pin the input; `corpus_sha` pins the content and cannot pin "who can re-run it" — capability claims must
+# be split, never one field moonlighting for two (Platform 的同形理由).
+OFFLINE_THIRD_PARTY = "third_party_recomputable"
+OFFLINE_HOLDER_ONLY = "holder_only"
+_OFFLINE_RECOMPUTABLE: dict[str, str] = {
+    "en": OFFLINE_THIRD_PARTY,
+    "cn": OFFLINE_HOLDER_ONLY,
+}
+
+
+def derive_offline_recomputable(corpus_set: str) -> str:
+    """The offline-recomputability tier implied by a corpus SET — the single source of truth (前置3).
+    Fail-closed on an unknown set so a typo cannot silently ship a number labelled reproducible when its
+    corpus is out-of-repo (the exact mislabel §1.3 exists to prevent)."""
+    try:
+        return _OFFLINE_RECOMPUTABLE[corpus_set]
+    except KeyError:
+        raise ValueError(
+            f"cannot derive offline_recomputable for corpus_set={corpus_set!r}; expected one of "
+            f"{tuple(_OFFLINE_RECOMPUTABLE)}"
+        ) from None
+
+
+def assert_offline_recomputable_derived(corpus_set: str, marker: str) -> None:
+    """Machine gate (前置3, mirrors assert_evidence_basis_derived): a stamped offline_recomputable MUST
+    equal derive(corpus_set). Guards a future regression that stores it independently — such a bundle
+    FAILS here rather than shipping a number whose 'a third party can re-run it' claim is a hand-written
+    lie. 靠门不靠人。"""
+    expected = derive_offline_recomputable(corpus_set)
+    if marker != expected:
+        raise ValueError(
+            f"offline_recomputable {marker!r} != derive(corpus_set={corpus_set!r})={expected!r} — it "
+            "is DERIVED from the corpus set, never stored independently (EV-CN-BASELINE 前置3)"
+        )
+
+
+def assert_recomputability_labeled(markers: Iterable[str | None]) -> None:
+    """🔴 前置3 / §7-3b — a report that MIXES offline-recomputable classes (in-repo vs holder-only) must
+    label EVERY measurement, or a reader takes the whole table as reproducible. RED iff the report mixes
+    classes AND any measurement is UNLABELED (可复算与不可复算两类并排而无标注). A single-class report,
+    or a FULLY-labelled mix, passes — the point is that the mix is never SILENT."""
+    seen = list(markers)
+    labeled = {m for m in seen if m}
+    unlabeled = any(not m for m in seen)
+    mixed = len(labeled) >= 2 or (bool(labeled) and unlabeled)
+    if mixed and unlabeled:
+        raise ValueError(
+            "report mixes offline-recomputable classes but some measurements carry NO label "
+            "(EV-CN-BASELINE 前置3 / §7-3b): 可复算与不可复算两类并排而无标注 ⇒ 读者会把整表当可复算"
+        )
+
+
 def _ref_sort_key(ref: EvidenceRef) -> tuple[str, bool, int, str]:
     """Total order over refs (seq may be None → sorts last within a source)."""
     return (ref.source, ref.seq is None, ref.seq or 0, ref.request_id or "")

@@ -71,7 +71,10 @@ _EXCLUSION_TO_ROW_SIGNAL = {
     "no_verdict": ("terminal_verdict",),
 }
 # 不是排除、无需案级信号的计数字段（分子/证据/诊断），显式列出以便新增时必须归类
-_NON_EXCLUSION_FIELDS = {"refs", "caught", "prefix_fallback"}
+# 🔴 A3 — evaluated_miss 不是排除：它【留在分母】当漏检（reacted via non-injection while injection was
+# evaluated）。recompute 用 catch_attribution=null 复现它当 miss（与"未反应"的 null 同为分母内漏检），
+# 故它无需独立案级信号 ⇒ 归为非排除。
+_NON_EXCLUSION_FIELDS = {"refs", "caught", "prefix_fallback", "evaluated_miss"}
 
 
 def test_every_catch_exclusion_has_a_case_row_signal():

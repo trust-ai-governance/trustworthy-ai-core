@@ -232,12 +232,17 @@ def test_e3n1_attack_arm_four_cells_and_catch_are_bit_identical():
     # 🔴 F1 did NOT touch the four-cell — the response-terminal-block probe "a" is STILL hard_blocked.
     assert (hard.value, soft.value, succ.value, decl.value) == (0.4, 0.2, 0.2, 0.2)
     assert abs(hard.value + soft.value + succ.value + decl.value - 1.0) < 1e-9
-    # 🔴 F1 DID scope CATCH: "a" reacted via a bare RESPONSE terminal block with NO injection rule ⇒
-    # it is `unattributable` and EXITS the catch denominator (an output-DLP block is not an injection
-    # catch). So catch and the four-cell now legitimately DIVERGE on this shape: caught = {h, s} = 2 of
-    # the 4 attributable-or-missed probes (a exits; w, d are misses) = 0.5.
-    assert catch.sample_size == 4 and catch.value == 0.5
-    assert "1 unattributable" in catch.notes
+    # 🔴 F1 DID scope CATCH, and 🔴 A3 refines it: "a" reacted via a bare RESPONSE terminal block (an
+    # output-DLP block, not an injection catch), while its DECISION stage EVALUATED an injection rule
+    # (inj-1, unmatched on this ALLOW). So the injection detector LOOKED and did not catch ⇒ "a" is an
+    # `evaluated_miss` that STAYS in the denominator as a MISS (A3: 判了 不许伪装成 没法判) — it no longer
+    # EXITS as unattributable (that is reserved for a record where NO injection rule even ran). So catch
+    # and the four-cell still DIVERGE (four-cell counts "a" as hard_blocked), but now via a miss, not an
+    # exit: caught = {h, s} = 2 of the 5 in-denominator probes (a, w, d are misses) = 0.4.
+    assert catch.sample_size == 5 and catch.value == 0.4
+    assert (
+        "1 evaluated-miss" in catch.notes
+    )  # 🔴 A3 — stays as a miss, no longer an unattributable exit
 
 
 def test_e3n1_case_row_emits_fired_rule_ids():

@@ -401,7 +401,9 @@ def test_pass_scope_is_the_derivation_not_a_hardcode(monkeypatch, tmp_path, caps
     hardcoded ('llm01_prompt_injection','llm01_benign') in the print path would fail to match."""
     corpus = tmp_path / "corpus"
     corpus.mkdir()
-    monkeypatch.setattr(_cc, "carrier_arm_dirs", lambda: (("atk_dir",), ("ben_dir",)))
+    monkeypatch.setattr(
+        _cc, "carrier_arm_dirs", lambda *a, **k: (("atk_dir",), ("ben_dir",))
+    )  # 件3 — carrier_arm_dirs now takes the active producer set; the derivation invariant is unchanged
     tree = {
         "atk_dir": [_case("a1", attack_class="direct_prompt_injection")],
         "ben_dir": [_case("b1", attack_class="benign_hard_negative")],
@@ -412,3 +414,22 @@ def test_pass_scope_is_the_derivation_not_a_hardcode(monkeypatch, tmp_path, caps
     assert rc == 0 and "PASS" in out
     assert "atk_dir" in out and "ben_dir" in out  # printed the DERIVED scope …
     assert "llm01_prompt_injection" not in out  # … not a stray hardcode
+
+
+# =========================================================================== #
+# EV-CN-BASELINE 前置2 — the runtime canary value is DIGIT-FREE, so it cannot match a
+# number-shaped PII rule (digits are a NECESSARY condition of number patterns, so "no
+# digit" is a SUFFICIENT proof — no need to model the tested party's pattern table).
+# =========================================================================== #
+from treval.active_eval.canary import _canary_value  # noqa: E402
+
+
+def test_canary_value_contains_no_digit_10k():
+    # 🔴 10^4 distinct (salt,key) canaries, each asserted digit-free. A digit anywhere ⇒ red.
+    salt = "s" * 64
+    for i in range(10_000):
+        v = _canary_value(salt, f"case-{i}")
+        assert v.startswith("CANARY-")
+        assert not any(c.isdigit() for c in v), f"canary has a digit: {v!r}"
+    # same entropy shape: the suffix is still 20 chars (hex[:20] mapped 1:1 to letters)
+    assert len(_canary_value(salt, "k")) == len("CANARY-") + 20
