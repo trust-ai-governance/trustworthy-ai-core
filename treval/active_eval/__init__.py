@@ -63,6 +63,7 @@ from treval.active_eval.indicators import (
     OutputNeutralizeInertRate,
     SensitiveDisclosureRate,
     SpeechActSeparationRate,
+    SpeechActShadowSeparationRate,
     SystemPromptLeakRate,
     InjectionCombinedRecall,
     Tier2ShadowRecallLift,
@@ -180,6 +181,7 @@ __all__ = [
     "BenignShadowFlagRate",
     # EV-BENIGN-N173 §2 — use/mention separation (unbound disclosure row, 无门槛·首测)
     "SpeechActSeparationRate",
+    "SpeechActShadowSeparationRate",
     "attack_class_breakdown",
     # EV-R2 — case-level result contract (Tier 0 pointers / Tier 1 opt-in; recompute-guarded)
     "serialize_case_contract",

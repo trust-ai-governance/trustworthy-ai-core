@@ -19,8 +19,19 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from treval.citability import (
+    FPR_DISCLOSURE_IDS as _FPR_IDS,
+    FPR_PER_TENANT_ONLY,
+    decision_fpr_measurability,
+    decision_fpr_refusal,
+    derive_family_c_coreport,
     CRITERIA_VERSION,
+    FAMILY_C_MARKER,
+    FAMILY_C_COREPORT_FIX,
+    FAMILY_C_SUBJECT,
+    JUDGE_COREPORT_FIX,
+    assert_judge_coreport_derived,
     citation_form,
+    derive_judge_coreport,
     report_citability,
     run_config_note,
 )
@@ -424,6 +435,28 @@ def serialize_self_contained_bundle(
     config_note = run_config_note(
         provenance
     )  # E3-h: the freeze-pack config, once per run
+    # 🔴 EV-JUDGE-UNION 件2 — the co-report gate is PER-MEASUREMENT (not the whole-report verdict): a judge-
+    # movable number published without the mention-arm twin is not_citable ON ITS OWN, even in an otherwise
+    # citable report. Derived from the ids actually present, asserted (derive-not-store).
+    # 🔴 EV-JUDGE-UNION 件5 — under Tier-2 enforce the DECISION-stage FPR is blind to an entire class of
+    # blocks, so it must stop emitting a number: the under-count it would report is indistinguishable, in
+    # the number, from the system genuinely performing well.
+    _fpr_refusal = decision_fpr_refusal(provenance)
+    _fpr_verdict = decision_fpr_measurability(provenance)
+    _present_ids = {m.indicator_id for m in materialized}
+    judge_blocked = derive_judge_coreport(_present_ids)
+    assert_judge_coreport_derived(_present_ids, judge_blocked)
+    # 🔴 EV-EN-BENIGN-HOLDOUT — 族 C is in the FPR denominator, so its own stratified row must be present.
+    # Derived from the subjects actually in the product; blocks ONLY the whole-arm English FPR (the row's
+    # absence is what makes that number unreadable), never the CN stratum or the row itself.
+    # 🔴 the trigger is "族 C is IN this product's denominator", read from the family-C row's own presence
+    # being REQUIRED once any case of it was measured — signalled by the run declaring the stratum at all.
+    # A product with no family-C cases at all is unaffected (nothing to co-report).
+    _subjects = {m.subject for m in materialized}
+    _family_c_in_denominator = any(
+        m.notes and FAMILY_C_MARKER in m.notes for m in materialized
+    )
+    _family_c_missing = _family_c_in_denominator and derive_family_c_coreport(_subjects)
     for m, row in zip(
         sorted(materialized, key=lambda x: (x.indicator_id, x.subject)),
         base["measurements"],
@@ -438,13 +471,36 @@ def serialize_self_contained_bundle(
         # None, so a `needs_wal`-only check would wrongly hand them probe_window.
         _active = _req in ("needs_decision", "output_only")
         _window = probe_window if (_active and probe_window) else window
+        # 🔴 件2 — a judge-movable measurement missing its mention-arm twin is not_citable on its own; its
+        # blocker is the co-report reason (indicator-specific), overriding the report-level verdict here.
+        _jb = m.indicator_id in judge_blocked
+        # 🔴 族 C co-report: the WHOLE-ARM English FPR is not citable while family C sits in its
+        # denominator without its own row. The family-C row itself, and the CN stratum, are untouched.
+        _fc = (
+            _family_c_missing
+            and m.indicator_id in _FPR_IDS
+            and m.subject not in (FAMILY_C_SUBJECT, "language:zh")
+        )
+        # 件5 — refuse the decision-stage FPR entirely (blind everywhere), or refuse only the GLOBAL row
+        # (blind on some tenants ⇒ the number must be split, not voided). 🔴 A per-tenant row is fine.
+        _enforce_blind = bool(_fpr_refusal) and m.indicator_id in _FPR_IDS
+        if _enforce_blind and _fpr_verdict == FPR_PER_TENANT_ONLY:
+            _enforce_blind = not m.subject.startswith("tenant:")
         row["citation_form"] = citation_form(
             m,
             pinned=pinned,
             window=_window,
             evidence_basis=base["evidence_basis"],
-            citable=citable,
-            first_blocker=first_blocker,
+            citable=citable and not _jb and not _fc and not _enforce_blind,
+            first_blocker=(
+                _fpr_refusal
+                if _enforce_blind
+                else JUDGE_COREPORT_FIX
+                if _jb
+                else FAMILY_C_COREPORT_FIX
+                if _fc
+                else first_blocker
+            ),
             satisfied_when=pred_by_indicator.get(m.indicator_id),
             config_note=config_note,
         )
