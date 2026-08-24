@@ -568,6 +568,34 @@ def build_parser() -> argparse.ArgumentParser:
             "value, e.g. 60) — the gateway --timeout is then DERIVED as 2× this (not guessed), and the "
             "value is pinned into the freeze pack (E3-n ③)",
         )
+        # 🔴 EV-CN-BENIGN-N180 件0 — the JUDGE/τ declaration axes (operator-declared, like
+        # --language-scope). Absent ⇒ not a citable run: a number that didn't record which τ / measurement
+        # path / judge form it used cannot be cited as a product capability. `--measurement-path` IS the
+        # assembly axis (offline_judge_harness vs in_product_gateway).
+        col.add_argument(
+            "--judge-form",
+            default=None,
+            help="the judge form these numbers were measured under: 'single' | 'union:<n>' (N180 件0)",
+        )
+        col.add_argument(
+            "--measurement-path",
+            choices=("offline_judge_harness", "in_product_gateway"),
+            default=None,
+            help="where the numbers were measured — the assembly axis; a gateway run is "
+            "in_product_gateway (N180 件0)",
+        )
+        col.add_argument(
+            "--tau-declared",
+            default=None,
+            help="the τ these numbers were computed with (N180 件0)",
+        )
+        col.add_argument(
+            "--tau-source",
+            choices=("shipped", "fitted", "other"),
+            default=None,
+            help="where that τ came from — 'shipped' (detection_switches) is the only citable source; "
+            "'fitted'/'other' ⇒ a calibration diagnostic, not_citable (N180 件6)",
+        )
         # EV-COVERAGE E3-n ④ — the gateway admin base (GET /admin/v1/buildinfo). Passed to
         # GatewayTarget so collect can capture the build fingerprint before AND after the run and prove
         # zero-change during the freeze (also the drain-cursor base). Env: TREVAL_EVAL_ADMIN_URL.

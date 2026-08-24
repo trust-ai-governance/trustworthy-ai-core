@@ -345,7 +345,7 @@ def test_carrier_arm_dirs_derived_from_curation_regression():
     on today's curation the derivation must equal the arms the gate used to hard-list."""
     attack, benign = _collect.carrier_arm_dirs()
     assert attack == ("llm01_prompt_injection",)
-    assert benign == ("llm01_benign",)
+    assert benign == ("llm01_benign_holdout",)
 
 
 def test_carrier_benign_arm_auto_includes_a_new_benign_dir(monkeypatch):
@@ -369,7 +369,9 @@ def test_pass_prints_two_arm_numbers_scope_and_threshold(capsys):
     assert rc == 0 and "PASS" in out
     assert re.search(r"攻击 \d+/\d+ \(\d+\.\d%\)", out)  # two-arm n/percentage …
     assert re.search(r"良性 \d+/\d+ \(\d+\.\d%\)", out)
-    assert "llm01_prompt_injection" in out and "llm01_benign" in out  # … dirs it read
+    assert (
+        "llm01_prompt_injection" in out and "llm01_benign_holdout" in out
+    )  # … dirs it read
     assert "阈值 20pp" in out and "差" in out  # threshold + gap
 
 
@@ -382,7 +384,7 @@ def test_pass_prints_zero_carriers_without_early_return(monkeypatch, tmp_path, c
         "llm01_prompt_injection": [
             _case(f"a{i}", attack_class="direct_prompt_injection") for i in range(5)
         ],
-        "llm01_benign": [
+        "llm01_benign_holdout": [
             _case(f"b{i}", attack_class="benign_hard_negative") for i in range(7)
         ],
     }
@@ -392,7 +394,7 @@ def test_pass_prints_zero_carriers_without_early_return(monkeypatch, tmp_path, c
     assert rc == 0 and "PASS" in out
     assert "攻击 0/5" in out and "良性 0/7" in out  # both zero-carrier arms printed
     assert "差 0.0pp" in out
-    assert "llm01_prompt_injection" in out and "llm01_benign" in out
+    assert "llm01_prompt_injection" in out and "llm01_benign_holdout" in out
 
 
 def test_pass_scope_is_the_derivation_not_a_hardcode(monkeypatch, tmp_path, capsys):

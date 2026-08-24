@@ -107,6 +107,11 @@ def build_provenance(
     exec_mode: str | None = None,
     detection_layer_status: str | None = None,
     upstream_timeout_s: float | None = None,
+    judge_form: str | None = None,
+    measurement_path: str | None = None,
+    tau_declared: str | None = None,
+    tau_source: str | None = None,
+    material_ruleset_sha256: str | None = None,
     config_source: str = "declared",
     tier2_drain_executed: bool = False,
     build_fingerprint_before: dict[str, Any] | None = None,
@@ -176,6 +181,17 @@ def build_provenance(
         # keys above. upstream_timeout_s stays a number (the declared seconds), null when undeclared.
         "detection_layer_status": detection_layer_status or "",
         "upstream_timeout_s": upstream_timeout_s,
+        # 🔴 EV-CN-BENIGN-N180 件0 (= EV-JUDGE-UNION 件3(a2)) — the JUDGE/τ declaration axes ride WITH the
+        # numbers, folding into the SAME missing_run_config criterion (present-but-empty ⇒ a run that
+        # didn't declare; absent ⇒ a pre-N180 bundle diagnosed as DRIFT). `measurement_path` IS the
+        # assembly axis (offline harness vs in-product gateway); no separate `assembly` / `config_literal`.
+        "judge_form": judge_form or "",
+        "measurement_path": measurement_path or "",
+        "tau_declared": tau_declared or "",
+        "tau_source": tau_source or "",
+        # 件⑧ — the ruleset_sha256 at HOLDOUT-MATERIAL-LANDING time; compared against the run-start
+        # fingerprint so "nobody tuned to the material" is a fingerprint fact, not an attestation.
+        "material_ruleset_sha256": material_ruleset_sha256 or "",
         "config_source": config_source,
         # EV-COVERAGE E3-n ② — did the async Tier-2 drain execute this run? Recorded so a Tier-2 layer
         # that was never drained cannot be read as "0% lift" — the freeze pack states the layer's status.

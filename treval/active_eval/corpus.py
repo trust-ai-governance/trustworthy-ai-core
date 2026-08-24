@@ -356,12 +356,43 @@ def load_corpus_tree(root: str | Path) -> dict[str, tuple[CorpusCase, ...]]:
     return out
 
 
+# 🔴 EV-CN-BENIGN-N180 件④ — the fingerprint ALGORITHM's own version. The delivery side could not
+# independently recompute our corpus_sha (they got a different value), which means the anchor was only
+# reproducible by running OUR code — and then "the algorithm changed" and "the corpus changed" are
+# INDISTINGUISHABLE: both move every sha. So the algorithm is (a) specified normatively below, and (b)
+# versioned here. A registration entry records this version alongside its sha; a sha mismatch under a
+# CHANGED version is diagnosed as ALGORITHM DRIFT, not as someone editing the corpus (the same
+# stored-vs-recompute discipline as citability's CRITERIA_VERSION).
+# 🔴 Bump this on ANY change to the sort key, the separators, the participating fields, or the boundary
+# byte — every corpus_sha in every registration entry changes when you do.
+CORPUS_FINGERPRINT_VERSION = 1
+CORPUS_FINGERPRINT_ALGO = f"cfp-v{CORPUS_FINGERPRINT_VERSION}"
+
+
 def corpus_fingerprint(cases: Iterable[CorpusCase]) -> str:
     """A sha256 over the case SET that actually ran (EV-PAIR §3.1 / P3) — the proof that two runs
     used the SAME corpus. Canonical per case: id + normalized content (input + system_prompt +
     wire messages); sorted by id so probe ORDER is irrelevant, but a changed case_id or one byte of
     content moves it. Per-INDICATOR (each producer runs its own corpus), so the pairing gate can
-    reject a single indicator whose corpus differs without failing the rest."""
+    reject a single indicator whose corpus differs without failing the rest.
+
+    🔴 件④ NORMATIVE SPEC (so a third party can recompute this WITHOUT running our code — an anchor only
+    we can compute is not an anchor). Algorithm `CORPUS_FINGERPRINT_ALGO`; bump its version on any change
+    to the four points below.
+      • SORT KEY   — the cases are ordered by `case.id`, ascending, using Python's default string
+                     comparison over the UTF-8 code points. Order of files on disk is irrelevant.
+      • FIELDS     — per case, and ONLY these, in this order: `id`, `input`, `system_prompt`, then each
+                     wire message in authored order as `role` followed by its content. A message with
+                     structured content contributes each part as `type` then `text`, in authored order.
+                     🔴 A field that is None/absent contributes the EMPTY string, not a skipped write —
+                     so "absent" and "empty" hash identically, by design. NO other field participates:
+                     attack_class / scene / severity / success_when / source do NOT move the sha.
+      • SEPARATORS — a single NUL byte (0x00) is written after `id`, after `input`, after
+                     `system_prompt`, after each message `role`, after each part `type`, and after each
+                     message's content block.
+      • BOUNDARY   — a single 0x01 byte terminates each case, so concatenation ambiguities (a case whose
+                     content ends where the next case's id begins) cannot collide.
+    The digest is sha256 over that byte stream, rendered as `sha256:<64 lowercase hex>`."""
     h = hashlib.sha256()
     for c in sorted(cases, key=lambda c: c.id):
         h.update(c.id.encode("utf-8"))

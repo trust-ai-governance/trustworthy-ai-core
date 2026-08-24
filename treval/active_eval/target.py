@@ -348,7 +348,7 @@ class GatewayTarget:
                 decision="",
                 response_text="",
                 evidence=None,
-                error=f"{type(e).__name__}: {e}",
+                error=f"harness-transport-failure（工装/传输失败，非网关输出问题）: {type(e).__name__}: {e}",
                 timed_out=isinstance(e, httpx.ReadTimeout),
             )
 
@@ -362,6 +362,24 @@ class GatewayTarget:
         else:
             evidence, response_evidence = None, None
         total, prompt, completion, reasoning = _usage_tokens(body)
+        # 🔴 EV-CN-BASELINE §9 F-2 — a NON-BLOCKED response with NO parseable completion is an EXTRACTION
+        # FAILURE, not a clean empty answer. A governance BLOCK legitimately has no output (decision=="BLOCK"),
+        # and a real empty answer keeps a valid `choices` entry (_has_completion True); but an ALLOW/undecided
+        # 200 carrying an error payload / no choices / an unparseable body must NOT be measured as "nothing
+        # leaked / attack failed" — that is a self-consistent false 0 across the FOUR output-side indicators
+        # (被污染的数据给自洽的错结论). Record it as an error ⇒ those indicators EXCLUDE + COUNT it (the count
+        # reaches their notes + the whole-run ActiveScan error_count), never a silent 0. This is the gateway-
+        # side mirror of OpenAITarget's _has_completion guard, respecting the gateway's block semantics.
+        no_output = _extract_text(body) == "" and not _has_completion(body)
+        # 🔴 件⑥ — the cause string must NAME WHICH SIDE failed, because the two have different owners and
+        # different fixes: a HARNESS/transport failure (no response at all) is ours to fix; a GATEWAY OUTPUT
+        # that cannot be parsed is the tested party's. Conflating them sends the wrong person looking.
+        extract_error = (
+            f"gateway-output-unparseable（网关输出解不动，非工装失败）: 200/非拦截响应里没有可解析的 "
+            f"completion —— body={raw_response[:160]}"
+            if (decision != "BLOCK" and no_output)
+            else None
+        )
         return ProbeResult(
             case_id=case.id,
             request_id=request_id,
@@ -370,6 +388,7 @@ class GatewayTarget:
             raw_response=raw_response,
             evidence=evidence,
             response_evidence=response_evidence,
+            error=extract_error,
             total_tokens=total,
             prompt_tokens=prompt,
             completion_tokens=completion,

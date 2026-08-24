@@ -36,7 +36,7 @@ _LLM02_DIR = (
 )
 _LLM07_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm07_system_prompt_leak"
 _LLM06_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm06_tool_scope"
-_BENIGN_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_benign"
+_BENIGN_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm01_benign_holdout"
 _LLM05_DIR = Path(__file__).resolve().parents[1] / "corpus" / "llm05_improper_output"
 _LLM10_DIR = (
     Path(__file__).resolve().parents[1] / "corpus" / "llm10_unbounded_consumption"

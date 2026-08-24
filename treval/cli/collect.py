@@ -41,6 +41,7 @@ from treval.active_eval import (
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SpeechActSeparationRate,
+    SpeechActShadowSeparationRate,
     SystemPromptLeakRate,
     Tier2ShadowRecallLift,
     ToolScopeViolationRate,
@@ -206,15 +207,21 @@ CURATION: tuple[Producer, ...] = (
     # needs_decision (WAL rule decisions). BenignFlagRate rides alongside as FPR's advisory companion
     # (EV-AE10: a soft flag did not deny the user — NOT gated, but same-frame so a flag-everything
     # rule that scores 0% hard-FPR yet high recall is still loud).
-    Producer("false_positive_rate", FalsePositiveRate, "llm01_benign"),
-    Producer("benign_flag_rate", BenignFlagRate, "llm01_benign"),
+    # 🔴 EV-EN-BENIGN-HOLDOUT 件2 — the English FPR reads the HOLDOUT arm. The calib arm (τ was fitted on
+    # it) is structurally unreachable: `_assert_no_calib_producer` already refuses any `_calib` subdir, so
+    # "remember not to report FPR on the fit set" stops being a promise and becomes a mechanism.
+    # ⚠️ ONE-OFF COST (施工单 件2): this changes which corpus the English FPR reads ⇒ every historical
+    # English pack's FPR corpus_sha stops matching. That is CORRECT — those numbers really were produced on
+    # the merged arm — and it is written down so it never reads as an accident.
+    Producer("false_positive_rate", FalsePositiveRate, "llm01_benign_holdout"),
+    Producer("benign_flag_rate", BenignFlagRate, "llm01_benign_holdout"),
     # E3F "两种读法" — the SAME benign_flag_rate under the hard_only口径, as a DISCLOSURE row (subject),
     # side-by-side with the graded hard_or_flag aggregate in ONE bundle so the口径's effect is visible
     # without a second run. Shares the id, differentiated by subject ⇒ never trips DuplicateIndicatorError.
     Producer(
         "benign_flag_rate",
         BenignFlagRateHardOnly,
-        "llm01_benign",
+        "llm01_benign_holdout",
         subject="arm_parity:hard_only",
     ),
     # output-side (measurable on a bare model)
@@ -252,6 +259,16 @@ CURATION: tuple[Producer, ...] = (
     # so it is NOT in _ATTACK_ARM_INDICATOR_IDS / _BENIGN_ARM_INDICATOR_IDS — adding it would pollute the
     # carrier-rate arms (acceptance §7-14).
     Producer("speech_act_separation_rate", SpeechActSeparationRate, "llm01_speech_act"),
+    # 🔴 EV-JUDGE-UNION 件1/件2 (N180 件⑤) — the JUDGE-side twin, on the SAME corpus. Without a producer the
+    # indicator exists but is NEVER measured, and 件2's gate ("a judge-movable number without the mention arm
+    # ⇒ not_citable") would then make every Tier-2 number un-citable BECAUSE WE DIDN'T WIRE IT — a gate
+    # firing on our own omission, not on a real defect. In collect (no Tier-2 drain) it honestly emits
+    # not_measured/n=0, never a silent 0% (E3-n ②).
+    Producer(
+        "speech_act_shadow_separation_rate",
+        SpeechActShadowSeparationRate,
+        "llm01_speech_act",
+    ),
 )
 
 
@@ -270,14 +287,21 @@ CURATION_CN: tuple[Producer, ...] = (
         "llm01_cn_injection",
         subject="language:zh",
     ),
+    # 🔴 EV-CN-BENIGN-N180 件2 — the benign producers measure FPR on the HOLDOUT arm
+    # (llm01_cn_benign_holdout, never fitted), NOT the old merged llm01_cn_benign and NEVER the
+    # CALIBRATION arm. Making the fit set structurally unreachable IS the guard (see
+    # _assert_no_calib_producer) — "记得别在拟合集上报 FPR" is an unguarded promise.
     Producer(
         "false_positive_rate",
         FalsePositiveRate,
-        "llm01_cn_benign",
+        "llm01_cn_benign_holdout",
         subject="language:zh",
     ),
     Producer(
-        "benign_flag_rate", BenignFlagRate, "llm01_cn_benign", subject="language:zh"
+        "benign_flag_rate",
+        BenignFlagRate,
+        "llm01_cn_benign_holdout",
+        subject="language:zh",
     ),
 )
 
@@ -295,6 +319,24 @@ def curation_for(corpus_set: str) -> tuple[Producer, ...]:
         raise ValueError(
             f"unknown --corpus-set {corpus_set!r}; expected one of {CORPUS_SETS}"
         ) from None
+
+
+_CALIB_SUFFIX = "_calib"
+
+
+def _assert_no_calib_producer(producers: tuple[Producer, ...]) -> None:
+    """🔴 EV-CN-BENIGN-N180 件2 (本片核心) — the CALIBRATION arm (`…_calib`) is what τ is FITTED on, so
+    reporting FPR over it reports the FIT, not a measurement (k=0 is a construction guarantee there). Make
+    train/test separation a MECHANICAL FACT: no producer may bind a `_calib` corpus ⇒ the fit set is
+    structurally unreachable by any run. "记得别在拟合集上报 FPR" is an unguarded promise; this raise IS
+    the guard (same discipline as `subject != ""` never grading — 靠机制不靠记性)."""
+    for p in producers:
+        if p.corpus_subdir.endswith(_CALIB_SUFFIX):
+            raise ValueError(
+                f"producer {p.indicator_id!r} binds the CALIBRATION arm {p.corpus_subdir!r} — the fit "
+                "set must NEVER be a producer's corpus (τ was fitted on it ⇒ FPR there is CONSTRUCTED, "
+                "not measured). EV-CN-BENIGN-N180 件2."
+            )
 
 
 def _assert_no_id_subdir_collision(producers: tuple[Producer, ...]) -> None:
@@ -507,6 +549,9 @@ def collect_measurements(
     to every existing run; `cn` ⇒ CURATION_CN). 件1 — the set is guarded for id↔subdir collisions first."""
     producers = curation_for(corpus_set)
     _assert_no_id_subdir_collision(producers)
+    _assert_no_calib_producer(
+        producers
+    )  # 🔴 件2 — the fit set is structurally unreachable
     measurements: list[Measurement] = []
     probe_count = 0
     error_count = 0
@@ -1167,6 +1212,13 @@ def run_collect(args: argparse.Namespace) -> int:
             # both folded into the missing_run_config citability criterion.
             detection_layer_status=getattr(args, "detection_layer_status", None),
             upstream_timeout_s=getattr(args, "upstream_timeout_s", None),
+            # 🔴 N180 件0 — the judge/τ declaration axes (operator-declared, like language_scope). Absent
+            # ⇒ the bundle is not citable (a number that didn't record which τ / path / judge form can't
+            # be cited as a product capability). measurement_path IS the assembly axis.
+            judge_form=getattr(args, "judge_form", None),
+            measurement_path=getattr(args, "measurement_path", None),
+            tau_declared=getattr(args, "tau_declared", None),
+            tau_source=getattr(args, "tau_source", None),
             # E3-n ② — collect does NOT drain the async Tier-2 layer (Platform froze it OFF), so the
             # freeze pack records whether PHASE 2 actually ran: False ⇒ the Tier-2 indicators read
             # n/a, never 0% ("scored below τ" and "we never looked" must not be the same number).

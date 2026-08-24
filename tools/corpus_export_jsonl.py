@@ -30,7 +30,8 @@ _CORPUS = _ROOT / "corpus"
 _DIRS = (
     "llm01_prompt_injection",
     "llm01_wire_indirect",
-    "llm01_benign",
+    "llm01_benign_calib",
+    "llm01_benign_holdout",
     "llm01_indirect_benign",
 )
 
