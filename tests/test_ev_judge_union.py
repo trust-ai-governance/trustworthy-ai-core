@@ -311,13 +311,15 @@ def test_jian2_serialize_twin_present_removes_the_prefix():
 # --------------------------------------------------------------------------- #
 # Each entry is an indicator that is deliberately NOT in any CURATION* set, WITH the reason. Adding an
 # indicator without either wiring it or declaring it here ⇒ the test below reds.
+# 🔴 `benign_shadow_flag_rate` LEFT this list when EV-CN-TIER2 wired it into CURATION_CN — removed by the
+# stale-exemption guard below reding, which is exactly what that guard is for: an exemption that outlives
+# its reason would mask a later un-wiring.
 _NOT_IN_CURATION: dict[str, str] = {
     # EV-CAPCTRL: need corpus/llm01_benign_marker/ (提交 C), which does not exist yet.
     "benign_compliance_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C, not authored yet)",
     "benign_over_refusal_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C)",
     "benign_soft_flag_no_comply_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C)",
     # Driven by tools/eval_report.py's own verticals (they need the Tier-2 drain / a type-2 record).
-    "benign_shadow_flag_rate": "eval_report vertical — needs the async Tier-2 drain, which collect never runs",
     "wire_indirect_catch_rate": "eval_report vertical (llm01_wire_indirect)",
     "output_neutralize_inert_rate": "eval_report vertical — reads the type-2 hint_variables (EV-AE13)",
     "output_neutralize_fidelity_rate": "eval_report vertical — reads the type-2 hint_variables (EV-AE13)",

@@ -508,7 +508,32 @@ FIRST_MEASUREMENT_NOTE = (
 # base body; this note carries the other three + the amendment's Wilson clause. Keyed on the CN
 # stratum (subject == language:zh), so the ENGLISH FPR is untouched (it has its own §2.2.4 notes).
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 🔴 EV-CN-TIER2 追加② — the τ-SWEEP CURVE's citability, PRE-REGISTERED (before the run, not after)
+# --------------------------------------------------------------------------- #
+# Exporting the raw score turns one run into a whole curve. That is the point — and it is also the exact
+# shape of the failure this批 exists to prevent, so the rule is written down BEFORE the numbers exist:
+# the holdout arm validates the ONE pre-registered threshold and nothing else. Every other point on the
+# curve is computed on the same cases, i.e. IN-SAMPLE, and is only calibration material for a next round.
+# 🔴 WITHOUT THIS SENTENCE the next reader picks the best-looking τ off the curve, and the holdout arm
+# becomes a calibration arm the moment they do — the thing that already happened once.
+TAU_PREREGISTRATION_NOTE = (
+    "🔴 τ 预注册（EV-CN-TIER2 追加②，跑前写死）：本数所用 τ 来自【标定臂】（n=80 · corpus_sha "
+    "4df97413…），是【预注册值】；留出臂**只验这一个点**。"
+    "🔴 曲线上其余任何 τ 处的 FPR / 召回都是【in-sample】—— 同一批件上算出来的，"
+    "【不可引用】，只作下一轮标定的材料。"
+    "🔴 在曲线上挑一个好看的 τ 再回头引用，等于当场把留出臂变成标定臂 —— 那正是上一轮的死法。"
+)
+
 _LANGUAGE_ZH_SUBJECT = "language:zh"
+# 🔴 EV-CN-TIER2 追加④ — the CN false_positive_rate is a TIER-1 quantity. Under shadow the judge is not
+# on the decision path at all, so this number cannot move with the judge threshold and must never be read
+# as a Tier-2 gate. The τ gate hangs on benign_shadow_flag_rate, which is the rate that actually moves.
+CN_FPR_TIER1_SCOPE_NOTE = (
+    "🔴 层级口径（EV-CN-TIER2 追加④）：本率是【Tier-1 口径】—— shadow 下 Tier-2 判官【不在决策路径上】，"
+    "本数与判官阈值 τ 无关、也不随 τ 变动，【不得当作 Tier-2 的门】。"
+    "τ 的门挂在 benign_shadow_flag_rate 上（那才是随 τ 动的那个数）"
+)
 N180_FPR_DENOMINATOR_NOTE = (
     "🔴 分母口径（N180 §2.2.1-2 / 件7）：本率出自【留出臂】（从不参与 τ 拟合 ⇒ 不是拟合集上构造出来的零）；"
     "分母是【贴近治理边界的良性请求】（硬负例占比 ≥ 按臂下限，沿真实业务工作流取材、非按手法族铺）——"
@@ -935,6 +960,8 @@ def citation_form(
         # + the Wilson-covers-sampling-not-composition clause. Keyed on the CN stratum only.
         if m.subject == _LANGUAGE_ZH_SUBJECT:
             body += f" —— {N180_FPR_DENOMINATOR_NOTE}"
+            # 追加④ — say which LAYER this rate belongs to, so it is never read as a judge-threshold gate.
+            body += f" —— {CN_FPR_TIER1_SCOPE_NOTE}"
     # EV-AE9 / §7.4-3 — sensitive_disclosure_rate's canary is a public literal (DLP-bait shape, not F7
     # runtime-injected), so its citation states that known limitation the way FPR states its own.
     if m.indicator_id in LEAK_CANARY_DISCLOSURE_IDS:

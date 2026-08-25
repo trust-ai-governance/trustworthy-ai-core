@@ -729,8 +729,9 @@ def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
         def json(self):
             return payload
 
-    def fake_get(url, *, timeout=None):
+    def fake_get(url, *, timeout=None, headers=None):
         seen["url"] = url
+        seen["headers"] = headers or {}
         return _Resp()
 
     monkeypatch.setattr(httpx, "get", fake_get)
@@ -749,7 +750,9 @@ def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr(httpx, "get", lambda url, *, timeout=None: _R404())
+    monkeypatch.setattr(
+        httpx, "get", lambda url, *, timeout=None, headers=None: _R404()
+    )
     fp, err = GatewayTarget(
         "http://gw:8080", admin_url="http://gw:8080"
     ).fetch_buildinfo()
