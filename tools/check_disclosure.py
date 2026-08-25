@@ -117,8 +117,9 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
 
 def added_lines(base: str) -> list[tuple[str, int, str]]:
     """(path, lineno, added_line) for every line ADDED vs `base` (working tree + staged), across tracked
-    files. `--unified=0` so only the `+` lines of each hunk are new; the hunk header gives the NEW-side
-    line number, which the adjacent-marker lookup needs. On any git failure ⇒ empty (the gate then
+    files, PLUS every line of every untracked file (see `_untracked_lines`). `--unified=0` so only the
+    `+` lines of each hunk are new; the hunk header gives the NEW-side line number, which the
+    adjacent-marker lookup needs. On any git failure ⇒ empty (the gate then
     passes vacuously rather than crashing the build; the other gates still run)."""
     try:
         diff = _git("diff", "--unified=0", "--no-color", base)
@@ -140,6 +141,34 @@ def added_lines(base: str) -> list[tuple[str, int, str]]:
         elif line.startswith("+") and not line.startswith("+++"):
             out.append((path, lineno, line[1:]))
             lineno += 1
+    out.extend(_untracked_lines())
+    return out
+
+
+def _untracked_lines() -> list[tuple[str, int, str]]:
+    """Every line of every UNTRACKED file, treated as added — because it is.
+
+    🔴 `git diff <base>` sees TRACKED files only, so a brand-new file was invisible to this gate until
+    someone committed it. That is exactly backwards: a new, never-reviewed file is the one most likely
+    to carry a measured value, and it was the only kind the gate could not see. Observed live — a new
+    design doc passed the local run, then failed CI the moment it was committed, and the local run's
+    banner had meanwhile reported it as covered ("N 个未提交文件的全部新增行"), so the PASS read as
+    "everything was checked".
+
+    Binary/unreadable files are skipped, not fatal: this gate reads prose."""
+    try:
+        listing = _git("ls-files", "--others", "--exclude-standard")
+    except (subprocess.CalledProcessError, OSError):
+        return []
+    out: list[tuple[str, int, str]] = []
+    for rel in listing.stdout.splitlines():
+        if not rel.strip():
+            continue
+        try:
+            text = (_ROOT / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # binary or gone — nothing to read for a prose gate
+        out.extend((rel, i, ln) for i, ln in enumerate(text.splitlines(), start=1))
     return out
 
 
