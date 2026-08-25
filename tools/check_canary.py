@@ -29,6 +29,7 @@ from pathlib import Path
 
 from treval.active_eval.canary import (
     CarrierRateGap,
+    carrier_diagnosis_note,
     carrier_rate_gap,
     residual_literal_canaries,
 )
@@ -121,7 +122,7 @@ def _carrier_report(
         f"良性 {gap.benign[0]}/{gap.benign[1]} ({gap.benign_rate:.1%}) · "
         f"差 {gap.gap * 100:.1f}pp（阈值 {_CARRIER_THRESHOLD * 100:.0f}pp）"
     )
-    return scope, meas
+    return scope, meas + "\n    " + carrier_diagnosis_note(gap)
 
 
 def _carrier_violation(gap: CarrierRateGap) -> list[Violation]:

@@ -104,7 +104,7 @@ _SLOW_VERTICALS = {"llm10_unbounded_consumption"}
 _TIER2_VERTICALS = {
     "llm01_prompt_injection",
     "llm01_wire_indirect",
-    "llm01_benign",
+    "llm01_benign_holdout",
     "llm01_indirect_benign",
 }
 # Max seconds to poll the WAL for the async Tier-2 records to drain after a run (they land
@@ -135,7 +135,7 @@ _VERTICALS: list[tuple[str, str, list[CorpusIndicator], bool]] = [
     ),
     (
         "LLM01 benign — FPR (GATED) + flag rate (ADVISORY) + Tier-2 benign shadow-flag",
-        "llm01_benign",
+        "llm01_benign_holdout",
         [FalsePositiveRate(), BenignFlagRate(), BenignShadowFlagRate()],
         False,
     ),

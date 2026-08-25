@@ -845,6 +845,15 @@ def test_pin_observed_window_produces_a_citable_bundle_in_one_command(
             "tier1_only (tier2 shadow off)",
             "--upstream-timeout-s",
             "60",
+            # N180 件0: the judge/τ declaration axes (a citable run declares them too)
+            "--judge-form",
+            "single",
+            "--measurement-path",
+            "in_product_gateway",
+            "--tau-declared",
+            "shipped",
+            "--tau-source",
+            "shipped",
             "--out",
             str(out),
         ]
@@ -929,6 +938,15 @@ def test_pin_observed_window_stays_citable_with_realtime_records(tmp_path, monke
             "tier1_only (tier2 shadow off)",
             "--upstream-timeout-s",
             "60",
+            # N180 件0: the judge/τ declaration axes (a citable run declares them too)
+            "--judge-form",
+            "single",
+            "--measurement-path",
+            "in_product_gateway",
+            "--tau-declared",
+            "shipped",
+            "--tau-source",
+            "shipped",
             "--out",
             str(out),
         ]

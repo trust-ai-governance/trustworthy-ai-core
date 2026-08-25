@@ -67,3 +67,42 @@ def test_path_exemptions_corpus_and_fixtures():
     assert _is_exempt("docs/EVAL_ISSUES.md") is False
     assert _is_exempt("registry/dimensions/robustness.yaml") is False
     assert _is_exempt("treval/citability.py") is False
+
+
+def test_untracked_files_are_scanned(monkeypatch, tmp_path):
+    """🔴 RED when: the gate goes back to seeing tracked files only.
+
+    `git diff <base>` covers tracked files, so a BRAND-NEW file was invisible until someone committed
+    it — exactly backwards, since a new, never-reviewed file is the one most likely to carry a measured
+    value. Observed live: a new design doc passed the local run, then failed CI the moment it was
+    committed, while the local banner had reported it as covered ("N 个未提交文件的全部新增行").
+    A gate whose stated scope is wider than its real scope makes PASS unfalsifiable."""
+    from tools import check_disclosure as cd
+
+    leak = tmp_path / "new_doc.md"
+    # disclosure-ok: 构造性测试输入 —— 这一行【就是】要让门红的那个诱饵，证明它有牙
+    leak.write_text("误拦率 3/125 = 2.4%，ci_high 0.061\n", encoding="utf-8")
+
+    class _R:
+        stdout = "new_doc.md\n"
+
+    monkeypatch.setattr(cd, "_ROOT", tmp_path)
+    monkeypatch.setattr(cd, "_git", lambda *a: _R())
+    lines = cd._untracked_lines()
+    assert lines and lines[0][0] == "new_doc.md"
+    assert cd.disclosure_hit(lines[0][2]) is not None
+
+
+def test_unreadable_untracked_file_is_skipped_not_fatal(monkeypatch, tmp_path):
+    """RED when: a binary untracked file crashes the gate. This gate reads prose; a PNG dropped in the
+    tree must not take the build down — that would teach people to delete the gate, not the file."""
+    from tools import check_disclosure as cd
+
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00\x01")
+
+    class _R:
+        stdout = "blob.bin\nmissing.md\n"
+
+    monkeypatch.setattr(cd, "_ROOT", tmp_path)
+    monkeypatch.setattr(cd, "_git", lambda *a: _R())
+    assert cd._untracked_lines() == []

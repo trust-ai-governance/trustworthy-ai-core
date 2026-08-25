@@ -31,6 +31,7 @@ from treval.active_eval import (
     CorpusIndicator,
     BenignFlagRate,
     BenignFlagRateHardOnly,
+    BenignShadowFlagRate,
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionCombinedRecall,
@@ -41,6 +42,7 @@ from treval.active_eval import (
     InjectionSuccessRate,
     SensitiveDisclosureRate,
     SpeechActSeparationRate,
+    SpeechActShadowSeparationRate,
     SystemPromptLeakRate,
     Tier2ShadowRecallLift,
     ToolScopeViolationRate,
@@ -59,7 +61,7 @@ from treval.active_eval.cases import (
 )
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import DEFAULT_ARM_PARITY, check_arm_parity
-from treval.active_eval.target import ProbeResult
+from treval.active_eval.target import AdminAuthError, ProbeResult
 from treval.case_contract import CaseContractError
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
@@ -206,15 +208,21 @@ CURATION: tuple[Producer, ...] = (
     # needs_decision (WAL rule decisions). BenignFlagRate rides alongside as FPR's advisory companion
     # (EV-AE10: a soft flag did not deny the user — NOT gated, but same-frame so a flag-everything
     # rule that scores 0% hard-FPR yet high recall is still loud).
-    Producer("false_positive_rate", FalsePositiveRate, "llm01_benign"),
-    Producer("benign_flag_rate", BenignFlagRate, "llm01_benign"),
+    # 🔴 EV-EN-BENIGN-HOLDOUT 件2 — the English FPR reads the HOLDOUT arm. The calib arm (τ was fitted on
+    # it) is structurally unreachable: `_assert_no_calib_producer` already refuses any `_calib` subdir, so
+    # "remember not to report FPR on the fit set" stops being a promise and becomes a mechanism.
+    # ⚠️ ONE-OFF COST (施工单 件2): this changes which corpus the English FPR reads ⇒ every historical
+    # English pack's FPR corpus_sha stops matching. That is CORRECT — those numbers really were produced on
+    # the merged arm — and it is written down so it never reads as an accident.
+    Producer("false_positive_rate", FalsePositiveRate, "llm01_benign_holdout"),
+    Producer("benign_flag_rate", BenignFlagRate, "llm01_benign_holdout"),
     # E3F "两种读法" — the SAME benign_flag_rate under the hard_only口径, as a DISCLOSURE row (subject),
     # side-by-side with the graded hard_or_flag aggregate in ONE bundle so the口径's effect is visible
     # without a second run. Shares the id, differentiated by subject ⇒ never trips DuplicateIndicatorError.
     Producer(
         "benign_flag_rate",
         BenignFlagRateHardOnly,
-        "llm01_benign",
+        "llm01_benign_holdout",
         subject="arm_parity:hard_only",
     ),
     # output-side (measurable on a bare model)
@@ -252,6 +260,16 @@ CURATION: tuple[Producer, ...] = (
     # so it is NOT in _ATTACK_ARM_INDICATOR_IDS / _BENIGN_ARM_INDICATOR_IDS — adding it would pollute the
     # carrier-rate arms (acceptance §7-14).
     Producer("speech_act_separation_rate", SpeechActSeparationRate, "llm01_speech_act"),
+    # 🔴 EV-JUDGE-UNION 件1/件2 (N180 件⑤) — the JUDGE-side twin, on the SAME corpus. Without a producer the
+    # indicator exists but is NEVER measured, and 件2's gate ("a judge-movable number without the mention arm
+    # ⇒ not_citable") would then make every Tier-2 number un-citable BECAUSE WE DIDN'T WIRE IT — a gate
+    # firing on our own omission, not on a real defect. In collect (no Tier-2 drain) it honestly emits
+    # not_measured/n=0, never a silent 0% (E3-n ②).
+    Producer(
+        "speech_act_shadow_separation_rate",
+        SpeechActShadowSeparationRate,
+        "llm01_speech_act",
+    ),
 )
 
 
@@ -270,16 +288,104 @@ CURATION_CN: tuple[Producer, ...] = (
         "llm01_cn_injection",
         subject="language:zh",
     ),
+    # 🔴 EV-CN-BENIGN-N180 件2 — the benign producers measure FPR on the HOLDOUT arm
+    # (llm01_cn_benign_holdout, never fitted), NOT the old merged llm01_cn_benign and NEVER the
+    # CALIBRATION arm. Making the fit set structurally unreachable IS the guard (see
+    # _assert_no_calib_producer) — "记得别在拟合集上报 FPR" is an unguarded promise.
     Producer(
         "false_positive_rate",
         FalsePositiveRate,
-        "llm01_cn_benign",
+        "llm01_cn_benign_holdout",
         subject="language:zh",
     ),
     Producer(
-        "benign_flag_rate", BenignFlagRate, "llm01_cn_benign", subject="language:zh"
+        "benign_flag_rate",
+        BenignFlagRate,
+        "llm01_cn_benign_holdout",
+        subject="language:zh",
+    ),
+    # 🔴 EV-CN-TIER2 件1 — the JUDGE side on Chinese: what the judge BUYS (recall lift, combined recall)
+    # and what it COSTS (benign flag rate). 🔴 The cost side is measurable TODAY: benign_shadow_flag_rate
+    # counts how many Chinese benign cases the judge flagged, and it needs no mention arm. What is missing
+    # is the use/mention SLICE of the cost, not the cost.
+    #
+    # 🔴 CANARY CHECK SETTLED BEFORE WIRING (件2 / 施工单②), because "wired but incomputable" is this
+    # repo's recurring defect: the CN attack arm carries ZERO canaries and ZERO output markers. That does
+    # NOT block these three — `caught_by_tier2` reads the hint at τ, and `injection_combined_recall` sums
+    # the aggregate catch with the lift over ONE shared denominator; neither reads a canary. (The canary
+    # dependency belongs to `injection_success_rate`, which is NOT part of combined recall and is NOT
+    # wired here.) Verified by measuring all three on canary-free, marker-free probes before landing this.
+    Producer(
+        "tier2_shadow_recall_lift",
+        Tier2ShadowRecallLift,
+        "llm01_cn_injection",
+        subject="language:zh",
+    ),
+    Producer(
+        "injection_combined_recall",
+        InjectionCombinedRecall,
+        "llm01_cn_injection",
+        subject="language:zh",
+    ),
+    Producer(
+        "benign_shadow_flag_rate",
+        BenignShadowFlagRate,
+        "llm01_cn_benign_holdout",
+        subject="language:zh",
     ),
 )
+
+# 🔴 The producers that read ONLY the decision/judge stage — the only ones whose numbers survive a
+# target with no upstream model (`--no-output-side`). An indicator NOT on this list is presumed to read
+# the response, so declaring `--no-output-side` alongside it is REFUSED rather than measured: with an
+# echo forwarder every output-side rate would come back a clean, self-consistent, entirely false 0.
+# 🔴 Fail-closed by construction: add a producer to CURATION_CN without adding it here and the CN
+# no-output-side run stops, instead of quietly measuring the new one against an absent output.
+_DECISION_SIDE_ONLY: frozenset[str] = frozenset(
+    {
+        "injection_catch_rate",
+        "false_positive_rate",
+        "benign_flag_rate",
+        "tier2_shadow_recall_lift",
+        "injection_combined_recall",
+        "benign_shadow_flag_rate",
+    }
+)
+
+
+def _synthetic_preflight_case() -> Any:
+    """A throwaway case for the connectivity pre-flight. 🔴 Authored here, never drawn from a corpus:
+    a read-once holdout arm must not spend a case proving the socket works. Benign text, so a probe
+    that DOES reach a live gateway costs nothing and tells the tested party nothing."""
+    from treval.active_eval.corpus import CorpusCase
+
+    return CorpusCase(
+        id="__preflight__",
+        owasp="LLM01",
+        dimension="injection",
+        attack_class="benign",
+        success_when="never",
+        severity="low",
+        source="synthetic",
+        tool_id="chat",
+        input="ping",
+    )
+
+
+def assert_no_output_side_is_legitimate(producers: tuple[Producer, ...]) -> None:
+    """🔴 `--no-output-side` says "this target has no upstream model, so an absent completion is by
+    design". That is true for an echo forwarder — and it is a licence to stop treating an absent
+    completion as a probe failure. Granting that licence while an OUTPUT-SIDE producer is active
+    would turn "there was never any output" into "nothing leaked". Refuse instead."""
+    offenders = sorted({p.indicator_id for p in producers} - _DECISION_SIDE_ONLY)
+    if offenders:
+        raise ValueError(
+            "--no-output-side 与输出侧指标不能同时成立："
+            + "、".join(offenders)
+            + " 会把【从来就没有输出】读成【什么都没泄漏】。"
+            "要么去掉该声明，要么换一个不含输出侧产出的编组"
+        )
+
 
 CORPUS_SETS: tuple[str, ...] = ("en", "cn")
 _CURATION_BY_SET: dict[str, tuple[Producer, ...]] = {"en": CURATION, "cn": CURATION_CN}
@@ -295,6 +401,24 @@ def curation_for(corpus_set: str) -> tuple[Producer, ...]:
         raise ValueError(
             f"unknown --corpus-set {corpus_set!r}; expected one of {CORPUS_SETS}"
         ) from None
+
+
+_CALIB_SUFFIX = "_calib"
+
+
+def _assert_no_calib_producer(producers: tuple[Producer, ...]) -> None:
+    """🔴 EV-CN-BENIGN-N180 件2 (本片核心) — the CALIBRATION arm (`…_calib`) is what τ is FITTED on, so
+    reporting FPR over it reports the FIT, not a measurement (k=0 is a construction guarantee there). Make
+    train/test separation a MECHANICAL FACT: no producer may bind a `_calib` corpus ⇒ the fit set is
+    structurally unreachable by any run. "记得别在拟合集上报 FPR" is an unguarded promise; this raise IS
+    the guard (same discipline as `subject != ""` never grading — 靠机制不靠记性)."""
+    for p in producers:
+        if p.corpus_subdir.endswith(_CALIB_SUFFIX):
+            raise ValueError(
+                f"producer {p.indicator_id!r} binds the CALIBRATION arm {p.corpus_subdir!r} — the fit "
+                "set must NEVER be a producer's corpus (τ was fitted on it ⇒ FPR there is CONSTRUCTED, "
+                "not measured). EV-CN-BENIGN-N180 件2."
+            )
 
 
 def _assert_no_id_subdir_collision(producers: tuple[Producer, ...]) -> None:
@@ -507,6 +631,9 @@ def collect_measurements(
     to every existing run; `cn` ⇒ CURATION_CN). 件1 — the set is guarded for id↔subdir collisions first."""
     producers = curation_for(corpus_set)
     _assert_no_id_subdir_collision(producers)
+    _assert_no_calib_producer(
+        producers
+    )  # 🔴 件2 — the fit set is structurally unreachable
     measurements: list[Measurement] = []
     probe_count = 0
     error_count = 0
@@ -533,7 +660,14 @@ def collect_measurements(
     if callable(getattr(target, "drain_governance", None)) and callable(probe):
         try:
             cur = probe()
-        except Exception as e:  # noqa: BLE001 — any failure is the same signal here
+        except AdminAuthError:
+            # 🔴 PROPAGATE, do not warn. The "warning, not refusal" reasoning above is correct for
+            # what it names — an unrelated admin hiccup — but a REJECTED CREDENTIAL is neither
+            # unrelated nor a hiccup: it is deterministic, it will not heal during the run, and it
+            # costs every Tier-2 row. A warning that is printed and stepped over is not a gate; on a
+            # read-once corpus arm, stepping over it spends the arm for a Tier-1-only answer.
+            raise
+        except Exception as e:  # noqa: BLE001 — any other failure is the same signal here
             cur = None
             warnings.append(
                 f"pre-flight: drain cursor read raised {type(e).__name__}: {e}"
@@ -955,6 +1089,28 @@ def run_collect(args: argparse.Namespace) -> int:
             # opt-in --timeout (EV-Coverage E3), else GatewayTarget's own 30.0 default.
             upstream = getattr(args, "upstream_timeout_s", None)
             timeout = getattr(args, "timeout", None)
+            # 🔴 `--upstream-timeout-s` LOOKS like a pure declaration about the tested party, and it is
+            # also the operational client timeout (2× it). Declare a value that does not apply and you
+            # do not mis-label the run — you change it. Observed live: `--upstream-timeout-s 0` was
+            # passed to mean "there is no upstream (echo forwarder)"; it became a 0-second client
+            # timeout and all 194 probes died at ConnectError EINPROGRESS — the connect began and was
+            # abandoned before it could finish. Refuse the value rather than run with it.
+            if upstream is not None and upstream <= 0:
+                print(
+                    f"error: --upstream-timeout-s {upstream} ⇒ 客户端超时 {2.0 * upstream}s，"
+                    "任何请求都完不成（connect 立即被放弃 ⇒ EINPROGRESS）。"
+                    "这个字段既是声明也是参数：没有上游时不要填 0，要么省略该声明，"
+                    "要么填被测方配置里真实存在的上游超时",
+                    file=sys.stderr,
+                )
+                return 3
+            # 🔴 Both given ⇒ one silently wins. Say which, rather than let the run use a timeout the
+            # operator did not think they set.
+            if upstream is not None and timeout is not None:
+                warnings.append(
+                    f"--upstream-timeout-s {upstream} 覆盖了 --timeout {timeout}："
+                    f"客户端超时用的是 2×upstream = {2.0 * upstream}s"
+                )
             client_timeout = (
                 2.0 * upstream
                 if upstream is not None
@@ -970,7 +1126,40 @@ def run_collect(args: argparse.Namespace) -> int:
                 timeout=client_timeout,
                 # E3-n ④ — the admin base (GET /admin/v1/buildinfo + the drain cursor).
                 admin_url=getattr(args, "admin_url", None),
+                # 🔴 Run-wide `x-agent-id`. Without it the gateway answers IDENTIFY_FAILED before any
+                # detection stage — every probe errors and every indicator is unmeasurable.
+                agent_id=getattr(args, "agent", "") or None,
+                # 🔴 Declared, never inferred — and only after the guard below proves no active
+                # producer reads the response.
+                no_output_side=getattr(args, "no_output_side", False),
             )
+            if getattr(args, "no_output_side", False):
+                try:
+                    assert_no_output_side_is_legitimate(curation_for(args.corpus_set))
+                except ValueError as e:
+                    print(f"error: {e}", file=sys.stderr)
+                    return 3
+            # 🔴 PRE-FLIGHT THE TARGET ITSELF, with ONE synthetic probe, before spending the corpus.
+            # The existing pre-flight reads the ADMIN cursor — a different port, a different client,
+            # a different code path — and then the run assumes the probe path works. That is a check
+            # verifying something easier-to-be-true than what it claims. Three whole runs died past
+            # this point on things one probe answers in a second: a missing `x-agent-id`
+            # (IDENTIFY_FAILED), a missing `tool:chat:*` scope (AUTHZ_SCOPE_INSUFFICIENT), and a
+            # zero client timeout (EINPROGRESS) — each time 194/194 probes, each time discovered at
+            # the end. An operator's `curl` succeeding beside the run proves nothing: this probe runs
+            # in the RUN's process, with the run's client, timeout, headers and environment.
+            # 🔴 SYNTHETIC, never a corpus case — a read-once arm must not pay for a connectivity check.
+            preflight = _synthetic_preflight_case()
+            pr0 = gw.probe(preflight)
+            if pr0.error is not None and pr0.error.startswith("harness-transport"):
+                print(
+                    f"error: 跑前合成探针打不通目标 —— {pr0.error}\n"
+                    f"  target={target_url} client_timeout={client_timeout}s "
+                    f"tenant={args.tenant} user={args.user} agent={getattr(args, 'agent', '') or '(无)'}\n"
+                    "  ⇒ 语料一件未动。先修可达性/身份/超时，再跑",
+                    file=sys.stderr,
+                )
+                return 3
             # E3-n ④ — snapshot the tested party's build fingerprint BEFORE any probe runs (None when
             # no --admin-url); the AFTER snapshot below must match it bit-for-bit or the run is void.
             build_fp_before, build_fp_before_err = gw.fetch_buildinfo()
@@ -990,12 +1179,24 @@ def run_collect(args: argparse.Namespace) -> int:
         # E3-n ② — bracket the active scan in wall-clock so probe_window (this run's probe span) is
         # distinguishable from observed_window (the whole WAL the passive scan read, incl. history).
         scan_start_ns = time.time_ns()
-        active = collect_measurements(
-            target,
-            corpus_root=corpus_root,
-            warnings=warnings,
-            corpus_set=args.corpus_set,
-        )
+        try:
+            active = collect_measurements(
+                target,
+                corpus_root=corpus_root,
+                warnings=warnings,
+                corpus_set=args.corpus_set,
+            )
+        except AdminAuthError as e:
+            # 🔴 The one refusal that must happen BEFORE any probe: see the pre-flight above. Exit 3
+            # (io/arg), not a traceback — this is a fixable operator input, and it is fixable NOW,
+            # which is exactly why it must not be stepped over.
+            print(f"error: {e}", file=sys.stderr)
+            print(
+                "  ⇒ export TREVAL_ADMIN_TOKEN=... 再跑；确实要只测 Tier-1，就去掉 --admin-url —— "
+                "那是一个明写下来的决定，不是一条被跳过的告警",
+                file=sys.stderr,
+            )
+            return 3
         # E3-n ④ — snapshot the build fingerprint AFTER the run (isinstance narrows target →
         # GatewayTarget for mypy). citability blocks the run if before != after (a mid-run change),
         # OR if --admin-url was declared but either snapshot could not be fetched (fail-closed).
@@ -1167,6 +1368,13 @@ def run_collect(args: argparse.Namespace) -> int:
             # both folded into the missing_run_config citability criterion.
             detection_layer_status=getattr(args, "detection_layer_status", None),
             upstream_timeout_s=getattr(args, "upstream_timeout_s", None),
+            # 🔴 N180 件0 — the judge/τ declaration axes (operator-declared, like language_scope). Absent
+            # ⇒ the bundle is not citable (a number that didn't record which τ / path / judge form can't
+            # be cited as a product capability). measurement_path IS the assembly axis.
+            judge_form=getattr(args, "judge_form", None),
+            measurement_path=getattr(args, "measurement_path", None),
+            tau_declared=getattr(args, "tau_declared", None),
+            tau_source=getattr(args, "tau_source", None),
             # E3-n ② — collect does NOT drain the async Tier-2 layer (Platform froze it OFF), so the
             # freeze pack records whether PHASE 2 actually ran: False ⇒ the Tier-2 indicators read
             # n/a, never 0% ("scored below τ" and "we never looked" must not be the same number).

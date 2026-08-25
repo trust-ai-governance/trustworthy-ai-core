@@ -353,6 +353,11 @@ _CONFIG6 = {
     "exec_mode": "block",
     "detection_layer_status": "tier1_only (tier2 shadow off)",
     "upstream_timeout_s": 60.0,
+    # N180 件0: the judge/τ declaration axes fold into the SAME missing_run_config criterion
+    "judge_form": "single",
+    "measurement_path": "in_product_gateway",
+    "tau_declared": "shipped",
+    "tau_source": "shipped",
 }
 
 
@@ -704,7 +709,9 @@ def test_e3n4_build_fingerprint_changed_is_in_criteria_v2():
     from treval.citability import CRITERIA_BLOCKERS
 
     assert "build_fingerprint_changed" in CRITERIA_BLOCKERS
-    assert CRITERIA_VERSION == 3
+    assert (
+        CRITERIA_VERSION == 5
+    )  # N180 件6 bumped 3→4 (tau_not_shipped); 件5 bumped 4→5 (path_not_product)
 
 
 def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
@@ -722,8 +729,9 @@ def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
         def json(self):
             return payload
 
-    def fake_get(url, *, timeout=None):
+    def fake_get(url, *, timeout=None, headers=None):
         seen["url"] = url
+        seen["headers"] = headers or {}
         return _Resp()
 
     monkeypatch.setattr(httpx, "get", fake_get)
@@ -742,7 +750,9 @@ def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr(httpx, "get", lambda url, *, timeout=None: _R404())
+    monkeypatch.setattr(
+        httpx, "get", lambda url, *, timeout=None, headers=None: _R404()
+    )
     fp, err = GatewayTarget(
         "http://gw:8080", admin_url="http://gw:8080"
     ).fetch_buildinfo()

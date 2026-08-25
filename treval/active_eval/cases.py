@@ -34,7 +34,9 @@ from collections.abc import Iterable, Mapping, Sequence
 # here so every existing `from treval.active_eval.cases import <name>` path is unchanged (the case
 # SERVICE / `cases verify` import the pure module directly and never pull this engine-bound module).
 from treval.active_eval.canary import assert_no_canary_plaintext
+from treval.citability import TAU_PREREGISTRATION_NOTE
 from treval.active_eval.checks import (
+    injection_score,
     attribution_cell,
     decision_injection_source,
     denied_at_decision,
@@ -262,6 +264,16 @@ def build_cases(
             # So "why wasn't this one's Tier-2 hint counted" is answerable PER CASE, not just as a total
             # in tier2_shadow_recall_lift's notes. Pure WAL read (governance_evidence / hard_blocked).
             "tier2_scored": _tier2_scored(pr),
+            # 🔴 EV-CN-TIER2 追加① — the judge's RAW score, exported per case.
+            # WHY IT CANNOT WAIT: the holdout arm is READ-ONCE. Without this column a run yields the
+            # single point at the pre-registered τ; with it, the SAME run yields the whole curve for
+            # the next round's calibration. Skipping it means re-reading an already-spent arm — i.e.
+            # it cannot be recovered later, at any price.
+            # 🔴 AND IT IS A DIAGNOSTIC FACT, NEVER A CRITERION: `caught_by_tier2` reads the hint the
+            # gateway emitted AT ITS OWN τ, always. Core must never re-threshold this score to decide
+            # a catch — emit-vs-interpret: the threshold belongs to the gateway, and a Core-side cut
+            # would be us grading the judge against a line we chose after seeing its scores.
+            "injection_score": injection_score(pr),
             # 🔴 序8 件5 — the response-stage governance class, so recompute_from_cases can reproduce
             # 件3's `no_verdict` denominator exclusion. Without it the contract FORKS (live: 65/139 vs
             # 65/137). Same whitelist as the indicator — one source of truth, never a second copy.
@@ -380,6 +392,11 @@ def serialize_case_contract(
         # SELF-DECLARES its口径, so validate_case_contract can REFUSE a rule_scoped file whose rows lost
         # `catch_attribution` instead of silently re-adding it under the pre-F1 fallback.
         "catch_attribution": "rule_scoped",
+        # 🔴 EV-CN-TIER2 追加② — the τ-sweep's citability, PRE-REGISTERED. This table now carries the raw
+        # score, so it IS the curve; the rule about what may be quoted off that curve therefore has to
+        # travel inside the same file, written BEFORE the numbers existed. The holdout arm validates the
+        # ONE pre-registered threshold; every other point is in-sample and is calibration material only.
+        "tau_preregistration": TAU_PREREGISTRATION_NOTE,
         "corpus_sha": corpus_fingerprint(cases),
         "target_kind": target_kind,
         "tenant_id": tenant_id,
@@ -437,6 +454,16 @@ def build_benign_cases(
                 "decision_block_source": decision_injection_source(pr),
                 # the benign_flag_rate口径 companion: a decision-stage SOFT flag (user still served).
                 "flagged_at_decision": flagged_at_decision(pr),
+                # 🔴 EV-CN-TIER2 追加① — the judge's RAW score, exported per case.
+                # WHY IT CANNOT WAIT: the holdout arm is READ-ONCE. Without this column a run yields the
+                # single point at the pre-registered τ; with it, the SAME run yields the whole curve for
+                # the next round's calibration. Skipping it means re-reading an already-spent arm — i.e.
+                # it cannot be recovered later, at any price.
+                # 🔴 AND IT IS A DIAGNOSTIC FACT, NEVER A CRITERION: `caught_by_tier2` reads the hint the
+                # gateway emitted AT ITS OWN τ, always. Core must never re-threshold this score to decide
+                # a catch — emit-vs-interpret: the threshold belongs to the gateway, and a Core-side cut
+                # would be us grading the judge against a line we chose after seeing its scores.
+                "injection_score": injection_score(pr),
                 # 序8 件5 — the response-stage governance class (blocked/allowed/no_verdict/none).
                 "terminal_verdict": _terminal_verdict(pr),
                 # E3-n① — the rule_ids that FIRED this run, as bare facts (no categorization): so a

@@ -42,6 +42,12 @@ _CONFIG = {
     # the SAME missing_run_config criterion — a citable run must declare all six.
     "detection_layer_status": "tier1_only (tier2 shadow off)",
     "upstream_timeout_s": 60.0,
+    # 🔴 N180 件0 — the four JUDGE/τ declaration axes fold into the SAME criterion (a citable run declares
+    # all ten). measurement_path IS the assembly axis; no separate config_literal.
+    "judge_form": "single",
+    "measurement_path": "in_product_gateway",
+    "tau_declared": "shipped",
+    "tau_source": "shipped",
 }
 # A PROPERLY pinned run: a WAL source declared (wal_dir), a closure stamp (generated_at_ns), a segment
 # hash, AND the E3-h freeze-pack config. C14 keys the window-family blockers on wal_dir; C15 requires
@@ -694,8 +700,10 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
     assert (
         (CRITERIA_VERSION, CRITERIA_BLOCKERS)
         == (
-            3,  # 1→2: E3-h/m/n folded into the then-uncommitted v2 (no re-bump). 🔴 2→3: E3F §8.2-2
-            # adds `build_uncovered` — v2 is now SHIPPED, so a new identity is a REAL bump, not a fold.
+            5,  # 1→2: E3-h/m/n folded (no re-bump). 🔴 2→3: E3F §8.2-2 adds `build_uncovered`. 🔴 3→4:
+            # N180 件6 adds `tau_not_shipped` (a REAL new gate); the 件0 four KEYS folded into
+            # missing_run_config and did NOT bump. 🔴 4→5: N180 件5 adds `path_not_product` (the SYMMETRIC
+            # value-gate on measurement_path — a distinct identity from tau_not_shipped).
             frozenset(
                 {
                     "integrity_broken",
@@ -708,6 +716,8 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
                     "missing_run_config",
                     "build_fingerprint_changed",  # E3-n ④
                     "build_uncovered",  # E3F §8.2-2 — fingerprint doesn't cover the detection code path
+                    "tau_not_shipped",  # N180 件6 — a non-shipped τ ⇒ calibration diagnostic, not_citable
+                    "path_not_product",  # N180 件5 — a non-product path ⇒ measures the judge, not the product
                 }
             ),
         )
@@ -850,6 +860,11 @@ def test_language_scope_missing_blocks_citation_acceptance22():
         # E3-n ③: the other two required config fields, so only language_scope is under test here
         "detection_layer_status": "tier1_only",
         "upstream_timeout_s": 60.0,
+        # N180 件0: the judge/τ axes, so only language_scope is the missing field under test here
+        "judge_form": "single",
+        "measurement_path": "in_product_gateway",
+        "tau_declared": "shipped",
+        "tau_source": "shipped",
     }
     # language_scope present-but-empty ⇒ not citable, "补声明重跑"
     _c, empty_blk = report_citability(_wal_run(language_scope="", **others))
@@ -884,6 +899,11 @@ def test_language_scope_is_declared_never_derived_from_case_content_acceptance22
         # E3-n ③: the other two required config fields (so a declared language_scope makes it citable)
         "detection_layer_status": "tier1_only",
         "upstream_timeout_s": 60.0,
+        # N180 件0: the judge/τ axes (so a declared language_scope makes it citable)
+        "judge_form": "single",
+        "measurement_path": "in_product_gateway",
+        "tau_declared": "shipped",
+        "tau_source": "shipped",
     }
     ms = [_m("injection_catch_rate", 25 / 28, 28)]
     report = evaluate(_REG, ms, [], window=(100, 200), tenant_id="t")

@@ -26,6 +26,21 @@ from treval.active_eval.corpus import CorpusCase, WireMessage
 from treval.models import AuditEvidence
 from treval.readers import WalEvidenceReader
 
+
+# 🔴 The drain ceiling, derived from the batch (see drain_governance). The shadow tailer is SERIAL,
+# so n probes need ~n × judge-latency. PER_CASE is set above the observed per-case spacing (median
+# 2.84 s, max 4.26 s on the CN certification stack) so a slow case does not truncate the batch;
+# FLOOR keeps small batches on the previous 20 s behaviour.
+_DRAIN_PER_CASE_S = 5.0
+_DRAIN_FLOOR_S = 20.0
+
+
+class AdminAuthError(Exception):
+    """The gateway admin API REJECTED our credential (401/403) — distinct from "there is no admin
+    API". Raised, never absorbed: a one-shot corpus arm must not be spent on a run whose whole
+    Tier-2 half is already known to be unmeasurable."""
+
+
 # Record-type enum numbers, resolved from the descriptor (no hard-coded ints). A
 # request emits a DECISION_MADE record (the authorization/decision stage) and, when
 # governance observes the response, a RESPONSE_OBSERVED record (output-DLP etc.).
@@ -281,6 +296,8 @@ class GatewayTarget:
         temperature: float | None = 0.0,  # pin for reproducible statistical runs (D5)
         timeout: float = 30.0,
         admin_url: str | None = None,  # gateway admin API (drain cursor)
+        agent_id: str | None = None,  # run-wide `x-agent-id` (a case's own still wins)
+        no_output_side: bool = False,  # declared: no upstream model (echo forwarder)
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._tenant_id = tenant_id
@@ -294,6 +311,17 @@ class GatewayTarget:
         self._temperature = temperature
         self._timeout = timeout
         self._admin_url = admin_url.rstrip("/") if admin_url is not None else None
+        self._agent_id = agent_id or None
+        self._no_output_side = no_output_side
+        # 🔴 The admin token rides in the ENVIRONMENT, never in a flag: a flag value lands in shell
+        # history and in `ps` output for every user on the box. Read ONCE at construction so a mid-run
+        # env change cannot make the BEFORE and AFTER fingerprints authenticate differently.
+        self._admin_token = os.environ.get("TREVAL_ADMIN_TOKEN") or None
+
+    def _admin_headers(self) -> dict[str, str]:
+        """Auth for the gateway admin API. Absent token ⇒ no header (an admin API that needs none
+        still works); present ⇒ `x-admin-token`, the face both admin endpoints share."""
+        return {"x-admin-token": self._admin_token} if self._admin_token else {}
 
     @property
     def tenant_id(self) -> str:
@@ -303,8 +331,12 @@ class GatewayTarget:
     def probe(self, case: CorpusCase) -> ProbeResult:
         import httpx  # lazy: only needed to drive a live gateway
 
-        # Identity travels in headers (x-tenant-id / x-user-id); the body is the
-        # tools:invoke payload. The gateway derives the agent — no agent header.
+        # Identity travels in headers (x-tenant-id / x-user-id / x-agent-id); the body is the
+        # tools:invoke payload.
+        # 🔴 This comment used to read "the gateway derives the agent — no agent header". That was a
+        # BELIEF ABOUT THE TESTED PARTY written into our code, and the tested party changed: the
+        # gateway now rejects an agent-less request at IDENTIFY_FAILED, before any detection stage.
+        # Observed as 194/194 probes erroring — the code was faithfully executing an expired fact.
         # temperature passes through verbatim to the OpenAI-compatible upstream
         # (DeepSeek/OpenAI both honor it) — pinned for reproducible runs (D5).
         # The invocation is selected by case.tool_id. "chat" sends the OpenAI-style
@@ -325,11 +357,12 @@ class GatewayTarget:
             "x-tenant-id": self._tenant_id,
             "x-user-id": self._user_id,
         }
-        # EV-AE13: per-case route selection. Without it the gateway uses its default
-        # route; `builtin.chat` is the declared HTML sink (neutralize applies),
-        # `control.chat` is sink `none` (byte-for-byte). No header ⇒ unchanged behaviour.
-        if case.agent_id is not None:
-            headers["x-agent-id"] = case.agent_id
+        # EV-AE13: per-case route selection. `builtin.chat` is the declared HTML sink (neutralize
+        # applies), `control.chat` is sink `none` (byte-for-byte). A case's own agent_id WINS over
+        # the run-wide default, so per-case routing keeps working unchanged.
+        agent_id = case.agent_id if case.agent_id is not None else self._agent_id
+        if agent_id is not None:
+            headers["x-agent-id"] = agent_id
         try:
             resp = httpx.post(
                 self._base_url + self._invoke_path,
@@ -348,7 +381,7 @@ class GatewayTarget:
                 decision="",
                 response_text="",
                 evidence=None,
-                error=f"{type(e).__name__}: {e}",
+                error=f"harness-transport-failure（工装/传输失败，非网关输出问题）: {type(e).__name__}: {e}",
                 timed_out=isinstance(e, httpx.ReadTimeout),
             )
 
@@ -362,6 +395,32 @@ class GatewayTarget:
         else:
             evidence, response_evidence = None, None
         total, prompt, completion, reasoning = _usage_tokens(body)
+        # 🔴 EV-CN-BASELINE §9 F-2 — a NON-BLOCKED response with NO parseable completion is an EXTRACTION
+        # FAILURE, not a clean empty answer. A governance BLOCK legitimately has no output (decision=="BLOCK"),
+        # and a real empty answer keeps a valid `choices` entry (_has_completion True); but an ALLOW/undecided
+        # 200 carrying an error payload / no choices / an unparseable body must NOT be measured as "nothing
+        # leaked / attack failed" — that is a self-consistent false 0 across the FOUR output-side indicators
+        # (被污染的数据给自洽的错结论). Record it as an error ⇒ those indicators EXCLUDE + COUNT it (the count
+        # reaches their notes + the whole-run ActiveScan error_count), never a silent 0. This is the gateway-
+        # side mirror of OpenAITarget's _has_completion guard, respecting the gateway's block semantics.
+        no_output = _extract_text(body) == "" and not _has_completion(body)
+        # 🔴 件⑥ — the cause string must NAME WHICH SIDE failed, because the two have different owners and
+        # different fixes: a HARNESS/transport failure (no response at all) is ours to fix; a GATEWAY OUTPUT
+        # that cannot be parsed is the tested party's. Conflating them sends the wrong person looking.
+        # 🔴 …UNLESS the run DECLARED there is no upstream model at all (an echo forwarder: `被测方=无`).
+        # Then an absent completion is the target's DESIGNED behaviour, not an extraction failure, and
+        # the guard above — written to protect the FOUR OUTPUT-SIDE indicators from a false 0 — instead
+        # kills the DECISION side, which is the only side such a run measures. Observed live: 194/194
+        # probes errored against an echo forwarder while every decision was recorded perfectly.
+        # 🔴 DECLARED, never inferred from the body: inferring it would let a genuinely broken gateway
+        # relabel itself "oh, no output side" — precisely the false 0 the guard exists to prevent.
+        # The declaration is refused unless every active producer is decision-side (see collect.py).
+        extract_error = (
+            f"gateway-output-unparseable（网关输出解不动，非工装失败）: 200/非拦截响应里没有可解析的 "
+            f"completion —— body={raw_response[:160]}"
+            if (decision != "BLOCK" and no_output and not self._no_output_side)
+            else None
+        )
         return ProbeResult(
             case_id=case.id,
             request_id=request_id,
@@ -370,6 +429,7 @@ class GatewayTarget:
             raw_response=raw_response,
             evidence=evidence,
             response_evidence=response_evidence,
+            error=extract_error,
             total_tokens=total,
             prompt_tokens=prompt,
             completion_tokens=completion,
@@ -407,15 +467,29 @@ class GatewayTarget:
         """GET {admin_url}/admin/v1/audit:cursor — the gateway's LIVE drain cursor
         (wal_head_seq / guardrail_cursor_seq / guardrail_degraded / tailer_cursor_seq).
 
-        Returns the parsed dict, or None on ANY failure (no admin_url, non-200, transport
-        or JSON-parse error) so drain_governance() degrades to the timeout backstop rather
-        than raising. httpx imported lazily, like probe()."""
+        Returns the parsed dict, or None on a STRUCTURAL failure (no admin_url, 404, transport or
+        JSON-parse error) so drain_governance() degrades to the timeout backstop rather than raising.
+
+        🔴 EXCEPT auth: 401/403 raises `AdminAuthError`. The blanket "None on ANY failure" degrade was
+        written for the case it names — a gateway with no admin API, or a hiccup — and it silently
+        swallowed a REJECTED CREDENTIAL too. Those are not the same thing: a missing endpoint is
+        structural and has no fix; a 401 is a deterministic misconfiguration that will not heal, and
+        absorbing it costs EVERY Tier-2 row while the run still looks like it ran. Observed live: the
+        run finished with tier2_drain_executed=false and three n/a rows because the token was never
+        sent at all. httpx imported lazily, like probe()."""
         if self._admin_url is None:
             return None
         import httpx  # lazy: only needed to drive a live gateway
 
+        url = self._admin_url + "/admin/v1/audit:cursor"
         try:
-            resp = httpx.get(self._admin_url + "/admin/v1/audit:cursor", timeout=5.0)
+            resp = httpx.get(url, headers=self._admin_headers(), timeout=5.0)
+            if resp.status_code in (401, 403):
+                raise AdminAuthError(
+                    f"HTTP {resp.status_code} from {url} —— admin 鉴权被拒。"
+                    "TREVAL_ADMIN_TOKEN 未设置或不对；这不是「没有 admin 端点」，"
+                    "降级会让每一个 Tier-2 数变成 n/a，而跑仍然显示跑完了"
+                )
             if resp.status_code != 200:
                 return None
             parsed = resp.json()
@@ -445,7 +519,7 @@ class GatewayTarget:
 
         url = self._admin_url + "/admin/v1/buildinfo"
         try:
-            resp = httpx.get(url, timeout=5.0)
+            resp = httpx.get(url, headers=self._admin_headers(), timeout=5.0)
             if resp.status_code != 200:
                 return None, f"HTTP {resp.status_code} from {url}"
             parsed = resp.json()
@@ -494,7 +568,7 @@ class GatewayTarget:
         self,
         results: list[ProbeResult],
         *,
-        timeout: float = 20.0,
+        timeout: float | None = None,
         poll_interval: float = 2.0,
     ) -> list[ProbeResult]:
         """Attach each probe's ASYNC governance record (record_type=3 — the Tier-2 shadow
@@ -525,7 +599,20 @@ class GatewayTarget:
         if not wanted:
             return results
         found: dict[str, AuditEvidence] = {}
+        # 🔴 The ceiling is DERIVED FROM THE BATCH, not a constant. It used to be a flat 20 s, which
+        # bears no relation to the work: the shadow tailer is SERIAL, so a batch of n probes needs
+        # ~n × (judge latency) to finish. Observed live on the CN certification run — 183 allowed
+        # probes at ~2.84 s each ≈ 520 s of judging against a 20 s ceiling (26× short): the drain
+        # stopped early, 46/56 attacks and 125/125 benigns had no async record, and the Tier-2 half
+        # of a READ-ONCE corpus arm came back empty. A fixed ceiling is a limit that silently gets
+        # tighter every time the corpus grows — the failure arrives as a quiet under-measurement,
+        # never as an error.
+        if timeout is None:
+            timeout = max(_DRAIN_FLOOR_S, len(wanted) * _DRAIN_PER_CASE_S)
         deadline = time.monotonic() + timeout
+        # 🔴 Only a DETERMINISTIC stop (the evaluator's cursor reached the head we snapshotted) proves
+        # every type-3 record that will ever exist has been written. Every other exit is truncation.
+        drain_complete = False
 
         cursor = self._read_cursor()
         if cursor is None:
@@ -556,6 +643,7 @@ class GatewayTarget:
                     break
                 if int(cur.get("guardrail_cursor_seq") or 0) >= probe_head:
                     self._scan_governance(wanted, found)  # one final read+join
+                    drain_complete = True  # the ONLY exit that proves completeness
                     break
                 if cur.get("guardrail_degraded"):
                     print(
@@ -573,15 +661,29 @@ class GatewayTarget:
                     break
                 time.sleep(poll_interval)
 
-        # E3-n ② — the drain RAN to completion (cursor-driven or timeout backstop). Stamp
-        # tier2_drain_executed=True on EVERY probe (found or not), so a probe still missing an async
-        # record is a GENUINE no-async (judge below τ), distinguishable by the Tier-2 indicators from
-        # "the drain never ran" (default False). This is the only path that flips the flag — the
-        # no-wal / no-wanted early returns above leave it False (the drain could not execute).
+        # E3-n ② — stamp tier2_drain_executed only when the drain stopped DETERMINISTICALLY. The flag
+        # means "a probe still missing an async record is a GENUINE no-async (the judge scored it
+        # below τ)", and only cursor catch-up licenses that claim.
+        #
+        # 🔴 It used to be stamped True on every exit, timeout backstop included — so a TRUNCATED
+        # drain relabelled "the judge never got to this probe" as "the judge looked and found
+        # nothing". Observed live: `benign_shadow_flag_rate` reported value=0.0 over sample_size=125
+        # while its own note read "125 probe(s) had NO async record". A downstream reader who takes
+        # `value` and `availability` — which is every reader who does not parse prose — gets
+        # "125 benign cases, judge flagged none" out of 125 cases the judge never scored.
+        #
+        # This is the flag's whole purpose, and it was defeated by the one branch that needed it most:
+        # a drain that completes cleanly has nothing to hide, and only the truncated one does.
+        if not drain_complete:
+            print(
+                "🔴 drain: stopped WITHOUT cursor catch-up ⇒ tier2_drain_executed stays false. Every "
+                "Tier-2 row reads not_measured, NOT 0% — the judge did not finish this batch",
+                file=sys.stderr,
+            )
         return [
             replace(
                 r,
-                tier2_drain_executed=True,
+                tier2_drain_executed=drain_complete,
                 governance_evidence=found.get(r.request_id, r.governance_evidence),
             )
             for r in results

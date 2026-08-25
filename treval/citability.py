@@ -26,6 +26,7 @@ PROVENANCE facts only:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from treval.models import INTERVAL_CENSUS, INTERVAL_TOTAL_FUNCTION, Measurement
@@ -104,6 +105,36 @@ _CONFIG_DRIFT_FIX = (
     "本报告按旧判据（config 尚未要求时）产出，冻结包缺语言作用域/被测方版本/检测配置/执行模式/检测层状态/"
     "上游超时 —— 不是坏了，用当前版本重新采集（collect）即可引"
 )
+# 🔴 EV-CN-BENIGN-N180 件6 — the τ these numbers used is NOT the SHIPPED τ (tau_source ∈ {fitted, other}).
+# A number computed on a non-shipped threshold is a CALIBRATION DIAGNOSTIC, not a product measurement:
+# recall on a fitted τ runs higher (more caught, more mis-flagged) than the product would, and FPR on the
+# fit set is a construction guarantee (§1.4/§1.2). So it is NOT citable as a product capability — a BLOCK,
+# never a warning. (件0's tau_verified LABELS whether the shipped τ can even be confirmed; THIS gates the source.)
+_TAU_NOT_SHIPPED_FIX = (
+    "此数在【非发货阈值】上得出（tau_source != shipped）—— τ 是在标定臂上拟合的，配上发货配置就是【标定"
+    "诊断】不是【产品测量】：拟合 τ 下召回更高、误标更多，在拟合集上的 FPR 更是构造出来的零。不得当作产品"
+    "能力引用。用发货配置里的 τ 重出该数（tau_source=shipped）"
+)
+# 🔴 EV-CN-BENIGN-N180 件5 — the SYMMETRIC value-gate to 件6, on the OTHER axis (measurement_path). 件0's
+# presence check only asks whether measurement_path was declared; a bundle that honestly declared
+# offline_judge_harness passes it — yet what that number measures is the JUDGE on RAW corpus, not the
+# PRODUCT (which rewrites/blocks/decodes via its template + system prompt + pre/post-processing). "字段
+# 在不在" cannot catch "值对不对" — the same lesson 件6 applied to tau_source, on the assembly axis. So a
+# declared but NON-PRODUCT path ⇒ not citable AS A PRODUCT CAPABILITY. A BLOCK, never a warning.
+_PATH_NOT_PRODUCT_FIX = (
+    "此数在【非产品装配】上得出（measurement_path != in_product_gateway）—— offline_judge_harness 是把语料"
+    "直接喂判官，量的是判官在裸语料上的行为，不是产品在真实装配（模板 / system prompt / 前后处理 / 编码解码）"
+    "下的行为：产品会改写、会拦、会解码，离线台一概没有。不得当作产品能力引用。用 in_product_gateway 路径重出该数"
+)
+# 🔴 EV-CN-BENIGN-N180 件4 — the holdout arm is READ-ONCE. Its whole value is that τ was never fitted on
+# it; the FIRST FPR read spends that (like the CN baseline: 第一次就是唯一一次). A SECOND FPR on the same
+# holdout corpus_sha is no longer a clean measurement —— whoever asked for it has now seen the first
+# number, so a re-read can be (even unconsciously) selected. ⇒ not_citable; 再动 τ 就要一条新的留出臂.
+_HOLDOUT_REREAD_FIX = (
+    "这是【第二次读同一条留出臂】（holdout corpus_sha 已在登记条目里标记 consumed，且首读是另一次跑）——"
+    "留出臂读一次就花掉了：它的价值全在「τ 从没在它上面拟合、也从没被人看过」，再读一次这两条都不再成立。"
+    "不得引用。要再出 FPR，就要一条【新的留出臂】（新语料、新 corpus_sha）"
+)
 _CONFIG_UNDECLARED_FIX = (
     "这次跑没声明语言作用域/被测方版本/检测配置/执行模式/检测层状态/上游超时（决定「89%」代表哪种语言"
     "流量、在哪个版本、编码解码开关、拦截还是只标记、哪些检测层在跑、被测方上游超时多少下测的）—— 补声明"
@@ -129,7 +160,13 @@ _CONFIG_UNDECLARED_FIX = (
 # runtime.ruleset_sha256 but not detection-code invariance; the code identity is runtime.code_sha256,
 # not yet baked) is a stricter gate, so the version MUST bump. (§8.2.1/§8.2.2 later corrected its TRIGGER
 # — code_sha256 shape, not build_facts/git_sha — WITHOUT re-bumping: the identity set is unchanged.)
-CRITERIA_VERSION = 3
+# 🔴 3→4 (N180 件6): a REAL new blocker identity `tau_not_shipped` (a number on a non-shipped τ is a
+# calibration diagnostic, not_citable). The 件0 four KEYS did NOT bump (they fold into missing_run_config);
+# THIS value-gate is a distinct identity ⇒ a bump, and re-judging fitted-τ bundles is exactly the point.
+# 🔴 4→5 (N180 件5): the SYMMETRIC value-gate `path_not_product` on measurement_path — a DISTINCT identity
+# from tau_not_shipped and from the presence check. Version numbers are cheap; a mis-fitted gate is not
+# (do NOT merge it into 4 to save a bump). Re-judging offline_judge_harness bundles is the intended effect.
+CRITERIA_VERSION = 5
 
 # The stable identity keys this version's gate can emit — one per blocker-append site in
 # report_citability. 🔴 add / remove / repurpose any entry ⇒ BUMP CRITERIA_VERSION (a stricter OR a
@@ -149,6 +186,13 @@ CRITERIA_BLOCKERS: frozenset[str] = frozenset(
         # E3-n ③ EXTENDS its _config_keys (detection_layer_status + upstream_timeout_s), no new identity
         "build_fingerprint_changed",  # _BUILD_CHANGED_FIX / _BUILD_UNVERIFIED_FIX (E3-n ④) — one identity
         "build_uncovered",  # _BUILD_UNCOVERED_FIX (E3F §8.2-2) — fingerprint doesn't cover the code path
+        # 🔴 3→4 (N180 件6): a REAL new gate — a number on a non-shipped τ is a calibration diagnostic,
+        # not_citable. The four 件0 KEYS folded into missing_run_config (no bump); this is a VALUE gate on
+        # tau_source, a distinct identity ⇒ a bump, and re-judging fitted-τ bundles is the intended effect.
+        "tau_not_shipped",  # _TAU_NOT_SHIPPED_FIX (N180 件6)
+        # 🔴 4→5 (N180 件5): the SYMMETRIC value-gate on measurement_path — declared-but-non-product ⇒ the
+        # number measures the judge on raw corpus, not the product. Distinct identity from tau_not_shipped.
+        "path_not_product",  # _PATH_NOT_PRODUCT_FIX (N180 件5)
     }
 )
 
@@ -255,6 +299,13 @@ def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
         # identity (fields present-or-not, INDEPENDENT of how the value arrived — E3-h criterion). NOT a
         # new blocker identity: the append site below is unchanged, so CRITERIA_BLOCKERS' identity set
         # gains nothing from ③ (only ④ adds one), and CRITERIA_VERSION stays 2.
+        # 🔴 EV-CN-BENIGN-N180 件0 (= EV-JUDGE-UNION 件3(a2), landed ONCE) — four JUDGE/τ declaration keys
+        # fold into the SAME missing_run_config identity (fields-PRESENT, source-independent — the E3-h
+        # criterion). NO new blocker identity ⇒ CRITERIA_VERSION stays 3, no re-judge wave. A number that
+        # did not record which τ / which measurement path / how many judges it used cannot be cited as a
+        # product capability (PM §1.4). `assembly` is NOT a separate key — it IS `measurement_path` (Platform's
+        # "corpus-raw vs product-format" falls exactly on offline_judge_harness vs in_product_gateway; two
+        # fields would contradict, one won't). 🔴 We do NOT build Platform's `config_literal` container here.
         _config_keys = (
             "language_scope",
             "tested_version",
@@ -262,12 +313,29 @@ def report_citability(bundle: dict[str, Any]) -> tuple[bool, list[str]]:
             "exec_mode",
             "detection_layer_status",
             "upstream_timeout_s",
+            "judge_form",  # single | union:<n>
+            "measurement_path",  # offline_judge_harness | in_product_gateway (= the assembly axis)
+            "tau_declared",  # the τ these numbers were computed with
+            "tau_source",  # shipped | fitted | other
         )
         if not all(prov.get(k) for k in _config_keys):
             _keys_present = all(k in prov for k in _config_keys)
             blockers.append(
                 _CONFIG_UNDECLARED_FIX if _keys_present else _CONFIG_DRIFT_FIX
             )
+        # 🔴 N180 件6 — a VALUE gate on tau_source (distinct from the presence check above): a declared but
+        # NON-SHIPPED τ ⇒ the numbers are a calibration diagnostic, not a product measurement ⇒ not_citable.
+        # A BLOCK, not a warning. (Absent tau_source already blocked via missing_run_config above.)
+        _ts = prov.get("tau_source")
+        if _ts and _ts != "shipped":
+            blockers.append(_TAU_NOT_SHIPPED_FIX)
+        # 🔴 N180 件5 — the SYMMETRIC VALUE gate on measurement_path: a declared but NON-PRODUCT path
+        # (offline_judge_harness) ⇒ the number measures the judge on raw corpus, not the product ⇒
+        # not_citable AS A PRODUCT CAPABILITY. A BLOCK, not a warning. (Absent measurement_path already
+        # blocked via missing_run_config above; this fires only on a present, non-product value.)
+        _mp = prov.get("measurement_path")
+        if _mp and _mp != "in_product_gateway":
+            blockers.append(_PATH_NOT_PRODUCT_FIX)
     # 🔴 E3-n ④ — the tested party's zero-change-during-freeze claim, VERIFIED not trusted. The build
     # fingerprint (the content hashes runtime.code_sha256 / runtime.ruleset_sha256+ruleset_path /
     # detection_switches, GET /admin/v1/buildinfo — NOT git_sha, a dirty-tree self-report, §8.2.2) is
@@ -355,7 +423,8 @@ FPR_KNOWN_LIMITATION_NOTE = (
     "收紧词面规则=拿一个真实误拦换一个平凡绕过，故不靠收紧去消，而是记录+公示"
 )
 # EV-BENIGN-N173 §0.2 — the GRANDFATHER disclosure. 🔴 The MEASURED count of pre-existing benign cases
-# carrying a verbatim attack-phrase literal is 11 (not the draft's "1"), scanning the full author surface
+# carrying a verbatim attack-phrase literal was 11 across the merged arm (not the draft's "1"), scanning
+# the full author surface
 # input+system_prompt+messages — see tools/check_benign.py `grandfathered_attack_phrase_ids`, whose
 # signature list is the source of truth; a test pins this note's number to that measured count so
 # "asserted" can never drift below "measured". By this round's
@@ -364,12 +433,16 @@ FPR_KNOWN_LIMITATION_NOTE = (
 # tested party), so they stay — and 🔴 keeping them makes FPR WORSE (more conservative), which is exactly
 # why they may stay. The number must SAY so: a rule we don't fully obey, disclosed at the real count.
 # ⚠️ WORDING (domain review §3.1): the count is "cases whose text CONTAINS an attack-phrase LITERAL
-# STRING", NOT "cases that MENTION an attack technique" — 2 of the 11 are HOMOGRAPHS (browser "developer
-# mode", not the jailbreak persona), so "提及攻击技法" would over-claim. State the literal-string basis.
-FPR_GRANDFATHER_COUNT = 11
+# STRING", NOT "cases that MENTION an attack technique" — some are HOMOGRAPHS (browser "developer mode",
+# not the jailbreak persona), so "提及攻击技法" would over-claim. State the literal-string basis.
+# 🔴 EV-EN-BENIGN-HOLDOUT 件1 — the arm SPLIT changed this number, and the change is the point. The
+# disclosure describes the FPR DENOMINATOR, and the denominator is now the HOLDOUT arm alone: 5 of the 11
+# grandfathered cases landed there (the other 6 are in the calib arm, which no producer reads). Leaving it
+# at 11 would over-state the denominator's contamination; the count must track the arm actually measured.
+FPR_GRANDFATHER_COUNT = 5
 FPR_GRANDFATHER_NOTE = (
     f"🔴 祖父件（EV-BENIGN-N173 §0.2）：分母含 {FPR_GRANDFATHER_COUNT} 条正文【含攻击短语字面串】的既有件"
-    "（禁止 ④：此形态归 §2 的 mention 半边；其中 2 条为同形词——如浏览器 developer mode——非对攻击技法的"
+    "（禁止 ④：此形态归 §2 的 mention 半边；其中含同形词——如浏览器 developer mode——非对攻击技法的"
     "真提及）；§0.2 禁止删改故留在原处 —— 它们使本数偏【高】（更保守），公示而不剔除"
 )
 # EV-BENIGN-N173 §2.1 / 序8 件2 — the benign corpus's register mix (case / question form / abbreviation
@@ -377,6 +450,20 @@ FPR_GRANDFATHER_NOTE = (
 # DECLARED assumption, NOT a measurement. FPR is read by default as "the false-positive rate on real
 # traffic"; without this note that reading is unearned. 🔴 Must ride WITH the number from the FIRST run
 # — adding the caveat only after seeing the number would be "finding a story to fit the data".
+# 🔴 EV-EN-BENIGN-HOLDOUT ③ — the ENGLISH benign arm is AUTHOR-WRITTEN, not sampled from traffic. This
+# was true of all 173 existing cases from the start and had NEVER been declared; the new A/B/C families do
+# not create the property, they only made us notice it. So the disclosure attaches to the WHOLE English
+# benign arm, not just the new families — attaching it only to the new ones would imply the old ones were
+# something better.
+# 🔴 And it is WEAKER than the CN counterpart, which must be said rather than left for the reader to
+# assume symmetry: the CN holdout was sourced by a domain practitioner along real business workflows; the
+# English arm is one author's imagination of where benign language runs near the governance boundary.
+EN_BENIGN_AUTHORED_NOTE = (
+    "🔴 语料来源（EV-EN-BENIGN-HOLDOUT ③）：英文良性臂【全部为我方自撰】，非按真实流量抽样 —— 该性质对既有"
+    "全部件同样成立，此前从未声明。⇒ 本率是【作者设想的良性边界语言】上的误拦率，不是流量误拦率。"
+    "🔴 且它比中文那条更弱，须照说：中文留出臂由领域侧按真实业务工作流取材，英文这条是【一个作者想象的】"
+    "边界语言 —— 两者不是同一种证据，不可并排当作同级读"
+)
 REGISTER_ASSUMPTION_NOTE = (
     "🔴 register 假设（EV-BENIGN-N173 §2.1）：良性语料的 register 混合比（大小写 / 问句形态 / 缩写密度）为"
     "【声明值】，非对真实流量的【测量】—— 无真实流量样本可对照；本数的作用域仅及于该声明的混合比"
@@ -410,6 +497,61 @@ FIRST_MEASUREMENT_NOTE = (
     "🔴 无门槛·首测（EV-BENIGN-N173 §2.4）：本指标此前从未测过，本轮【不设门】—— 没测过就设门是拍脑袋。"
     "⇒ 这个数不代表「通过」，它是一次首测；门排在拿到首测之后单独裁定。separated/over_blocks/under_blocks/"
     "inverted 四态方向不同，不可合并成一个「未通过」来读（§2.5）"
+)
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 EV-CN-BENIGN-N180 件7 — the CN (holdout) false_positive_rate's DENOMINATOR口径 rides WITH the number,
+# in `citation_form` (NOT notes — notes get stripped when a number is lifted out; citation_form is the
+# "paste-whole" clause). §5-8 requires FOUR things travel together: HOLDOUT (never the fit set) · hard-
+# negative composition · the "贴近治理边界" denominator口径 · n + interval. The n+interval come from the
+# base body; this note carries the other three + the amendment's Wilson clause. Keyed on the CN
+# stratum (subject == language:zh), so the ENGLISH FPR is untouched (it has its own §2.2.4 notes).
+# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# 🔴 EV-CN-TIER2 追加② — the τ-SWEEP CURVE's citability, PRE-REGISTERED (before the run, not after)
+# --------------------------------------------------------------------------- #
+# Exporting the raw score turns one run into a whole curve. That is the point — and it is also the exact
+# shape of the failure this批 exists to prevent, so the rule is written down BEFORE the numbers exist:
+# the holdout arm validates the ONE pre-registered threshold and nothing else. Every other point on the
+# curve is computed on the same cases, i.e. IN-SAMPLE, and is only calibration material for a next round.
+# 🔴 WITHOUT THIS SENTENCE the next reader picks the best-looking τ off the curve, and the holdout arm
+# becomes a calibration arm the moment they do — the thing that already happened once.
+TAU_PREREGISTRATION_NOTE = (
+    "🔴 τ 预注册（EV-CN-TIER2 追加②，跑前写死）：本数所用 τ 来自【标定臂】（n=80 · corpus_sha "
+    "4df97413…），是【预注册值】；留出臂**只验这一个点**。"
+    "🔴 曲线上其余任何 τ 处的 FPR / 召回都是【in-sample】—— 同一批件上算出来的，"
+    "【不可引用】，只作下一轮标定的材料。"
+    "🔴 在曲线上挑一个好看的 τ 再回头引用，等于当场把留出臂变成标定臂 —— 那正是上一轮的死法。"
+)
+
+_LANGUAGE_ZH_SUBJECT = "language:zh"
+# 🔴 EV-CN-TIER2 追加④ — the CN false_positive_rate is a TIER-1 quantity. Under shadow the judge is not
+# on the decision path at all, so this number cannot move with the judge threshold and must never be read
+# as a Tier-2 gate. The τ gate hangs on benign_shadow_flag_rate, which is the rate that actually moves.
+CN_FPR_TIER1_SCOPE_NOTE = (
+    "🔴 层级口径（EV-CN-TIER2 追加④）：本率是【Tier-1 口径】—— shadow 下 Tier-2 判官【不在决策路径上】，"
+    "本数与判官阈值 τ 无关、也不随 τ 变动，【不得当作 Tier-2 的门】。"
+    "τ 的门挂在 benign_shadow_flag_rate 上（那才是随 τ 动的那个数）"
+)
+N180_FPR_DENOMINATOR_NOTE = (
+    "🔴 分母口径（N180 §2.2.1-2 / 件7）：本率出自【留出臂】（从不参与 τ 拟合 ⇒ 不是拟合集上构造出来的零）；"
+    "分母是【贴近治理边界的良性请求】（硬负例占比 ≥ 按臂下限，沿真实业务工作流取材、非按手法族铺）——"
+    "它是一个【条件误拦率】 P(误拦 | 良性 且 贴近治理边界)，【不是】全部良性流量上的误拦率，也【不可外推】为流量"
+    "上的期望值；要流量口径需按流量抽样的另一批语料（本仓今天不产出）。"
+    # 🔴 件7 修（架构 ③）— 分两层归因，别把我方均分假设记在取材人名下：工作流【清单】是取材人给的（attested）；
+    # 每工作流【条数】是我方均分、无权重依据（取材人只给了清单和每组 3–4 条示例，没给工作流权重）。
+    "🔴 构成两层归因：工作流【清单】来自取材人（attested）；每工作流【条数】由我方均分、无权重依据。"
+    "n=110 来自 Wilson 的 k≤1 下限，与工作流数无关 —— 110÷10=11 是巧合、不是设计。"
+    "🔴 Wilson 区间只涵盖【抽样误差】，不涵盖【分母构成误差】—— 族构成偏了是【偏差】不是【方差】，加大 n 消不掉它。"
+    # 🔴 M5 修 — 声明落点从 operator_only 侧表搬到这里。一条放在【引用那个数的人读不到的地方】的声明，
+    # 不叫声明：侧表是 operator_only，而 citation_form 是整段粘走的那个。同 F3/件4 的形状（列建好了、
+    # 读者数为零），只是这次它守的是【背书链】而不是一个判据。
+    "🔴 背书链不齐：分母里有一小批件的【撰写人与复核人是同一人】（其余各件由取材人给出场景与说法、"
+    "另一方落笔，复核的是他人对其 brief 的实现）。全臂的"
+    "真实性本就只是 attested（无任何流量取样可证伪），这一小批的差别是【背书链更短】而非种类不同；"
+    "🔴 更要紧的是与之同源的那条【承重宾语】轴：它从取材到复核全程只有一人，且只在那一小批上标注过 ——"
+    "⇒ 按该轴切分的任何比率，两个方向都不合法（未标注 ≠ 取值为假）"
 )
 
 
@@ -476,7 +618,265 @@ def run_config_note(provenance: dict[str, Any] | None) -> str:
     dl = prov.get("detection_layer_status")
     if dl:
         note += f" · 检测层 {dl}"
+    # 🔴 N180 件0/件5 — the judge/τ axes ride WITH the number too (judge_form, measurement_path = the
+    # assembly axis, and the τ + its source). A number computed off-product (offline_judge_harness) or on
+    # a non-shipped τ must SAY so wherever it is quoted.
+    jf, mp, td, ts = (
+        prov.get("judge_form"),
+        prov.get("measurement_path"),
+        prov.get("tau_declared"),
+        prov.get("tau_source"),
+    )
+    if jf or mp or td or ts:
+        note += (
+            f" · 判官 {jf or '?'} · 测量路径 {mp or '?'} · τ {td or '?'}({ts or '?'})"
+        )
+        # 🔴 件0 — the derived third state, which MUST appear and MUST NOT read as "no problem".
+        note += f" · τ核验 {tau_verified(prov)}"
+    # 🔴 件⑧ — the material-landing → run-start ruleset pin also rides WITH the number: a moved ruleset
+    # across the visible window is a question for a human, and a question nobody sees is not asked.
+    if prov.get("material_ruleset_sha256"):
+        note += f" · 素材窗口 {material_window_verified(prov)}"
     return note
+
+
+def tau_verified(provenance: dict[str, Any] | None) -> str:
+    """🔴 N180 件0 — is the τ these numbers used the one the PRODUCT ships? A DERIVED third state that
+    rides with the number and must NEVER read as "no problem":
+      • 'matched'      — tau_declared == the shipped τ (from the build fingerprint's detection_switches);
+      • 'mismatch'     — they differ ⇒ this is a calibration diagnostic, not a product measurement;
+      • 'unverifiable' — the shipped build fingerprint carries NO τ to compare against. 🔴 TODAY ALWAYS
+                         THIS (Platform's P-3 has not put τ in the fingerprint yet) — a number on a
+                         shipped τ we simply CANNOT confirm must not be read as confirmed.
+    This is the honesty LABEL; the citability GATE is 件6 (`tau_source != 'shipped' ⇒ not_citable`)."""
+    prov = provenance or {}
+    switches = (prov.get("build_fingerprint_after") or {}).get("detection_switches")
+    shipped_tau = switches.get("tau") if isinstance(switches, dict) else None
+    declared = prov.get("tau_declared")
+    if not declared or shipped_tau is None:
+        return "unverifiable"
+    return "matched" if str(declared) == str(shipped_tau) else "mismatch"
+
+
+def material_window_verified(provenance: dict[str, Any] | None) -> str:
+    """🔴 EV-CN-BENIGN-N180 件⑧ — during the window between the holdout material LANDING and the
+    certification run, the material sat somewhere readable. "We believe nobody looked" is an attestation;
+    "the fingerprint says the ruleset did not move" is a measurement. So the freeze pack records the
+    `ruleset_sha256` AT MATERIAL-LANDING TIME (`material_ruleset_sha256`) and this compares it with the
+    ruleset the certification run actually started under (build_fingerprint_BEFORE.runtime.ruleset_sha256):
+
+      • 'matched'      — the ruleset did not move across the visible window ⇒ nothing was tuned to it;
+      • 'mismatch'     — it DID move ⇒ 🔴 that visible window needs SEPARATE adjudication. This is NOT
+                         automatically a defect (a legitimate unrelated release also moves it) and NOT
+                         automatically fine — it is a question a human must answer, so it must be visible;
+      • 'unverifiable' — one side absent (a pre-件⑧ pack, or no admin fingerprint) ⇒ we CANNOT confirm it.
+                         Never read as 'no problem' (same discipline as tau_verified)."""
+    prov = provenance or {}
+    landed = prov.get("material_ruleset_sha256")
+    runtime = (prov.get("build_fingerprint_before") or {}).get("runtime")
+    started = runtime.get("ruleset_sha256") if isinstance(runtime, dict) else None
+    if not landed or not started:
+        return "unverifiable"
+    return "matched" if str(landed) == str(started) else "mismatch"
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 EV-JUDGE-UNION 件5 (rewritten on measurement) — a DECISION-STAGE FPR that is blind to Tier-2 enforce
+# --------------------------------------------------------------------------- #
+# 🔴 WHAT THIS GUARDS (no specific case appears in this sentence): a rate that cannot see an entire class
+# of blocks must not keep emitting a number — the under-count that blindness produces is, in the number
+# itself, indistinguishable from the system genuinely performing well.
+#
+# THE MEASURED FACT behind it: when Tier-2 runs in ENFORCE, the block is recorded on the RESPONSE-side
+# record while the decision record deliberately stays ALLOW. The decision-stage false-positive rate reads
+# the decision record, so a benign request that the user saw refused contributes NOTHING to the numerator.
+#
+# 🔴 NOTE THE DIRECTION, because the previous draft of this item had it backwards and that made it worse:
+# the earlier concern was a timeout being COUNTED as detection (an over-count, which shows up as an
+# implausibly high number and invites scrutiny). What actually happens is an UNDER-count — and an
+# under-count is quiet. A wrong-direction fix ("attribute the timeout") repairs nothing here, because the
+# decision record contains no such decider to attribute.
+_FPR_ENFORCE_BLIND_FIX = (
+    "🔴 本部署的 Tier-2 处于 enforce，而【决策段】FPR 看不见那一类拦截（拦截记在响应侧记录上，决策记录"
+    "仍是 ALLOW）⇒ 真实的误拦一条都进不了分子。这个数【不是低，是看不见】—— 而看不见造成的低估，与"
+    "系统真的很好，在数上完全一样。⇒ 决策段 FPR 判 not_measured，不得出数"
+)
+_FPR_ENFORCE_PARTIAL_FIX = (
+    "🔴 本部署只对【部分租户】开了 Tier-2 enforce ⇒ 一个全局 FPR 把两个总体混在一起：被 enforce 的租户"
+    "我方失明、未被 enforce 的没失明。混出来的那个数不描述任何一个总体。⇒ 【按租户分开报】，不得给全局"
+    "一个数（这不是上一条的弱化版：那一条是整体不可测，这一条是可测但必须分开）"
+)
+FPR_MEASURABLE = "measurable"
+FPR_NOT_MEASURED = "not_measured"
+FPR_PER_TENANT_ONLY = "per_tenant_only"
+
+
+def decision_fpr_measurability(provenance: dict[str, Any] | None) -> str:
+    """🔴 件5 — can the DECISION-stage FPR still mean anything under this deployment's enforce settings?
+    Reads `enforce_enabled` / `enforce_all_tenants` / `enforce_tenant_count` from the build fingerprint's
+    detection_switches (already present there; no new field).
+
+      • enforce_enabled false                        ⇒ 'measurable'        (nothing is hidden)
+      • enforce_all_tenants ∧ enforce_enabled        ⇒ 'not_measured'      (blind everywhere)
+      • enforce_enabled ∧ enforce_tenant_count > 0   ⇒ 'per_tenant_only'   (blind on some populations)
+
+    🔴 The third is NOT a softer second: it is a different fault. Under partial enforce the deployment IS
+    measurable — just not as one number, because a global rate would average a population we can see with
+    one we cannot. Folding it into the second would wrongly void a deployment that only needed splitting.
+    🔴 enforce on with an UNDETERMINABLE scope ⇒ not_measured (fail-closed: we cannot bound the blindness).
+    """
+    prov = provenance or {}
+    switches = (prov.get("build_fingerprint_after") or {}).get("detection_switches")
+    if not isinstance(switches, dict):
+        return FPR_MEASURABLE  # no fingerprint claim at all ⇒ the pre-existing reading stands
+    if not switches.get("enforce_enabled"):
+        return FPR_MEASURABLE
+    if switches.get("enforce_all_tenants"):
+        return FPR_NOT_MEASURED
+    try:
+        count = int(switches.get("enforce_tenant_count") or 0)
+    except (TypeError, ValueError):
+        return FPR_NOT_MEASURED  # unparseable scope ⇒ cannot bound the blindness
+    if count > 0:
+        return FPR_PER_TENANT_ONLY
+    return FPR_NOT_MEASURED  # enforce on, scope undeterminable ⇒ fail closed
+
+
+def decision_fpr_refusal(provenance: dict[str, Any] | None) -> str | None:
+    """The refusal message for this deployment, or None when the decision-stage FPR still stands."""
+    verdict = decision_fpr_measurability(provenance)
+    if verdict == FPR_NOT_MEASURED:
+        return _FPR_ENFORCE_BLIND_FIX
+    if verdict == FPR_PER_TENANT_ONLY:
+        return _FPR_ENFORCE_PARTIAL_FIX
+    return None
+
+
+# ⚠️ PENDING (deliberately NOT done here): whether the FPR should merge the RESPONSE stage the way
+# `injection_attribution_source` already does on the attack side. Merging would change what this
+# indicator measures — a different question needing its own ruling. This item's scope stops at refusing
+# to emit a number; it does not quietly redefine the metric on the way past.
+
+
+def holdout_consumption_marker(bundle: dict[str, Any]) -> tuple[str, str] | None:
+    """🔴 N180 件4 — the (holdout corpus_sha, run marker) this bundle would CONSUME, for recording into the
+    registration entry's `holdout_consumed` field. The run marker is the collect-time generated_at_ns (a
+    run is one collect). None when the bundle carries no CN holdout FPR (nothing to consume)."""
+    prov = bundle.get("provenance") or {}
+    marker = str(prov.get("generated_at_ns"))
+    for m in bundle.get("measurements") or ():
+        if (
+            m.get("indicator_id") == "false_positive_rate"
+            and m.get("subject") == _LANGUAGE_ZH_SUBJECT
+        ):
+            sha = m.get("corpus_sha")
+            if sha:
+                return sha, marker
+    return None
+
+
+def holdout_reread_blocker(
+    bundle: dict[str, Any], *, consumed: Mapping[str, str]
+) -> str | None:
+    """🔴 N180 件4 — the holdout arm is READ-ONCE. `consumed` maps holdout corpus_sha → the run marker that
+    FIRST consumed it (the registration entry's `holdout_consumed`; empty when unread). A SECOND FPR on the
+    same holdout sha by a DIFFERENT run ⇒ not_citable (第二次读同一条留出臂). The first read (sha absent from
+    `consumed`) is citable; re-serializing the SAME run's bundle (marker matches) is idempotent, not a
+    re-read. This is a STATEFUL gate (needs the registry), kept OUT of the self-contained report_citability
+    / CRITERIA_BLOCKERS set —— it is not a bundle-alone criterion, so it does not bump CRITERIA_VERSION."""
+    got = holdout_consumption_marker(bundle)
+    if got is None:
+        return None
+    sha, marker = got
+    prior = consumed.get(sha)
+    if prior is not None and prior != marker:
+        return _HOLDOUT_REREAD_FIX
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 EV-JUDGE-UNION 件2 — the co-report gate: a JUDGE-MOVABLE number published WITHOUT the mention arm is
+# not_citable. A union judge only ADDS flags (monotone S-1), so a movable number that does not show its own
+# over-flag cost hides exactly the harm the union introduces. 🔴 The condition is "published a judge-movable
+# number", NOT "declared union": hanging it on a declaration hands the gate to the declarer (the
+# Producer.subject lesson — 声明了没人核就不是声明), and a SINGLE judge equally cannot see the mention cost
+# (S-2 is judge-form-independent). Unconditional is simpler AND stronger. DERIVE, do not store (前置3 shape).
+# --------------------------------------------------------------------------- #
+JUDGE_MOVABLE_IDS: frozenset[str] = frozenset(
+    {"tier2_shadow_recall_lift", "benign_shadow_flag_rate", "injection_combined_recall"}
+)
+_JUDGE_COREPORT_ID = "speech_act_shadow_separation_rate"
+JUDGE_COREPORT_FIX = (
+    "这是【判官可动的数】，但同一份产物里没有 mention 臂（speech_act_shadow_separation_rate）—— 并集判官只增"
+    "不减打标，缺了 mention 臂就看不见它把多少 use/mention 孪生里的 mention 也打了标（分离的代价）。收益与代价"
+    "得同一张表上一起出现，否则这个数只报了收益。补上判官侧孪生指标再引。"
+)
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 EV-EN-BENIGN-HOLDOUT — 族 C（音标拼读）in the FPR denominator, reported on ITS OWN LINE.
+#
+# 族 C is in the denominator (it is genuine benign traffic: call-signs, ticket numbers, spelling a name
+# out). But a whole-arm FPR alone cannot answer "did the new signature cost us anything", so the family's
+# own mis-block count must be readable BESIDE the whole-arm number — via the existing `subject` stratum
+# channel, NOT a new indicator (a new id would eventually get a threshold hung on it, and this is a
+# diagnostic).
+#
+# 🔴 k_C IS A COUNT, NOT A RATE — written into the field description because the misreading is one
+# division away: the family is 8 cases, so ONE mis-block is 12.5pp. Quoting k_C/8 as an FPR quotes noise.
+# 🔴 DETECTION POWER is read across BOTH sides (calib 8 + holdout 8 = 16; P(≥1) 0.83 → 0.97), but the FPR
+# DENOMINATOR is the holdout 8 alone. Two separate reasons, both of which must be stated:
+#   (1) the calib side never enters an FPR denominator at all (it is the fit set — 件2);
+#   (2) more fundamentally, the NATO signature is a Tier-1 lexical rule, and a Tier-1 signature check is
+#       NOT the same measurement as a judge FPR. The combined read answers "is the signature broken",
+#       never "what is the false-positive rate".
+FAMILY_C_SUBJECT = "family:phonetic"
+# 🔴 件5 — the CONTAMINATION marker. 族 C exists because someone read the eval set and then wrote the rule,
+# so "the new rule caught those cases" proves nothing (在污染源上做验收 = 让被告自己作证). The marker rides
+# in the measurement's notes so any number touching 族 C carries its own provenance; a product that quotes
+# a 族 C catch without this being readable is quoting the defendant's own testimony.
+FAMILY_C_MARKER = "motivated_by_eval_set"
+FAMILY_C_COREPORT_FIX = (
+    "🔴 族 C（音标拼读）在 FPR 分母里，但产物没有它的【分行】—— 全臂一个数答不出"
+    "「这条新签名有没有代价」。补一条 subject=family:phonetic 的分层行再引"
+)
+FAMILY_C_COUNT_NOTE = (
+    "🔴 k_C 是【计数】不是【率】：本族仅 8 件，一件误拦即 12.5pp —— 把 k_C/8 当 FPR 引，引的是噪声。"
+    "检出力两侧【合读】（标定 8 + 留出 8 = 16，P(≥1) 0.83→0.97），但 FPR 分母【只算留出侧 8】："
+    "① 标定侧是拟合集，本来就不进任何 FPR 分母（件2）；② 更根本 —— NATO 签名是 Tier-1 词面规则，"
+    "与判官 FPR 不是同一次测量。合读只用于判断【签名坏没坏】，不产出误拦率。"
+    "🔴 族 C 由评测件催生（motivated_by_eval_set）：原始那批只作【回归】，不作【能力证据】"
+)
+
+
+def derive_family_c_coreport(present_subjects: Iterable[str]) -> bool:
+    """🔴 True when 族 C sits in the FPR denominator but its own stratified row is ABSENT ⇒ that FPR is
+    not_citable. DERIVE from the subjects actually present; do not store (前置3 shape)."""
+    subjects = set(present_subjects)
+    return FAMILY_C_SUBJECT not in subjects
+
+
+def derive_judge_coreport(present_ids: Iterable[str]) -> frozenset[str]:
+    """🔴 件2 — the judge-movable ids in a product that are NOT citable because the mention-arm twin
+    (speech_act_shadow_separation_rate) is ABSENT. Empty when the twin is present (收益与代价同一张表).
+    DERIVE from the ids actually present, do not store (前置3 shape)."""
+    present = set(present_ids)
+    if _JUDGE_COREPORT_ID in present:
+        return frozenset()
+    return JUDGE_MOVABLE_IDS & present
+
+
+def assert_judge_coreport_derived(
+    present_ids: Iterable[str], blocked: Iterable[str]
+) -> None:
+    """Fail-closed: the blocked set a caller applied MUST equal the derived one — no hand-stored drift
+    (same discipline as assert_offline_recomputable_derived)."""
+    expected = derive_judge_coreport(present_ids)
+    if set(blocked) != set(expected):
+        raise ValueError(
+            f"judge-coreport blocked set {sorted(set(blocked))} != derived {sorted(expected)} "
+            "(EV-JUDGE-UNION 件2 — derive, don't hand-store)"
+        )
 
 
 def citation_form(
@@ -551,6 +951,17 @@ def citation_form(
             f" —— {FPR_STAGE_NOTE} —— {FPR_KNOWN_LIMITATION_NOTE} —— {FPR_GRANDFATHER_NOTE}"
             f" —— {REGISTER_ASSUMPTION_NOTE}"
         )
+        # 🔴 ③ — the ENGLISH arm's authored-not-sampled disclosure. Keyed off "not the CN stratum":
+        # the CN FPR carries its own domain-sourced denominator口径 below, so this deliberately WEAKER
+        # provenance statement would be wrong on it.
+        if m.subject != _LANGUAGE_ZH_SUBJECT:
+            body += f" —— {EN_BENIGN_AUTHORED_NOTE}"
+        # 🔴 N180 件7 — the CN (holdout) FPR ALSO carries its denominator口径 (贴近治理边界·非流量·留出臂)
+        # + the Wilson-covers-sampling-not-composition clause. Keyed on the CN stratum only.
+        if m.subject == _LANGUAGE_ZH_SUBJECT:
+            body += f" —— {N180_FPR_DENOMINATOR_NOTE}"
+            # 追加④ — say which LAYER this rate belongs to, so it is never read as a judge-threshold gate.
+            body += f" —— {CN_FPR_TIER1_SCOPE_NOTE}"
     # EV-AE9 / §7.4-3 — sensitive_disclosure_rate's canary is a public literal (DLP-bait shape, not F7
     # runtime-injected), so its citation states that known limitation the way FPR states its own.
     if m.indicator_id in LEAK_CANARY_DISCLOSURE_IDS:

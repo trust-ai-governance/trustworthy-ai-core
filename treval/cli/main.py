@@ -448,6 +448,27 @@ def build_parser() -> argparse.ArgumentParser:
         col.add_argument(
             "--user", default=os.environ.get("TREVAL_EVAL_USER", "eval-user")
         )
+        # 🔴 The gateway REQUIRES `x-agent-id` unless it has a `default_agent_id` config — observed
+        # live: 194/194 probes died at IDENTIFY_FAILED before reaching any detection stage, and
+        # `target.py` only sent the header when a CASE declared `agent_id` (the EV-AE13 route
+        # selector). A run-wide default was simply unreachable from the CLI. The agent must ALSO be
+        # in the target's identity registry — an unregistered agent fails exactly like a missing one.
+        col.add_argument(
+            "--agent",
+            default=os.environ.get("TREVAL_EVAL_AGENT", ""),
+            help="agent id sent as `x-agent-id` on every probe (must be provisioned on the target); "
+            "a case's own `agent_id` still wins for per-case route selection. Env: TREVAL_EVAL_AGENT",
+        )
+        # 🔴 DECLARE that the target has no upstream model (an echo forwarder: 被测方=无). Then a
+        # non-blocked 200 with no parseable completion is the target's DESIGNED behaviour, not an
+        # extraction failure — without this every probe errors out of every denominator and a
+        # decision-side-only run measures nothing. Refused if any active producer reads the response.
+        col.add_argument(
+            "--no-output-side",
+            action="store_true",
+            help="declare the target has NO upstream model (echo forwarder) ⇒ an absent completion is "
+            "expected, not a probe failure. REFUSED alongside any output-side indicator",
+        )
         # EV-PAIR-A2 §2: no hard default — `deepseek-v4-flash` is the gateway deployment's model,
         # meaningless on an arbitrary endpoint. gateway falls back to it in code; raw_model /
         # moderation_api REQUIRE it. Reads TREVAL_EVAL_MODEL (NOT TREVAL_TARGET_MODEL — a doc
@@ -567,6 +588,34 @@ def build_parser() -> argparse.ArgumentParser:
             help="the tested party's DECLARED upstream request-timeout in seconds (its hardcoded "
             "value, e.g. 60) — the gateway --timeout is then DERIVED as 2× this (not guessed), and the "
             "value is pinned into the freeze pack (E3-n ③)",
+        )
+        # 🔴 EV-CN-BENIGN-N180 件0 — the JUDGE/τ declaration axes (operator-declared, like
+        # --language-scope). Absent ⇒ not a citable run: a number that didn't record which τ / measurement
+        # path / judge form it used cannot be cited as a product capability. `--measurement-path` IS the
+        # assembly axis (offline_judge_harness vs in_product_gateway).
+        col.add_argument(
+            "--judge-form",
+            default=None,
+            help="the judge form these numbers were measured under: 'single' | 'union:<n>' (N180 件0)",
+        )
+        col.add_argument(
+            "--measurement-path",
+            choices=("offline_judge_harness", "in_product_gateway"),
+            default=None,
+            help="where the numbers were measured — the assembly axis; a gateway run is "
+            "in_product_gateway (N180 件0)",
+        )
+        col.add_argument(
+            "--tau-declared",
+            default=None,
+            help="the τ these numbers were computed with (N180 件0)",
+        )
+        col.add_argument(
+            "--tau-source",
+            choices=("shipped", "fitted", "other"),
+            default=None,
+            help="where that τ came from — 'shipped' (detection_switches) is the only citable source; "
+            "'fitted'/'other' ⇒ a calibration diagnostic, not_citable (N180 件6)",
         )
         # EV-COVERAGE E3-n ④ — the gateway admin base (GET /admin/v1/buildinfo). Passed to
         # GatewayTarget so collect can capture the build fingerprint before AND after the run and prove

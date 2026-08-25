@@ -48,7 +48,7 @@ _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
 # --------------------------------------------------------------------------- #
 def test_jian1_same_id_different_subdir_raises():
     clash = (
-        Producer("false_positive_rate", CURATION[0].factory, "llm01_benign"),
+        Producer("false_positive_rate", CURATION[0].factory, "llm01_benign_holdout"),
         Producer("false_positive_rate", CURATION[0].factory, "llm01_cn_benign"),
     )
     with pytest.raises(ValueError, match="two corpus_subdirs"):
@@ -81,7 +81,8 @@ def test_jian2_default_en_producer_set_is_unchanged():
     en_dirs = {p.corpus_subdir for p in curation_for("en")}
     cn_dirs = {p.corpus_subdir for p in curation_for("cn")}
     assert en_dirs == {p.corpus_subdir for p in CURATION}
-    assert cn_dirs == {"llm01_cn_injection", "llm01_cn_benign"}
+    # N180 件2 repointed the CN benign producers to the HOLDOUT arm (never the fit set)
+    assert cn_dirs == {"llm01_cn_injection", "llm01_cn_benign_holdout"}
     assert not (en_dirs & cn_dirs)  # the two sets share no corpus dir
 
 
@@ -95,13 +96,14 @@ def test_jian2_unknown_corpus_set_fails_closed():
 # --------------------------------------------------------------------------- #
 def test_jian3_en_arms_hold_no_cn_dir():
     attack, benign = carrier_arm_dirs(CURATION)
-    assert attack == ("llm01_prompt_injection",) and benign == ("llm01_benign",)
+    assert attack == ("llm01_prompt_injection",) and benign == ("llm01_benign_holdout",)
     assert not any("cn" in d for d in attack + benign)  # §7-6
 
 
 def test_jian3_cn_arms_are_cn_dirs():
     attack, benign = carrier_arm_dirs(CURATION_CN)
-    assert attack == ("llm01_cn_injection",) and benign == ("llm01_cn_benign",)
+    # N180 件2 — the CN benign arm is the HOLDOUT dir now
+    assert attack == ("llm01_cn_injection",) and benign == ("llm01_cn_benign_holdout",)
 
 
 # --------------------------------------------------------------------------- #
@@ -204,7 +206,7 @@ def test_jian5_check_benign_en_default_still_runs(capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert (
-        "llm01_benign" in out and "本项未校验" not in out
+        "llm01_benign_holdout" in out and "本项未校验" not in out
     )  # a real check, not the not-verified path
 
 
