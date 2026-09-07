@@ -303,10 +303,10 @@ def test_e3n2_tier2_lift_is_na_when_drain_not_executed_red():
     probes = [_tier2_probe(str(i), drained=False, gov=None) for i in range(28)]
     (m,) = Tier2ShadowRecallLift().measure(probes)
     assert m.sample_size == 0  # 🔴 n/a, NOT a 28-sample 0% lift
-    assert m.value == 0.0 and "NOT executed" in m.notes  # unmeasurable, not zero
+    assert m.value == 0.0 and "UNMEASURABLE" in m.notes  # unmeasurable, not zero
     # the benign Tier-2 companion is gated the same way
     (b,) = BenignShadowFlagRate().measure(probes)
-    assert b.sample_size == 0 and "NOT executed" in b.notes
+    assert b.sample_size == 0 and "UNMEASURABLE" in b.notes
 
 
 def test_e3n2_tier2_lift_measures_when_drain_executed_reverse():
@@ -319,7 +319,7 @@ def test_e3n2_tier2_lift_measures_when_drain_executed_reverse():
     (m,) = Tier2ShadowRecallLift().measure(probes)
     assert m.sample_size == 2
     assert m.value == 0.5  # 1 lexical-missed rescue / 2 measurable
-    assert "NOT executed" not in m.notes
+    assert "UNMEASURABLE" not in m.notes
 
 
 def test_e3n2_provenance_records_the_drain_status():
@@ -710,7 +710,7 @@ def test_e3n4_build_fingerprint_changed_is_in_criteria_v2():
 
     assert "build_fingerprint_changed" in CRITERIA_BLOCKERS
     assert (
-        CRITERIA_VERSION == 5
+        CRITERIA_VERSION == 6  # 5→6：冻结面收窄（更松的门 = 另一道门）
     )  # N180 件6 bumped 3→4 (tau_not_shipped); 件5 bumped 4→5 (path_not_product)
 
 
@@ -757,3 +757,48 @@ def test_e3n4_fetch_buildinfo_reads_the_admin_endpoint(monkeypatch):
         "http://gw:8080", admin_url="http://gw:8080"
     ).fetch_buildinfo()
     assert fp is None and err is not None and "404" in err
+
+
+def test_a_clean_drain_with_a_silent_judge_is_unmeasurable_not_zero() -> None:
+    """🔴 最贵的那一格：排空【干净跑完了】，而判官一分未出。
+
+    被测方侧实测：连续多次跑批判官一分未打（路由不通），而开关读 `true`、排空也完成 ⇒
+    每条探针 `governance_evidence=None`，Tier-2 各格算出一个**看起来正常的 0 lift**，
+    没有任何东西变红。空绿是分批产生的，不是一次。
+
+    旧守卫只问"排空跑没跑"，这一格恰好落在它的另一侧。判据：`inj.tier2.shadow` 记录
+    **无条件落**（低于 τ 也落，已有活反例）⇒ 本窗 shadow==0 无歧义等于"判官没产出"。
+
+    什么让它红：把 `_tier2_measurable` 改回只调 `_tier2_drain_ran`。
+    """
+    from treval.active_eval.indicators import (
+        Tier2ShadowRecallLift,
+        _tier2_judge_produced,
+        _tier2_measurable,
+    )
+    from treval.active_eval.target import ProbeResult
+
+    def _pr(judge_produced):
+        return ProbeResult(
+            case_id="c",
+            request_id="r",
+            decision="ALLOW",
+            response_text="",
+            evidence=None,
+            tier2_drain_executed=True,  # 🔴 排空干净跑完了
+            tier2_judge_produced=judge_produced,
+        )
+
+    silent = [_pr(False)]
+    assert _tier2_judge_produced(silent) is False
+    assert _tier2_measurable(silent) is False, (
+        "排完了但判官没产出 —— 这一跑测不了 Tier-2"
+    )
+    (m,) = Tier2ShadowRecallLift().measure(silent)
+    assert m.sample_size == 0 and "UNMEASURABLE" in m.notes, "不可测，不是 0% lift"
+    assert "判官一分未出" in m.notes, "措辞必须分得开两种情形（处置相反）"
+
+    # 判官出过分 ⇒ 可测（缺记录才是真的 no-async）
+    assert _tier2_measurable([_pr(True)]) is True
+    # 🔴 三态：None（没查过）不算作没产出 —— 那会把"没看"读成"看了没有"
+    assert _tier2_measurable([_pr(None)]) is True
