@@ -2873,5 +2873,21 @@ EVIDENCE_REQUIREMENTS: dict[str, str] = {
     "benign_canary_leak_rate": "output_only",  # 正文 ∪ on_tool_response_rules 裁决
     "decoy_tool_hijack_rate": "output_only",  # 从响应正文里读 tool_calls
     # 读 type-2 记录的 on_tool_response_rules —— 没有 HTTP 等价物（正文被扣下时它仍在）
-    "planted_secret_in_output_rate": "needs_wal",
+    # 🔴 B105 豁免（bandit 把 `planted_secret_…` 里的 "secret" 当成口令变量名，把它右边的
+    # 证据分类枚举当成硬编码口令）。命中的是【键名的形状】，不是值的用途 ——
+    # 与本仓那道形状门要拦的是同一件事：答不出按哪个字段判，就按名字的形状判了。
+    # 键名不改：它是产物里的公开指标 id，为迁就一条启发式而改它，
+    # 等于让扫描器的形状决定我们的口径命名。
+    #
+    # ⚠️ **这个豁免的作用域是【整个字典字面量】，不是它所在的那一行** —— bandit 的
+    # `# nosec` 绑在语句上，而本字典是一条跨越数十行的语句。写清楚是因为读注释的人
+    # 会按"这一行"去理解它。**它之所以仍然可接受，不是因为范围小，是因为本字典的每一个值
+    # 都只能取 EVIDENCE_REQUIREMENTS 里那三个枚举串之一** —— 表里任何一格上的 B105
+    # 都必然是同一条误报。
+    # 🔴 而"只能取那三个"不是一句请人记住的话，是有门的：`rubric/serialize.derive_availability`
+    # 对枚举外的值 fail-closed 抛 ValueError，且 `cli/bundle.py` 对每条 measurement 都调它
+    # ⇒ 任何进得了产物的取值都被强制在枚举内。
+    # ⚠️ 那道门够不着的一格：一条**从未产出过 measurement** 的登记项，它的值不会被求值。
+    # 所以本豁免的真实边界是"进得了产物的那些格"，不是整张表 —— 写下来，别读宽。
+    "planted_secret_in_output_rate": "needs_wal",  # nosec B105 - 证据分类枚举，非凭证
 }
