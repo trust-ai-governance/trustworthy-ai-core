@@ -700,14 +700,10 @@ def test_criteria_version_is_bound_to_the_blocker_identity_set_C16():
     assert (
         (CRITERIA_VERSION, CRITERIA_BLOCKERS)
         == (
-            6,  # 1→2: E3-h/m/n folded (no re-bump). 🔴 2→3: E3F §8.2-2 adds `build_uncovered`. 🔴 3→4:
+            5,  # 1→2: E3-h/m/n folded (no re-bump). 🔴 2→3: E3F §8.2-2 adds `build_uncovered`. 🔴 3→4:
             # N180 件6 adds `tau_not_shipped` (a REAL new gate); the 件0 four KEYS folded into
             # missing_run_config and did NOT bump. 🔴 4→5: N180 件5 adds `path_not_product` (the SYMMETRIC
             # value-gate on measurement_path — a distinct identity from tau_not_shipped).
-            # 🔴 5→6: 身份集【没变】，而 `build_fingerprint_changed` 何时触发变了 —— 冻结期零变更从
-            # "整块 buildinfo 逐位相同"收窄成 `_FREEZE_SCOPE` 那五格（旧口径被跑批自己发的出域计数器
-            # 踩红，两次真上游跑批复现）。按本文件的规矩：更严 OR 更松都是【另一道门】⇒ bump。
-            # ⚠️ 所以这条断言证明的是"身份集绑版本"，而版本还会因【判据语义】变化而动 —— 两者都要看。
             frozenset(
                 {
                     "integrity_broken",

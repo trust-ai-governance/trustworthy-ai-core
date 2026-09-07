@@ -36,9 +36,6 @@ from collections.abc import Iterable, Mapping, Sequence
 from treval.active_eval.canary import assert_no_canary_plaintext
 from treval.citability import TAU_PREREGISTRATION_NOTE
 from treval.active_eval.checks import (
-    caught_by_tier2,
-    UPSTREAM_FORWARD_FAILED,
-    response_error_codes,
     injection_score,
     attribution_cell,
     decision_injection_source,
@@ -51,7 +48,7 @@ from treval.active_eval.checks import (
     injection_rule_evaluated,
 )
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
-from treval.terminal import is_error_terminal, response_terminal_class
+from treval.terminal import response_terminal_class
 from treval.active_eval.indicators import (
     DEFAULT_ARM_PARITY,
     InjectionCatchRate,
@@ -150,59 +147,6 @@ def _tier2_scored(pr: ProbeResult) -> str:
     if hard_blocked(pr):
         return "prefiltered"
     return "not_scored"
-
-
-def _reacted_by(pr: ProbeResult) -> str:
-    """🔴 PM 2026-09-06 ① —— 这条良性件是**哪一层**反应的：none | tier1 | tier2 | both。
-
-    为什么必须分开：两层的处置**相反方向**。Tier-1 误标 ⇒ 改规则；Tier-2 误标 ⇒ 调 τ。
-    合成一个「被标记了」，看表的人无从知道该动哪一个 —— 而这正是一条误伤记录唯一的用途。
-
-    🔴 Tier-1 包含**硬拦**，不只软标记：一条被决策段拦下的良性件当然是 Tier-1 反应了，
-    只看 hint 会把它读成 `none`（最坏的那种错：用户被拒了，而表上写着没人碰过它）。
-    🔴 Tier-2 用 `caught_by_tier2`（判官在**它自己的 τ** 上发出的 hint），不重新阈值化分数 ——
-    emit-vs-interpret：τ 归网关，Core 读它发出的判定。
-    ⚠️ 判官**没评过**不在这一列里，那是 `tier2_scored` 的三态；两列各答各的问题，不许合并。"""
-    tier1 = denied_at_decision(pr) or flagged_at_decision(pr)
-    tier2 = caught_by_tier2(pr)
-    if tier1 and tier2:
-        return "both"
-    if tier1:
-        return "tier1"
-    return "tier2" if tier2 else "none"
-
-
-def _exclusion_class(pr: ProbeResult) -> str:
-    """这一件被排除的【类别】，"" 表示没被排除。
-
-    三态，各自的处置方向不同：
-        ""                       没被排除
-        harness_no_delivery      🔴 我们的账：件根本没送到网关（无 request_id / 无决策记录）
-        upstream_forward_failed  🔴 不是我们的账：网关【自己写下】上游转发失败（读错误码，非推断）
-        gateway_error_terminal   🔴 不是我们的账：错误终局，而记录没写原因（旧镜像 / 未知错误码）
-
-    🔴 命名只走到【记录说得出】的那一层：
-      · 网关写了错误码 ⇒ 用它（`upstream_forward_failed`），这是**读取**
-      · 只有错误终局   ⇒ `gateway_error_terminal`，**不叫 `upstream_timeout`**
-    "超时"曾经是从 `duration≈60s` 与 `upstream_status=0` 两个旁证推出来的 —— 那是
-    **从相关信号推成因**，正是本轮反复纠的那件事。现在错误码写在盘上了，推断换成读取。
-    """
-    if pr.error is None:
-        return ""
-    if pr.evidence is None and not pr.request_id:
-        return "harness_no_delivery"
-    # 🔴 先读【错误码】，读不到才退回按终局分类 —— 把推断换成读取。
-    # 此前这里只能说 `gateway_error_terminal`（记录上只有终局、没有原因），
-    # 而"上游超时"是从 duration≈60s + upstream_status=0 两个旁证推出来的。
-    # Platform ⑧c 之后错误码就写在 `response.errors` 上，直接读。
-    # ⚠️ 是 `response.errors`，不是 `audit.errors` —— 记录 B 是 sparse record，从不带 audit 子消息，
-    # 在那里查会看到全空，读成"网关没写错误码"（一个关于网关的错误结论）。
-    if UPSTREAM_FORWARD_FAILED in response_error_codes(pr):
-        return "upstream_forward_failed"
-    resp = pr.response_evidence
-    if resp is not None and is_error_terminal(resp.record.response.final_terminal):
-        return "gateway_error_terminal"
-    return "harness_no_delivery" if pr.evidence is None else "gateway_error_terminal"
 
 
 def _terminal_verdict(pr: ProbeResult) -> str:
@@ -510,15 +454,6 @@ def build_benign_cases(
                 "decision_block_source": decision_injection_source(pr),
                 # the benign_flag_rate口径 companion: a decision-stage SOFT flag (user still served).
                 "flagged_at_decision": flagged_at_decision(pr),
-                # 🔴 ① 是哪一层反应的（none|tier1|tier2|both）—— 两层的处置方向相反：
-                # Tier-1 误标改规则，Tier-2 误标调 τ。合成一个布尔，看表的人不知道该动哪一个。
-                # 🔴 ⑥ 盘上的错误码进表 —— 判据："那 4 件在案例表上应读出 FORWARD_UPSTREAM_FAILED，
-                # 而不是靠 duration 推"。算得出来却不进表，下一个人还得再推一次。
-                "response_error_codes": list(response_error_codes(pr)),
-                "reacted_by": _reacted_by(pr),
-                # 🔴 判官【有没有评过】是另一个问题（三态），与「评了标不标」不许并：
-                # drain 没跑完会被读成「判官认为没问题」。同攻击行的那一列。
-                "tier2_scored": _tier2_scored(pr),
                 # 🔴 EV-CN-TIER2 追加① — the judge's RAW score, exported per case.
                 # WHY IT CANNOT WAIT: the holdout arm is READ-ONCE. Without this column a run yields the
                 # single point at the pre-registered τ; with it, the SAME run yields the whole curve for
@@ -531,18 +466,6 @@ def build_benign_cases(
                 "injection_score": injection_score(pr),
                 # 序8 件5 — the response-stage governance class (blocked/allowed/no_verdict/none).
                 "terminal_verdict": _terminal_verdict(pr),
-                # 🔴 排除【是哪一类】的排除 —— 一个具名的排除比一个"读不出来"的强，
-                # 因为它能回答「再跑一次会不会还是这样」。W2 实测（2026-09-06）：5 件被排除，
-                # 而 "5 条仪器损耗" 把两种性质合成了一个数：
-                #   1 件 根本没到网关（无 request_id / 无 WAL 锚）      ⇒ 工装/传输侧，我们的账
-                #   4 件 到了网关，网关记了【错误终局】                  ⇒ 被测系统外部，不是我们的账
-                # 合成一个数会把上游的问题算进仪器账上。
-                # ⚠️ 命名到此为止：记录只说得出"错误终局"，**说不出为什么**
-                # （`audit.errors` 为空 —— Platform 已立件）。所以这里叫 `gateway_error_terminal`，
-                # 不叫 `upstream_timeout` —— 后者是从 duration≈60s 推出来的成因，
-                # 而"从相关信号推成因"正是本轮反复纠的那件事。等 `audit.errors` 落地，
-                # 这一列就能升级成读 `errors[0].error_code` 的具名成因。
-                "exclusion_class": _exclusion_class(pr),
                 # E3-n① — the rule_ids that FIRED this run, as bare facts (no categorization): so a
                 # flagged/blocked benign case can be inspected for WHICH rules matched. DECISION-stage only.
                 "fired_rule_ids": _fired_rule_ids(pr),

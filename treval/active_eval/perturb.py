@@ -107,47 +107,13 @@ PERTURBATIONS: dict[str, Callable[[str], str]] = {
 }
 
 
-class SingleTurnOnlyError(Exception):
-    """Perturbation was asked for on a multi-turn case. 🔴 Fail-closed by ruling, see `perturb_case`."""
-
-
 def perturb_case(case: CorpusCase, kind: str) -> CorpusCase:
     """A variant of `case` with `input` transformed by PERTURBATIONS[kind] (KeyError on an
     unknown kind). id = f'{case.id}::var.{kind}'. attack_class / attack_technique / owasp /
     success_when / dimension / severity / source / tool_id are preserved (still the same
     attack, obfuscated — EV-COVERAGE E0: a variant must inherit its parent's technique, or the
     coverage count is wrong). output_marker / secret_canary / system_prompt are dropped —
-    robustness reads the WAL catch signal only, markers are irrelevant (EV-AE7 §7).
-
-    🔴 MULTI-TURN CASES ARE REFUSED (ruling, 2026-09-05). This function transforms `input` alone,
-    and a multi-turn case's `input` is always "" (the loader enforces input XOR messages), so it
-    used to hand back a "variant" whose wire payload was byte-identical to its parent — a new id, a
-    +1 in the count, an unperturbed probe recorded as a perturbation trial.
-
-    🔴 Why that is worse than dropping the case: dropping shrinks the denominator, which is
-    visible. A no-op variant grows the numerator AND the denominator together, so the number moves
-    toward "more robust". Nothing is missing; the content is hollow. Measured reach at the time of
-    the ruling: 16 attack cases, of which `llm01_wire_indirect` was 6/6 — that family's robustness
-    number had never actually been measured.
-
-    Four reasons for refusing rather than teaching it to perturb `messages`:
-      ① fail-closed, the standing direction;
-      ② "perturb which turn?" is an undefined口径, and undefined口径 is what this programme keeps
-         being bitten by;
-      ③ today's robustness numbers already contain no-op variants. Perturbing `messages` makes the
-         new numbers incomparable to the old ones while nobody knows what the old ones were wrong
-         about; refusing EXCLUDES the no-ops explicitly — a smaller denominator, but an honest one;
-      🔴 ④ perturbing a conversation is a RESEARCH DESIGN (which turn, does coherence survive, is
-         the perturbed dialogue still plausible), and by our own rule an undefined口径 is not the
-         implementation's to settle.
-    ⇒ EV-AE7's scope becomes: robustness covers SINGLE-TURN cases only. That sentence rides in
-    `citation_form` (treval/citability.py::ROBUSTNESS_SINGLE_TURN_NOTE)."""
-    if case.messages is not None:
-        raise SingleTurnOnlyError(
-            f"{case.id}: 扰动不支持多轮件 —— 本函数只变换 `input`，而多轮件的 input 恒为空串，"
-            "产出的『变体』与原件上线载荷逐字相同（换了 id、进了计数、实际没扰动）。"
-            "扰动多轮属研究设计（扰动哪一轮/连贯性/合理性），不由实现来定 ⇒ EV-AE7 只覆盖单轮件"
-        )
+    robustness reads the WAL catch signal only, markers are irrelevant (EV-AE7 §7)."""
     transform = PERTURBATIONS[kind]
     return replace(
         case,

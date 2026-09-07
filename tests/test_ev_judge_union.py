@@ -326,15 +326,6 @@ _NOT_IN_CURATION: dict[str, str] = {
     "cost_runaway_caught": "eval_report vertical (cost/runaway probes)",
     # Needs a constructor ARG; Producer.factory() is no-arg (EV-PAIR-A §3, deliberate).
     "within_cost_budget": "needs a budget argument — Producer.factory() is no-arg by design",
-    # 🔴 会话级误伤率 —— 判据与接线已落，**两条候选臂今天都绑不上**，理由不同且都不是疏漏：
-    #   • A 档 llm01_cn_benign_mt_calib 是 `_calib` 结尾 ⇒ `_assert_no_calib_producer` 一律拒绝
-    #     （对：拿它选完窗口深度 K 再拿它报数，与"在拟合集上报 FPR"是同一个病）；
-    #   • B 档 llm01_cn_benign_mt_holdout 是一次性留出臂，PM 已立「改法定稿之前不许跑」——
-    #     绑上 producer 就等于下一次 `--corpus-set cn` 把它烧掉。
-    # ⇒ 绑臂随 A 档施工单一起裁定，不在本次交付里先斩后奏。
-    "benign_session_disruption_rate": (
-        "A 档是 _calib（calib 门拒绝绑定）· B 档是一次性留出臂且未解冻 —— 绑臂随 A 档施工单裁定"
-    ),
 }
 
 

@@ -28,10 +28,6 @@ from pathlib import Path
 from typing import Any
 
 from treval.active_eval import (
-    BenignCanaryLeakRate,
-    DecoyToolHijackRate,
-    DecoyToolPartialRate,
-    PlantedSecretInOutputRate,
     CorpusIndicator,
     BenignFlagRate,
     BenignFlagRateHardOnly,
@@ -67,8 +63,6 @@ from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import DEFAULT_ARM_PARITY, check_arm_parity
 from treval.active_eval.target import AdminAuthError, ProbeResult
 from treval.case_contract import CaseContractError
-from treval.denominator import Denominator, DenominatorError, load_denominator
-from treval.policy_pin import PolicyDriftError, assert_single_policy_snapshot
 from treval.cli.bundle import build_bundle
 from treval.indicators import (
     BoundaryBreachRate,
@@ -81,12 +75,7 @@ from treval.indicators import (
 )
 from treval.models import Measurement
 from treval.protocols import Indicator
-from treval.provenance import (
-    JudgeImprintError,
-    build_provenance,
-    observed_window,
-    resolve_judge_imprint,
-)
+from treval.provenance import build_provenance, observed_window
 from treval.readers import WalEvidenceReader
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -166,13 +155,6 @@ class Producer:
     subject: str = ""
 
 
-# W6 业务伪装诊断臂的子目录名。语料在仓外受控卷 ⇒ 用 --corpus 指到那个根,子目录名在这里。
-DECOY_ARM_SUBDIR = "llm01_en_disguised"
-# 英文良性臂的【默认】子目录名。🔴 可由 --benign-arm 覆盖 —— 新臂叫别的名字(如 W2 的
-# llm01_benign_holdout_p1),而在此之前这个名字是【写死】的,于是一条名字不同的臂在这条路上
-# 根本跑不了:语料在、判据在、Producer 找不到它。
-BENIGN_ARM_DEFAULT = "llm01_benign_holdout"
-
 # The D3 curation map (§3). Each bound indicator_id ← exactly ONE canonical corpus (so the
 # bundle holds one aggregate per id — DuplicateIndicatorError never trips). Corpus subdirs are
 # copied VERBATIM from eval_report's bindings (one source of truth for corpus↔indicator).
@@ -233,10 +215,6 @@ CURATION: tuple[Producer, ...] = (
     # English pack's FPR corpus_sha stops matching. That is CORRECT — those numbers really were produced on
     # the merged arm — and it is written down so it never reads as an accident.
     Producer("false_positive_rate", FalsePositiveRate, "llm01_benign_holdout"),
-    # 🔴 良性泄漏 —— 已欠下的那条路。判据(`benign_leaked` / `benign_leak_unmeasurable`)与语料
-    # (良性件的 `secret_canary`)都在,而在此之前【没有任何 Producer 消费它们】⇒ 「良性件同样不泄漏」
-    # 一直是【没测】。判据写好了目的地、路没修 —— 本行就是那条路。
-    Producer("benign_canary_leak_rate", BenignCanaryLeakRate, "llm01_benign_holdout"),
     Producer("benign_flag_rate", BenignFlagRate, "llm01_benign_holdout"),
     # E3F "两种读法" — the SAME benign_flag_rate under the hard_only口径, as a DISCLOSURE row (subject),
     # side-by-side with the graded hard_or_flag aggregate in ONE bundle so the口径's effect is visible
@@ -375,39 +353,6 @@ _DECISION_SIDE_ONLY: frozenset[str] = frozenset(
 )
 
 
-def preflight_refusal(pr: Any) -> str | None:
-    """跑一次性臂之前，那一件**合成**试探件的三条判据（PM 2026-09-06 放行条件⑤）。
-    返回拒绝理由，或 None 表示放行。
-
-    🔴 为什么由**跑批工具自己**发这一件、而不由操作者用 curl 验：要证明的不是「网关能返 200」，
-    是「跑这批的那个工具、走那条身份路、带那套 header 与超时、会不会踩坑」。**只有那个工具能证明它自己。**
-
-    三条，每一条都对应一次真的踩过的坑：
-      ① 传输    打不通 / 身份不对 / 超时为零 —— 三次跑批各 194/194 件死在这里，每次都在最后才发现。
-      🔴 ② 未被拦  合成探针是**良性**的。它被拦 ⇒ 这条身份/配置下良性件都过不去 ⇒ 那 171 件的 FPR
-                 会是一个被配置决定的数，不是被检测决定的数 —— 而它读起来完全正常。
-      🔴 ③ 有 completion  200、合法 JSON、**没有 choices**（echo 形态）。传输一切正常，
-                 而一次性臂会全花在一个不产出正文的目标上。这一条此前**不在**试探判据里：
-                 试探只判①，于是它检查的东西比它声称的更容易为真 —— 那正是它上面那段注释
-                 讲 admin 游标时说过的同一句话，只是低了一层。
-
-    ⚠️ echo 转发器（`--no-output-side`）不需要在这里再判一次：`GatewayTarget` 在声明了它之后
-    **根本不产生** `extract_error`（target.py:492 的 `not self._no_output_side`）⇒ ③ 自然不触发。
-    🔴 第一版我在这里加了一个 `no_output_side` 形参 —— 一次变异证明它**改不了任何结果**（死参数），
-    已删。一个看起来在做决定、实际不做决定的旋钮，比没有更坏：它让人以为这一层也在把关。"""
-    err = pr.error or ""
-    if err.startswith("harness-transport"):
-        return f"① 传输不通：{err}"
-    if pr.decision == "BLOCK" or getattr(pr, "response_stage_blocked", False):
-        return (
-            "② 合成【良性】试探件被判 BLOCK —— 这条身份/配置下良性件都过不去，"
-            "那么这批的误报率会是配置决定的，不是检测决定的"
-        )
-    if err:
-        return f"③ 200/非拦截响应里没有可解析的 completion（无 choices —— echo 形态）：{err}"
-    return None
-
-
 def _synthetic_preflight_case() -> Any:
     """A throwaway case for the connectivity pre-flight. 🔴 Authored here, never drawn from a corpus:
     a read-once holdout arm must not spend a case proving the socket works. Benign text, so a probe
@@ -427,26 +372,6 @@ def _synthetic_preflight_case() -> Any:
     )
 
 
-class EmptyRunError(Exception):
-    """声明了 producer，而一个都没产出 —— 本跑作废。
-
-    🔴 2026-09-06 实测（W2 一次性臂）：臂名重映射写在装载侧、查找写在消费侧，两处用了不同的名字
-    ⇒ 171 件真模型探针照跑、四个 producer 全部静默跳过、**退出码 0、bundle 写了、报告 ✅ CITABLE**。
-    产物里只剩 7 个被动格，而被动格来自 WAL 全窗口，**看起来完全正常**。
-    ⇒ "跑完了"与"量到了"是两件事，而只有后者值钱。
-    """
-
-
-class MissingArmError(Exception):
-    """声明了 Producer，却够不着它绑定的那条语料臂。
-
-    🔴 为什么是异常不是 warning：旧行为"记一条 warning，接着跑"实测出过两次空跑 ——
-    一次 `--corpus` 指到了子目录（0/17 个 Producer 产出、退出码 0、bundle 照写），
-    一次良性臂改名后 Producer 找不到它。而 W2 那类臂是【读一次】的：空跑一次就没有第二次，
-    且结果长得和跑完了一模一样。**警告会被读过去，异常不会。**
-    """
-
-
 def assert_no_output_side_is_legitimate(producers: tuple[Producer, ...]) -> None:
     """🔴 `--no-output-side` says "this target has no upstream model, so an absent completion is by
     design". That is true for an echo forwarder — and it is a licence to stop treating an absent
@@ -462,88 +387,8 @@ def assert_no_output_side_is_legitimate(producers: tuple[Producer, ...]) -> None
         )
 
 
-# 🔴 W6 业务伪装诊断臂 —— 独立 curation,【不在】默认 en 集里。
-# 判据:它是诊断臂,与既有攻击臂不可交换(语域系统性不同)⇒ 不进 injection_catch_rate 分母;
-# 而放进默认集会让每一次标准英文跑都去探这条臂 —— 语料在仓外,标准跑每次都会多一条 warning,
-# 更糟的是:有人把 --corpus 指到 P1 卷时,标准跑会【静默】把诊断臂并进来。
-# ⚠️ 分层那一行不折叠:折进完整劫持会抬高率,折进"什么都没发生"会藏起一个可调用但不可操纵的模型。
-CURATION_W6: tuple[Producer, ...] = (
-    Producer("decoy_tool_hijack_rate", DecoyToolHijackRate, DECOY_ARM_SUBDIR),
-    Producer(
-        "decoy_tool_hijack_rate",
-        DecoyToolPartialRate,
-        DECOY_ARM_SUBDIR,
-        subject="decoy:partial",
-    ),
-    # 🔴 与上面两行【成对】出，不是可选的补充（W6 2026-09-05 实测）：完整劫持成立 ⇒ canary 进响应
-    # ⇒ 该件在响应期被拦、正文成占位符 ⇒ 退出分母。⇒ 上面那个率在会拦 canary 的栈上不可能为正。
-    # 这一行从审计面读同一件事，正文被扣下也读得到 —— 它是那个盲区的补集。
-    Producer(
-        "planted_secret_in_output_rate", PlantedSecretInOutputRate, DECOY_ARM_SUBDIR
-    ),
-)
-
-# 🔴 W2 误报侧的编组 —— 只含【良性侧】producer，因为 W2 那条臂在仓外的 P1 卷里，
-# 而 `--corpus` 只接受【一个】根。`en` 编组的 7 条臂在仓内 `corpus/`，两者不在同一个根下 ⇒
-# 拿 `--corpus-set en` 指着 P1 卷跑 W2，在 fail-closed 守卫之前会**只出良性侧的数、
-# 其余 6 条臂各记一条 warning、退出码 0、bundle 照写** —— 而 W2 是【读一次】的臂，
-# 那一次会以"跑完了、数出来了"的形态把它花掉。
-# ⚠️ 臂名仍走 `--benign-arm`（盘上是 `llm01_benign_holdout_p1`），不在这里写死：
-# 写死就等于把一次改名变成一次改代码，而改名的人不改代码。
-# 🔴 从 W2 编组移出的指标 + **它去哪了**（PM 2026-09-06 ⑤）。
-# 留痕不是礼貌：半年后没人记得这个指标为什么不在，而"不在"与"从来没想过"在编组表上一模一样。
-W2_REMOVED_INDICATORS: dict[str, str] = {
-    "benign_canary_leak_rate": (
-        "🔴 移出 W2 编组（2026-09-06），**不补语料**。"
-        "① 结构上不可测：本臂 171 件的 `secret_canary` 字段为空（凭证在 system_prompt 里，"
-        "而判据读的是 secret_canary）⇒ 这一格只会给出一个没有仪器的 0。"
-        "② 更硬的结构理由：阳性（吐出 canary）⊆ 被排除（canary 进响应 ⇒ 响应期拦截 ⇒ 正文成占位符 "
-        "⇒ 退出分母）⇒ 在 exec_mode=block 上**这个率不可能为正**，与 decoy_tool_hijack_rate 同形。"
-        "③ 时点：此刻改语料正文 ⇒ 改 corpus_sha ⇒ 改 injection_score ⇒ 可能改变标记结果，"
-        "而门 B 的 ci_high 距阈值只差千分之二 —— 在这个时点改语料，与「改分子够门」是同一件事。"
-        "⇒ 去向：登记为**待建 W2c 臂**。判据必须从**审计面**读"
-        "（`on_tool_response_rules[dlp-canary-response].matched`），不能从正文读 ——"
-        "就是 W6 的 planted_secret_in_output_rate 那条路。"
-        "🔴 缺口仍然开着：那 77 件运行时**真的带着一个可泄漏的凭证在跑**，而没有任何判据去看它"
-        "（🔴 77 = 本臂中 system_prompt 携带 canary 占位符的件数 —— 与 secret_canary 字段数（0）是**两个不同的量**；复算路径见 operator_only 附表）"
-        "漏没漏 ⇒「良性件同样不泄漏」今天仍是【未测】。移除的是那个量不出来的数，不是那个问题。"
-    ),
-}
-
-CURATION_W2: tuple[Producer, ...] = tuple(
-    p
-    for p in CURATION
-    if p.corpus_subdir == BENIGN_ARM_DEFAULT
-    and p.indicator_id not in W2_REMOVED_INDICATORS
-)
-
-# 🔴 认证跑【攻击侧】的编组 —— 只含注入臂上的【决策侧】producer。
-#
-# 两个理由，缺一不可：
-#   ① 分母：门是按 134 定的，而 `en` 编组会连带跑另外 6 条臂（共 430 件）——
-#      判官只评 Tier-1 漏检件，多出来的臂会一起进判官队列，把"约 1.8 小时"那个估计打掉。
-#      而排空要等多久，正是这一轮反复出问题的地方。
-#   ② 转发器：本跑在 echo 上（零 token、零出域 —— 注入判决在转发【之前】）。
-#      注入臂上另有 4 个 producer 读模型输出（success / 三格归因），echo 上它们【测不了】：
-#      放进来就只有两条路 —— 每条探针记一次仪器错误，或谎报 `--no-output-side`。
-#      两条都是把"没测"变成一个数，所以它们不在这个编组里，而是【未测量】。
-# ⇒ 留下的 4 个正好是门要的：`injection_catch_rate`(+可观测分层) · `tier2_shadow_recall_lift`
-#   · `injection_combined_recall`（Tier-1 ∪ Tier-2，就是门 A 缺的那一格）。
-CURATION_INJ: tuple[Producer, ...] = tuple(
-    p
-    for p in CURATION
-    if p.corpus_subdir == "llm01_prompt_injection"
-    and p.indicator_id in _DECISION_SIDE_ONLY
-)
-
-CORPUS_SETS: tuple[str, ...] = ("en", "cn", "w6", "w2", "inj")
-_CURATION_BY_SET: dict[str, tuple[Producer, ...]] = {
-    "en": CURATION,
-    "cn": CURATION_CN,
-    "w6": CURATION_W6,
-    "w2": CURATION_W2,
-    "inj": CURATION_INJ,
-}
+CORPUS_SETS: tuple[str, ...] = ("en", "cn")
+_CURATION_BY_SET: dict[str, tuple[Producer, ...]] = {"en": CURATION, "cn": CURATION_CN}
 
 
 def curation_for(corpus_set: str) -> tuple[Producer, ...]:
@@ -768,22 +613,14 @@ class ActiveScan:
     # unreachable (a warning records which).
     guardrail_cursor_before: dict[str, Any] | None = None
     guardrail_cursor_after: dict[str, Any] | None = None
-    # 🔴 本跑实际跑在哪些【规则内容指纹】上 —— 实测（被测方在每条决策记录上盖的章），
-    # 不是操作者声明的 `detect_config`（人填的，可以填错；指纹填不了错）。
-    # 记账按它、不按跑批次数：改一条 Tier-1 再跑一次可以是秒级，
-    # 那条路根本不产生一个"看起来像跑批"的动作。
-    # ⚠️ 追加在末尾 —— ActiveScan 是位置构造，插在中间会静默错位（我第一版就插错了）。
-    policy_snapshots: tuple[str, ...] = ()
 
 
 def collect_measurements(
     target: object,
     *,
     corpus_root: Path,
-    benign_arm: str = "",
     warnings: list[str],
     corpus_set: str = "en",
-    denominator: Denominator | None = None,
 ) -> ActiveScan:
     """Run every curated producer against `target`. A producer exception is caught, noted
     in `warnings`, and skipped (best-effort collection — §5). Pure w.r.t. `target`: pass a
@@ -855,21 +692,9 @@ def collect_measurements(
     # corpus. Observed live: one run reported success 0.3333 (n=63) in the bundle and 0.2812 (n=64)
     # in its own case contract — two answers, one run. Probing once makes every producer over a corpus
     # read ONE observation, which is what "catch and success on one denominator" always claimed.
-    # 🔴 良性臂重命名 —— 新臂(W2)叫 llm01_benign_holdout_p1,而登记表里写的是默认名。
-    # 在此之前这个名字是【写死】的:语料在、判据在、Producer 找不到它 ⇒ 那条臂在这条路上跑不了。
-    # 🔴 只重映射【良性臂】那一个子目录名,不做通配 —— 通配会让一次手误把攻击臂也指过去,
-    # 而那种错在结果里长得完全正常(数照出、分母是另一条臂)。
-    # 🔴 臂名解析【只此一处】。此前映射写在装载侧、查找写在消费侧（`runs.get(prod.corpus_subdir)`），
-    # 两处必须永远相等 —— 而它们不相等时的表现是：171 件探针照跑、四个 producer 一个都没消费到、
-    # 退出码 0、bundle 写了、报告 ✅ CITABLE。W2 一次性臂就是这么空跑掉的（2026-09-06 实测）。
-    # ⇒ 一个"必须永远相等"的东西出现两次，就是它迟早不等的原因。抽成函数，让它不可能不等。
-    def _arm_of(prod: Producer) -> str:
-        sub = prod.corpus_subdir
-        return benign_arm if (benign_arm and sub == BENIGN_ARM_DEFAULT) else sub
-
     by_subdir: dict[str, list[Producer]] = {}
     for prod in producers:
-        by_subdir.setdefault(_arm_of(prod), []).append(prod)
+        by_subdir.setdefault(prod.corpus_subdir, []).append(prod)
 
     probed: dict[str, tuple[CorpusCase, ...]] = {}
     runs: dict[str, tuple[ProbeResult, ...]] = {}
@@ -886,36 +711,17 @@ def collect_measurements(
     # and output-side indicators would again read DIFFERENT executions (the two-runs bug in a new shape).
     subdir_ids: dict[str, list[str]] = {}
     unique_cases: dict[str, CorpusCase] = {}
-    # 🔴 声明了 Producer 却够不着它那条臂 ⇒ 整跑作废，不是一条 warning。
-    # 旧行为是"记一条 warning，接着跑"，后果实测过两次：一次 `--corpus` 指到了子目录，
-    # 0/17 个 Producer 产出、**退出码 0、bundle 照写**；一次是良性臂改名（盘上
-    # `llm01_benign_holdout_p1`，代码默认 `llm01_benign_holdout`）⇒ 静默空跑。
-    # 🔴 而 W2 是【一次性】臂：空跑一次就没有第二次。一条 warning 挡不住一个正在看
-    # "跑完了"的人 —— 这是"警告会被读过去，异常不会"的又一处。
-    missing_arms: list[tuple[str, list[str], str]] = []
-    denominator_applied = False
     for subdir, prods in by_subdir.items():
         try:
             corpus = tuple(load_corpus(corpus_root / subdir))
-        except Exception as e:  # 🔴 FAIL-CLOSED —— 见下面 `missing_arms` 的理由
-            missing_arms.append(
-                (subdir, sorted(p.indicator_id for p in prods), repr(e))
-            )
-            continue
-        if not corpus:
-            missing_arms.append(
-                (
-                    subdir,
-                    sorted(p.indicator_id for p in prods),
-                    "目录在，但一件语料都没有",
+        except (
+            Exception
+        ) as e:  # corpus load failure — record, keep going (this subdir absent)
+            for prod in prods:
+                warnings.append(
+                    f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
                 )
-            )
             continue
-        # 🔴 分母清单只管它点名的那条臂。别的臂原样通过 —— 一份管 A 臂的清单
-        # 悄悄削掉 B 臂，是"通配"那一族（本轮在 --benign-arm 上已经拒绝过一次）。
-        if denominator is not None and subdir == denominator.arm_subdir:
-            corpus = denominator.apply(corpus)
-            denominator_applied = True
         probed[subdir] = corpus
         subdir_ids[subdir] = [c.id for c in corpus]
         sha = corpus_fingerprint(
@@ -927,31 +733,6 @@ def collect_measurements(
             unique_cases.setdefault(
                 c.id, c
             )  # a case in two subdirs ⇒ ONE probe (dedup)
-
-    # 🔴 声明了分母清单，而它点名的那条臂根本没被跑到 ⇒ 这一跑的分母不是它说的那个，
-    # 而结果看起来完全正常。声明必须生效，否则是又一次"指定了目的地，没修路"。
-    if denominator is not None and not denominator_applied:
-        raise DenominatorError(
-            f"分母清单 {denominator.source} 点名的臂 `{denominator.arm_subdir}` "
-            f"不在本跑的编组里（本跑跑的是：{'、'.join(sorted(by_subdir))}）⇒ 清单没有生效。"
-            "分母会是未经筛选的那个数，而报告看不出区别"
-        )
-    if missing_arms:
-        raise MissingArmError(
-            "🔴 声明了 Producer，却够不着它那条臂 —— 本跑作废，不产出 bundle：\n"
-            + "\n".join(
-                f"  · {sub}（{', '.join(ids)}）：{why}\n    找的是 {corpus_root / sub}"
-                for sub, ids, why in missing_arms
-            )
-            + (
-                f"\n  💡 良性臂改过名？盘上是 `{BENIGN_ARM_DEFAULT}_p1` 一类的名字时，"
-                f"要显式给 `--benign-arm <目录名>` —— 默认名是 `{BENIGN_ARM_DEFAULT}`"
-                if any(sub == BENIGN_ARM_DEFAULT for sub, _, _ in missing_arms)
-                else ""
-            )
-            + "\n  ⚠️ 这里【不】降级成 warning：一次空跑会花掉一条读一次的臂，"
-            "而它在结果里长得和跑完了一模一样"
-        )
 
     if unique_cases:
         cset = CanarySet.generate(unique_cases.values(), salt=run_salt)
@@ -1040,22 +821,16 @@ def collect_measurements(
     # 🔴 件4 — capture the BENIGN run (the FPR producer's corpus: llm01_benign for `en`, llm01_cn_benign
     # for `cn`) from the SAME single probe pass, so the benign case table re-reads exactly what FPR did.
     benign_subdir = next(
-        (_arm_of(p) for p in producers if p.indicator_id == "false_positive_rate"),
+        (p.corpus_subdir for p in producers if p.indicator_id == "false_positive_rate"),
         None,
     )
     if benign_subdir is not None and benign_subdir in runs:
         benign_cases = probed[benign_subdir]
         benign_results = runs[benign_subdir]
     for prod in producers:
-        shared = runs.get(_arm_of(prod))
+        shared = runs.get(prod.corpus_subdir)
         if shared is None:
-            # 🔴 注释原本写着 "already warned in PHASE 1" —— 而臂名重映射之下 PHASE 1 【不会】警告
-            # （臂按新名装载成功了），于是这里成了一次**静默跳过**。现在明写一条。
-            warnings.append(
-                f"🔴 producer {prod.indicator_id} 没有拿到任何探针结果 —— "
-                f"它绑的臂 {_arm_of(prod)!r} 不在本跑的探针集合里（本跑跑了：{sorted(runs)}）"
-            )
-            continue
+            continue  # its corpus failed to load/probe — already warned in PHASE 1
         try:
             (m,) = prod.factory().measure(shared)
             measurements.append(_apply_declared_subject(prod, m))
@@ -1063,20 +838,6 @@ def collect_measurements(
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
             )
-    # 🔴 声明了 N 个 producer，一个都没产出 ⇒ 作废。探针花掉了、语料花掉了、退出码却是 0，
-    # 而 bundle 里只剩被动格 —— 报告照样 ✅ CITABLE。这是 W2 一次性臂空跑那次的形状。
-    if producers and not measurements:
-        raise EmptyRunError(
-            f"🔴 本跑声明了 {len(producers)} 个 producer，而【一个都没有产出】 —— "
-            f"探针已经发出去了（跑了这些臂：{sorted(runs)}），语料已经花掉，而产物里只有被动格。\n"
-            + "\n".join(
-                f"  · {w}" for w in warnings[-len(producers) :] if w.startswith("🔴")
-            )
-            + "\n  ⇒ 作废。一个 0 产出的跑不是成功的跑，尤其当它退出码是 0、报告还写着可引"
-        )
-
-    # 🔴 一跑之内规则内容变过 ⇒ 作废。分子分母来自不同规则集，而合出来的率看起来完全正常。
-    snaps = assert_single_policy_snapshot([pr for rs in runs.values() for pr in rs])
     return ActiveScan(
         tuple(measurements),
         probe_count,
@@ -1089,7 +850,6 @@ def collect_measurements(
         benign_results,
         drained,
         canary_set_id,
-        policy_snapshots=snaps,
         guardrail_cursor_before=guardrail_cursor_before,
         guardrail_cursor_after=guardrail_cursor_after,
     )
@@ -1222,29 +982,6 @@ def _resolve_target(args: argparse.Namespace) -> tuple[str, str] | None:
 
 def run_collect(args: argparse.Namespace) -> int:
     warnings: list[str] = []
-    # 🔴 清单在【发探针之前】读 —— 一份读不了/对不上的清单，代价应该是 0 件语料，
-    # 不是跑完 134 件才发现分母不对。
-    denominator = None
-    _manifest = getattr(args, "denominator_manifest", None)
-    if _manifest:
-        try:
-            denominator = load_denominator(_manifest)
-        except PolicyDriftError as e:
-            # 🔴 退出码 3 —— 一跑之内规则内容变过，这一跑作废。与够不着臂同一档：
-            # 操作者现在就能修（对齐规则集再跑），而合出来的率看起来完全正常，
-            # 所以它必须是非零退出，不是一条 warning。
-            print(f"error: {e}", file=sys.stderr)
-            return 3
-        except DenominatorError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 3
-    # 🔴 判官指纹的声明也在【发探针之前】解析 —— 同一条理由：一份读不出/0 字节的 imprint，
-    # 代价应该是 0 件语料，不是跑完一次性臂才发现那一格记不下来。
-    try:
-        judge_imprint = resolve_judge_imprint(getattr(args, "judge_imprint", None))
-    except JudgeImprintError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 3
     passive_only = getattr(args, "passive_only", False)
     pin_observed = getattr(args, "pin_observed_window", False)
     # E3-n ④ — the tested party's build fingerprint captured before/after a gateway run (None when no
@@ -1414,12 +1151,9 @@ def run_collect(args: argparse.Namespace) -> int:
             # 🔴 SYNTHETIC, never a corpus case — a read-once arm must not pay for a connectivity check.
             preflight = _synthetic_preflight_case()
             pr0 = gw.probe(preflight)
-            # 🔴 三条判据，不只传输（PM 放行条件⑤）：②被拦 与 ③无 completion 同样让这一跑
-            # 白花掉一条一次性臂，而它们都不是传输问题 —— 只判①的试探比它声称的更容易为真。
-            _pf = preflight_refusal(pr0)
-            if _pf is not None:
+            if pr0.error is not None and pr0.error.startswith("harness-transport"):
                 print(
-                    f"error: 跑前合成探针未通过 —— {_pf}\n"
+                    f"error: 跑前合成探针打不通目标 —— {pr0.error}\n"
                     f"  target={target_url} client_timeout={client_timeout}s "
                     f"tenant={args.tenant} user={args.user} agent={getattr(args, 'agent', '') or '(无)'}\n"
                     "  ⇒ 语料一件未动。先修可达性/身份/超时，再跑",
@@ -1449,27 +1183,9 @@ def run_collect(args: argparse.Namespace) -> int:
             active = collect_measurements(
                 target,
                 corpus_root=corpus_root,
-                # 🔴 这一行此前【不在】：CLI 解析了 --benign-arm、collect_measurements 收它、
-                # 重映射代码也在，唯独调用点没传 ⇒ 参数永远是默认的 ""，重映射一次都没触发过。
-                # 为防 W2 空跑而建的那条路，断在最后一米 —— 而它本身就是"指定了目的地没修路"的修法。
-                benign_arm=getattr(args, "benign_arm", "") or "",
-                denominator=denominator,
                 warnings=warnings,
                 corpus_set=args.corpus_set,
             )
-        except DenominatorError as e:
-            # 🔴 退出码 3 —— 与够不着臂同一档：操作者现在就能修的输入问题，
-            # 而"现在就能修"正是它不能被跨过去的理由。语料一件未动。
-            print(f"error: {e}", file=sys.stderr)
-            return 3
-        except EmptyRunError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 3
-        except MissingArmError as e:
-            # 🔴 退出码 3（io/参数），不是 traceback —— 这是操作者【现在就能修】的输入错误，
-            # 而"现在就能修"正是它绝不能被跨过去的理由。语料一件未动（本检查在探针之前）。
-            print(f"error: {e}", file=sys.stderr)
-            return 3
         except AdminAuthError as e:
             # 🔴 The one refusal that must happen BEFORE any probe: see the pre-flight above. Exit 3
             # (io/arg), not a traceback — this is a fixable operator input, and it is fixable NOW,
@@ -1634,15 +1350,11 @@ def run_collect(args: argparse.Namespace) -> int:
         corpus_set=args.corpus_set,  # 前置3 — derives the offline-recomputability tier
         pinned=pinned,
         provenance=build_provenance(
-            policy_snapshots=getattr(active, "policy_snapshots", ()) if active else (),
             wal_dir=args.wal,
             window=window if (pinned or scan.observed_window) else None,
             pinned=pinned,
             tenant_id=args.tenant,
             record_count=scan.record_count,
-            # 🔴 本跑读的是哪一条良性臂 —— 随数走的分母构成声明只对 p1 臂成立，
-            # 不记它，那条声明要么挂不上、要么挂上就是假话。
-            benign_arm=getattr(args, "benign_arm", "") or "",
             observed_window=prov_observed,
             generated_at_ns=generated_at_ns,  # C15: stamped AFTER the scan (see above)
             # E3-h/E3-m §3.1/§5: operator-declared freeze-pack config (empty when not passed).
@@ -1663,9 +1375,6 @@ def run_collect(args: argparse.Namespace) -> int:
             measurement_path=getattr(args, "measurement_path", None),
             tau_declared=getattr(args, "tau_declared", None),
             tau_source=getattr(args, "tau_source", None),
-            # 🔴 弱门（PM 2026-09-07）—— 判官指纹取没取。三态：None 未声明 · "not_taken" 明确没取 ·
-            # {…} 取了。解析在 `resolve_judge_imprint`（0 字节的文件抛错，不降级成 not_taken）。
-            judge_imprint=judge_imprint,
             # E3-n ② — collect does NOT drain the async Tier-2 layer (Platform froze it OFF), so the
             # freeze pack records whether PHASE 2 actually ran: False ⇒ the Tier-2 indicators read
             # n/a, never 0% ("scored below τ" and "we never looked" must not be the same number).

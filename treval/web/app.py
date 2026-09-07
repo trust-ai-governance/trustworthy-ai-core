@@ -72,18 +72,11 @@ RERUN_COMMAND = (
 )
 
 
-# 🔴 The tenant the bare `/` lands on when no `?tenant=` is given. Defaults to the SYNTHETIC demo
-# report (tools/make_demo_report.py) rather than "newest across all tenants" — see `_entry_or_404`.
-# Override with $TREVAL_WEB_DEFAULT_TENANT; set it empty to restore plain newest-wins.
-DEFAULT_TENANT = "demo-fintech"
-
-
 def create_app(
     registry_path: str | Path | None = None,
     store_dir: str | Path | None = None,
     token: str | None = None,
     cases_url: str | None = None,
-    default_tenant: str | None = None,
 ) -> FastAPI:
     """Build the read-only viewer. `store_dir` defaults to `$TREVAL_REPORT_STORE`;
     `token`, when set (or `$TREVAL_WEB_TOKEN`), is required on every route.
@@ -120,25 +113,10 @@ def create_app(
         redoc_url=None,
         dependencies=[Depends(auth)],
     )
-    _default_tenant = (
-        default_tenant
-        if default_tenant is not None
-        else os.environ.get("TREVAL_WEB_DEFAULT_TENANT", DEFAULT_TENANT)
-    )
     app.mount("/static", StaticFiles(directory=_STATIC), name="static")
     templates = Jinja2Templates(directory=str(_TEMPLATES))
 
     def _entry_or_404(tenant: str | None, window: str | None):
-        # 🔴 With no `?tenant=`, "newest across all tenants" landed the bare `/` on whatever ran last
-        # — in practice an `__eval__` run carrying REAL measured values. That is the wrong default for
-        # the one page most likely to be screenshotted or demoed, and the wrongness is silent: the
-        # page renders perfectly, it is just someone else's data. Land on the declared default tenant
-        # (the synthetic demo) when it HAS a report; fall back to newest otherwise so a fresh install
-        # is not a 404. A synthetic report labels itself on the page, so the fallback stays visible.
-        if tenant is None and window is None and _default_tenant:
-            preferred = store.resolve(_default_tenant, None)
-            if preferred is not None:
-                return preferred
         entry = store.resolve(tenant, window)
         if entry is None:
             # Never fall back to another tenant's report, never leak a stack trace.

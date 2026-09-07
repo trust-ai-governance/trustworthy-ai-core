@@ -6,18 +6,10 @@
   <p>这是<strong>案级 Tier-0 复算服务</strong>（<code>operator_only</code>）—— 逐条用例的判定，用来
      <strong>当场把聚合数（如 89.3%）从逐案行加回来</strong>，无需有人把文件发给你。</p>
   {% if error %}<p class="case-fork">{{ error }}</p>{% endif %}
-  {#
-    🔴 autocomplete="off" (was "current-password"): this is a SHARED ACCESS KEY, not an account
-    password, and there is no account to remember it for. Telling Chrome it was `current-password`
-    made it a login form for 127.0.0.1:<port>, so the browser autofilled a credential saved for some
-    OTHER localhost service — into a MASKED field, where the wrong value is invisible. Observed live:
-    "Chrome 默认的秘钥也不行". The `data-*` attributes ask 1Password/LastPass to stay out too.
-  #}
   <form method="post" action="{{ base }}/session" class="case-loginform">
     <input type="hidden" name="next" value="{{ next }}">
     <input type="password" name="key" class="case-key" placeholder="访问密钥 · access key"
-           autofocus autocomplete="off" data-1p-ignore data-lpignore="true"
-           aria-label="访问密钥">
+           autofocus autocomplete="current-password" aria-label="访问密钥">
     <button type="submit" class="case-btn">进入</button>
   </form>
   <p class="case-note">🔒 租户内部物；<strong>密钥即身份</strong>（无用户名、无注册页、无会话表）。脚本 / CI

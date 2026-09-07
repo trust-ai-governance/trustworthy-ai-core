@@ -92,49 +92,6 @@ def observed_window(evidence: Iterable[AuditEvidence]) -> tuple[int, int] | None
     return (min(times), max(times) + 1)
 
 
-class JudgeImprintError(Exception):
-    """`--judge-imprint` 指向的文件不能当作一份指纹 —— fail-closed，不降级成"没取"。
-
-    🔴 降级会把**操作者以为取到了**和**明确说没取**合成一格，而前者是 09-05 那次的形状。
-    """
-
-
-def resolve_judge_imprint(value: str | None) -> dict[str, Any] | str | None:
-    """把 `--judge-imprint` 的取值解析成 provenance 里那一格（三态之一）。
-
-        未传        ⇒ None          这一跑没声明（老产物同形）
-        "none"      ⇒ "not_taken"   操作者明确说这一跑没取
-        <路径>      ⇒ {path, sha256, bytes}
-
-    🔴 **0 字节 / 读不出的文件一律拒（抛错），不许记成 `taken`。**
-    空文件的 sha256 是一个完全合法的哈希（`e3b0c442…`）—— 若照单收下，这一格会对
-    2026-09-05 那份 **0 字节的 `judge_imprint_pre_…_1528.json`** 输出 `taken:e3b0c442`。
-    **那正是这道门要拦的那一跑，而它会说"通过"。** 一道对着自己要拦的那件事说通过的门，
-    比没有门贵 —— 所以这里 fail-closed，且**不**回落成 `not_taken`：
-    "我以为取到了"与"我明确说没取"是两件事，合成一格就把前者洗成了一个像样的声明。
-    """
-    if value is None:
-        return None
-    if value == "none":
-        return "not_taken"
-    p = Path(value)
-    try:
-        data = p.read_bytes()
-    except OSError as e:
-        raise JudgeImprintError(f"🔴 --judge-imprint 读不出：{p} —— {e}") from e
-    if not data:
-        raise JudgeImprintError(
-            f"🔴 --judge-imprint 指向的文件是 0 字节：{p}\n"
-            "  一次失败的 imprint 不是一份指纹。若这一跑确实没取，显式写 `--judge-imprint none`\n"
-            "  （那会记成 not_taken —— 一个可读的缺席，而不是一个看起来取到了的哈希）"
-        )
-    return {
-        "path": str(p),
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "bytes": len(data),
-    }
-
-
 def build_provenance(
     *,
     wal_dir: str | Path | None,
@@ -154,9 +111,7 @@ def build_provenance(
     measurement_path: str | None = None,
     tau_declared: str | None = None,
     tau_source: str | None = None,
-    judge_imprint: dict[str, Any] | str | None = None,
     material_ruleset_sha256: str | None = None,
-    policy_snapshots: tuple[str, ...] = (),
     config_source: str = "declared",
     tier2_drain_executed: bool = False,
     build_fingerprint_before: dict[str, Any] | None = None,
@@ -164,7 +119,6 @@ def build_provenance(
     admin_url_declared: bool = False,
     probe_window: tuple[int, int] | None = None,
     arm_parity: str = "hard_or_flag",
-    benign_arm: str = "",
     canary_set_id: str | None = None,
     guardrail_cursor_before: dict[str, Any] | None = None,
     guardrail_cursor_after: dict[str, Any] | None = None,
@@ -235,27 +189,9 @@ def build_provenance(
         "measurement_path": measurement_path or "",
         "tau_declared": tau_declared or "",
         "tau_source": tau_source or "",
-        # 🔴 弱门（PM 2026-09-07）—— 这一跑的判官指纹取了没有。三态，`None` 与 `"not_taken"` 不许合并：
-        #   None        这一跑连声明都没有（老产物 / 忘了）
-        #   "not_taken" 操作者**明确说**这一跑没取
-        #   {...}       取了，记路径 + sha256 + 字节数
-        # ⚠️ 它**不**判"这份指纹取于本跑窗口之内"（09-05 那份取于跑后 15 分钟，一样会是 taken）——
-        # 同窗门是下一轮，卡在 imprint 侧还没有 `taken_at`。见 citability.judge_imprint_state。
-        "judge_imprint": judge_imprint,
         # 件⑧ — the ruleset_sha256 at HOLDOUT-MATERIAL-LANDING time; compared against the run-start
         # fingerprint so "nobody tuned to the material" is a fingerprint fact, not an attestation.
         "material_ruleset_sha256": material_ruleset_sha256 or "",
-        # 🔴 本跑读的是**哪一条良性臂**（`--benign-arm`，默认 llm01_benign_holdout）。
-        # 在此之前它只活在运行参数里，产物答不出「这个数出自哪一条臂」—— 而随数走的分母构成声明
-        # 恰恰只对其中一条臂成立：不记臂名，那条声明要么挂不上，要么挂上就是一句假话。
-        # "" = 未声明（不是"跑在默认臂上"：两者在下游读起来一样，所以不许合并）。
-        "benign_arm": benign_arm or "",
-        # 🔴 本跑【实测】跑在哪些规则内容指纹上（被测方在每条决策记录上盖的章）。
-        # 与 `detect_config`（操作者声明的字符串）是两回事：后者填错了没人知道，指纹填不了错。
-        # 它在这里的用途是【记账】：对同一批语料改了检测内容又跑了几次，
-        # 第三方数产物里不同指纹的个数就能答，不必相信任何人的自述 ——
-        # 而按"跑批次数"记会漏掉秒级迭代（改一条 Tier-1 不需要判官、不需要真上游）。
-        "policy_snapshots": list(policy_snapshots),
         "config_source": config_source,
         # EV-COVERAGE E3-n ② — did the async Tier-2 drain execute this run? Recorded so a Tier-2 layer
         # that was never drained cannot be read as "0% lift" — the freeze pack states the layer's status.
