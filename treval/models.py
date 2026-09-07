@@ -10,7 +10,7 @@ nothing from them, nor from the closed platform.
 from __future__ import annotations
 
 import enum
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -76,6 +76,40 @@ class PostureEvidence:
     attested_at_ns: int
 
 
+# 🔴 `sample_unit` 的取值域 —— 分母数的是什么。它是【判据】不是自由文本：
+# 拒绝并表的门按它比对，一个拼错的词会让两个不可比的数当成同一单位放过去。
+# 新增一个单位是一次有意的决定（要同时回答"它和已有的哪些能并表"），所以这里是白名单不是校验正则。
+SAMPLE_UNITS = ("request", "session")
+
+
+class MixedSampleUnitError(Exception):
+    """把不同 `sample_unit` 的 measurement 放进了同一张表 / 同一次比较。
+
+    🔴 为什么是异常而不是警告：单轮件被软标记一次，一个 4 轮会话可能被标 4 次 ——
+    两个率的差值没有意义，而它们在一张表里长得**一模一样**。禁令写在别处、
+    靠人记得，等于不存在（本轮反复实证）。所以由结构拦，不由注意力拦。
+    """
+
+
+def assert_single_sample_unit(measurements: Iterable[Measurement], where: str) -> str:
+    """同一张表 / 同一次比较里的 measurement 必须同单位。返回那个单位（空集 ⇒ 默认 request）。
+
+    调用点就是"哪里算一张表"的定义 —— 所以它是个显式函数，不是渲染器里的一个 if：
+    加一个新的并排展示面，就必须在那里回答一次这个问题。"""
+    units = {m.sample_unit for m in measurements}
+    if len(units) > 1:
+        by_unit = {
+            u: sorted({m.indicator_id for m in measurements if m.sample_unit == u})
+            for u in sorted(units)
+        }
+        raise MixedSampleUnitError(
+            f"{where}: 同一张表里出现了多个样本单位 {sorted(units)} —— "
+            + "；".join(f"{u}: {', '.join(ids)}" for u, ids in by_unit.items())
+            + "。分母数的东西不同，两个数的差值没有意义 ⇒ 分表，不要并表"
+        )
+    return units.pop() if units else "request"
+
+
 @dataclass(frozen=True)
 class Measurement:
     """The smallest unit of interpretation: a normalized, evidence-backed signal."""
@@ -109,6 +143,73 @@ class Measurement:
     # sampling uncertainty" vs a total function's "residual is in coverage, not a rate". "" = legacy
     # / unspecified (treated as sampled iff a ci is present, else worded WITHOUT claiming a census).
     interval_basis: str = ""
+    # 🔴 仪器损耗 —— Wilson 区间不覆盖它。
+    # `ci_low/ci_high` 覆盖的是【抽样】不确定性；它不区分「臂本来就只有 3 件」与「14 件的臂丢了 11 件」——
+    # 两者给出【同一个区间】，而处置完全相反：前者是语料太小（补件），后者是测量在失败（先修仪器，别报数）。
+    # 本仓在别处已写过同一条：Wilson covers sampling, not composition。
+    #
+    # 实测（2026-09-03 Live Test，同一命令跑两次、同一语料、同一网关）:
+    #   run 1  system_prompt_leak_rate  v=0.0  n=7   7 件被排除
+    #   run 2  同一命令                  v=0.0  n=3  11 件被排除   ← 臂只有 14 件
+    # 两次都 integrity=verified，而区分它们的只有 notes 里的散文，下游无法据以判断。
+    #
+    # 🔴 语义三态，不许合并：
+    #   None = 本指标【未声明】排除口径（历史 producer / 不做排除的指标）
+    #   0    = 量过，【没有】排除
+    #   >0   = 量过，排除了这么多 ⇒ value 的作用域是【存活子集】，不是整条臂
+    # 🔴 触发条件是【事实】(>0) 不是【量级】：任何"超过 X% 才报"的切点都要由看过数据的人来挑。
+    excluded_count: int | None = None
+    # 🔴 整条臂的探针数 —— 【不是】"存活 + 排除"。2026-09-05 W6 实测抓到的就是这条：
+    #   修好 extract_error 之后，那批件从 `errors` 挪进 `stage_blocked`，于是
+    #   excluded_count 归 0、arm_size 缩成存活子集，报出来是一句自称量了整条臂的干净比率。
+    #   ⇒ 一个"修复"把【看得见的损耗】变成了【看不见的损耗】。
+    # 所以 arm_size 是四个桶的和，缺口有几种理由就得有几个具名字段（下面两个）——
+    # 让读者按 sample_size 与 arm_size 之差自己猜理由，就是又一次按形状数。
+    arm_size: int | None = None
+    # 缺口的两种【非仪器】理由，与 `excluded_count`（仪器损耗）并列，三者互不折叠：
+    #   not_measured  = 这件本来就测不了（语料/配置属性：没有 canary、没有上游模型）
+    #   stage_blocked = 本可测，但证据被响应阶段拦截拿走了（正文没进交付路径）
+    # 🔴 它们【不能】并进 excluded_count：处置相反 —— 前者补件、后者换读法、仪器损耗才是修仪器。
+    not_measured_count: int | None = None
+    stage_blocked_count: int | None = None
+    # 🔴 【样本】的单位 —— 与 `unit`（值的量纲，恒为 "ratio"/"count"/"ms"…）是两根轴。
+    # 分母数的是请求还是会话，决定了两个率**能不能放在一起看**：单轮件被软标记一次，
+    # 一个 4 轮会话可能被标 4 次 —— 这个放大效应在单轮世界里根本看不见，
+    # 于是两个数的差值没有意义，而它们在一张表里长得一模一样。
+    # ⚠️ 不复用 `unit`：仓里 28 个 producer 把它硬写成 "ratio"，3 个消费者按它分支
+    # （`citability.py` 的区间措辞就靠它）—— 往里塞 "session" 不是加字段，是改一个在用字段的语义。
+    # 默认 "request"：现有每一个 producer 的分母数的都是探针/请求，这是读过它们之后的
+    # 【结论】，不是省事的默认值。新指标的分母若不是请求，**必须显式声明**。
+    sample_unit: str = "request"
+
+    def __post_init__(self) -> None:
+        """🔴 两条构造期的门：样本单位取值域，以及四桶会计恒等式。
+
+        恒等式的理由：没有它，四个桶各自填各自的，谁都不错，而加起来不是整条臂 ——
+        实跑中一个缩了水的 `arm_size` 就是这么印到引用形式里的。让"少算一个桶"当场炸，
+        而不是变成一个更干净的数。"""
+        if self.sample_unit not in SAMPLE_UNITS:
+            raise ValueError(
+                f"{self.indicator_id}: sample_unit={self.sample_unit!r} 不在取值域 "
+                f"{SAMPLE_UNITS} —— 样本单位是【判据】不是自由文本：拼错一个词，"
+                "拒绝并表的门就会把两个不可比的数当成同一单位放过去"
+            )
+        if self.arm_size is None:
+            return
+        parts = (
+            self.sample_size,
+            self.excluded_count or 0,
+            self.not_measured_count or 0,
+            self.stage_blocked_count or 0,
+        )
+        if sum(parts) != self.arm_size:
+            raise ValueError(
+                f"{self.indicator_id}: arm_size={self.arm_size} 对不上账 —— "
+                f"sample_size={self.sample_size} + excluded={self.excluded_count or 0} + "
+                f"not_measured={self.not_measured_count or 0} + "
+                f"stage_blocked={self.stage_blocked_count or 0} = {sum(parts)}。"
+                "arm_size 是【整条臂】，不是存活子集"
+            )
 
 
 @dataclass(frozen=True)

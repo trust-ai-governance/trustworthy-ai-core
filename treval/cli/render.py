@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import csv
 import io
+from typing import Any
 
-from treval.models import MaturityReport, Measurement
+from treval.models import MaturityReport, Measurement, assert_single_sample_unit
 from treval.registry import ControlObjective, DimensionRegistry
 from treval.registry.satisfied_when import SatisfiedWhenError, parse_satisfied_when
 from treval.rubric.measured import CERTIFIED, NOT_MEASURED
@@ -235,20 +236,49 @@ def render_csv(
     """One flat row per objective — dimension/level/kind/status/indicator/value/integrity
     — for a spreadsheet. Deterministic (dimensions in registry order, objectives L1→L5)."""
     agg = {m.indicator_id: m for m in measurements if m.subject == ""}
+    # 🔴 拒绝并表 —— 这就是"哪里算一张表"的那个回答。一个 CSV 的 `value` 列把所有指标的数
+    # 排在一起，读者会顺着往下比；而分母数的东西不同的两个率，差值没有意义
+    # （单轮件被软标记一次，一个 4 轮会话可能被标 4 次 —— 这个放大效应在单轮世界里看不见）。
+    # ⇒ 按 sample_unit 分表：每个单位一段，各带自己的表头。**结构上就放不进同一张表。**
+    # 单位相同时输出与从前逐字节相同（下面 assert 是自检：分完组之后每组必然只剩一个单位）。
+    by_unit: dict[str, dict[str, Measurement]] = {}
+    for _iid, _m in agg.items():
+        by_unit.setdefault(_m.sample_unit, {})[_iid] = _m
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(
-        [
-            "dimension",
-            "level",
-            "objective_id",
-            "kind",
-            "status",
-            "indicator_id",
-            "value",
-            "integrity",
-        ]
-    )
+    for _u_i, _unit in enumerate(sorted(by_unit) or ["request"]):
+        _agg = by_unit.get(_unit, {})
+        assert_single_sample_unit(_agg.values(), f"render_csv 段 sample_unit={_unit}")
+        if _u_i:
+            # 段与段之间空一行 + 自己的表头 —— 让"这是另一张表"在字面上看得见
+            buf.write("\n")
+        _render_csv_section(writer, reg, report, _agg, _unit, len(by_unit) > 1)
+    return buf.getvalue()
+
+
+def _render_csv_section(
+    writer: Any,
+    reg: DimensionRegistry,
+    report: MaturityReport,
+    agg: dict[str, Measurement],
+    sample_unit: str,
+    multi: bool,
+) -> None:
+    """一个样本单位的那一段。`multi` 为真时表头多一列 `sample_unit`，因为此时
+    "只有一张表"这个默认前提已经不成立，读者必须看得见自己在读哪一张。"""
+    header = [
+        "dimension",
+        "level",
+        "objective_id",
+        "kind",
+        "status",
+        "indicator_id",
+        "value",
+        "integrity",
+    ]
+    if multi:
+        header.append("sample_unit")
+    writer.writerow(header)
     for dim in report.dimensions:
         obj_by_id = _all_objectives(reg, dim.dimension)
         for res in dim.objectives:
@@ -273,8 +303,8 @@ def render_csv(
                     value,
                     integrity,
                 ]
+                + ([sample_unit] if multi else [])
             )
-    return buf.getvalue()
 
 
 def _bundle_schema_version() -> int:

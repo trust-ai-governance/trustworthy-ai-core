@@ -152,12 +152,19 @@
         "exec_mode": {
           "description": "EV-COVERAGE E3-h (§2.2.2): execution mode — `block` (hit⇒deny) or `flag` (mark-only). τ_fpr's operational meaning varies by this. Empty = undeclared; absent = pre-E3.",
           "type": "string",
-          "enum": ["", "block", "flag"]
+          "enum": [
+            "",
+            "block",
+            "flag"
+          ]
         },
         "config_source": {
           "description": "EV-COVERAGE E3-h: HOW the config fields arrived — `declared` (operator-declared, the only source today) or `queried` (reserved for a future version/config endpoint). 🔴 Metadata only: NOT part of the citability criterion (the criterion is fields-present, independent of source — so a query endpoint later is provenance enrichment + a declared≠queried drift record, NOT a criteria bump).",
           "type": "string",
-          "enum": ["declared", "queried"]
+          "enum": [
+            "declared",
+            "queried"
+          ]
         },
         "detection_layer_status": {
           "description": "EV-COVERAGE E3-n ③: which detection layers are live (operator-declared, e.g. 'tier1_only (tier2 shadow off)'). Part of the missing_run_config criterion (with language_scope/tested_version/detect_config/exec_mode/upstream_timeout_s). Empty = undeclared (present-but-empty on a v2 run); absent = pre-E3-n.",
@@ -165,7 +172,10 @@
         },
         "upstream_timeout_s": {
           "description": "EV-COVERAGE E3-n ③: the tested party's DECLARED upstream request-timeout in seconds (its OWN hardcoded value, e.g. 60.0 — not the harness default). The client --timeout is DERIVED as 2× this. Part of the missing_run_config criterion. null = undeclared (present-but-null on a v2 run); absent = pre-E3-n.",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "tier2_drain_executed": {
           "description": "EV-COVERAGE E3-n ②: did the async Tier-2 drain execute this run? Recorded so a Tier-2 layer that was never drained reads as unmeasurable (its indicators emit n/a), NEVER as a 0% lift/rate. false on a standard collect (which does not drain). Absent = pre-E3-n.",
@@ -173,11 +183,17 @@
         },
         "build_fingerprint_before": {
           "description": "EV-COVERAGE E3-n ④: the tested party's self-reported build fingerprint (GET /admin/v1/buildinfo — git_sha/ir_spec_sha/wheel_sha256/ruleset/detection_switches) captured BEFORE the run, stored verbatim. citability compares it to build_fingerprint_after; any bit of difference ⇒ the tested party changed mid-run ⇒ NOT citable. null when no admin endpoint was queried.",
-          "type": ["object", "null"]
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "build_fingerprint_after": {
           "description": "EV-COVERAGE E3-n ④: the build fingerprint captured AFTER the run (paired with build_fingerprint_before). null when no admin endpoint was queried, OR when --admin-url was declared but the fetch failed (see admin_url_declared).",
-          "type": ["object", "null"]
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "admin_url_declared": {
           "description": "EV-COVERAGE E3-n ④ (fail-CLOSED, THREE-state): whether --admin-url was DECLARED (the build-fingerprint claim). declared + both fetched + before==after ⇒ pass; declared + either side null (fetch FAILED — wrong port/non-200/parse, reason in warnings) ⇒ the build_fingerprint blocker (NOT citable — a declared-but-unreachable endpoint is a check that failed, not 'no claim'); not declared ⇒ no claim, not checked. Absent = pre-E3-n-④ bundle.",
@@ -185,7 +201,10 @@
         },
         "probe_window": {
           "description": "EV-COVERAGE E3-n ②: this run's probe span [scan_start, generated_at), half-open. The ACTIVE rates (injection_catch_rate / false_positive_rate / four-cell / injection_success_rate — evidence_requirement != needs_wal) cite THIS in citation_form; passive/census indicators keep observed_window (the full WAL range read, incl. history). null when nothing was probed.",
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "integer"
           },
@@ -426,6 +445,11 @@
         "integrity",
         "availability",
         "interval_basis",
+        "excluded_count",
+        "arm_size",
+        "not_measured_count",
+        "stage_blocked_count",
+        "sample_unit",
         "citation_form",
         "evidence_refs"
       ],
@@ -483,11 +507,57 @@
         },
         "ci_low": {
           "description": "EV-CIGATE §7-A: Wilson 95% lower bound WHEN this value is a binomial proportion; null for a non-rate/deterministic-census indicator. A `ci_low >= τ` objective over null raises (never silently grades).",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "ci_high": {
           "description": "EV-CIGATE §7-A: Wilson 95% upper bound (paired with ci_low). null when the indicator is not a binomial proportion.",
-          "type": ["number", "null"]
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "excluded_count": {
+          "description": "仪器损耗：本指标排除掉的探针数。🔴 Wilson 区间覆盖【抽样】不确定性，不覆盖这个 —— 一个 3 件的臂与一个丢了 11 件的 14 件臂给出同一个区间，而处置相反（补件 vs 先修仪器）。三态不许合并：null=该指标未声明排除口径；0=量过、没有排除；>0=value 的作用域是【存活子集】不是整条臂。",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "arm_size": {
+          "description": "整条臂的探针数 = sample_size + excluded_count + not_measured_count + stage_blocked_count。🔴 【不是】'存活+排除'：实跑中抓到过 —— 把一批件从 errors 挪进 stage_blocked 之后，旧口径让 arm_size 缩成存活子集，于是报出一句自称量了整条臂的干净比率。null 的含义同 excluded_count。",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "not_measured_count": {
+          "description": "第三态：这件本来就测不了（语料/配置属性 —— 没有 canary、没有上游模型）。🔴 不并进 excluded_count：那是仪器损耗，处置是修仪器；这个的处置是补件。null 的含义同 excluded_count。",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "sample_unit": {
+          "description": "分母数的是什么 —— 与 `unit`（值的量纲，恒为 ratio/count/ms…）是【两根轴】。🔴 渲染面据此拒绝把不同单位的指标放进同一张表：单轮件被软标记一次，一个 4 轮会话可能被标 4 次，两个率的差值没有意义，而它们在一张表里长得一模一样。缺席 ⇒ request（v8 之前每个 producer 的分母数的都是请求）。",
+          "type": "string",
+          "enum": [
+            "request",
+            "session"
+          ]
+        },
+        "stage_blocked_count": {
+          "description": "本可测，但判定所需的证据被【响应阶段拦截】拿走了（正文没进交付路径）。🔴 单列的理由：折进 excluded_count 会读成仪器坏了，折进分母的 False 会把「网关拦住了」读成「模型本来就没吐」。处置是换读法（从审计面读结局），不是修仪器也不是补件。null 的含义同 excluded_count。",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
         },
         "evidence_refs": {
           "type": "array",

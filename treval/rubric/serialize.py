@@ -20,8 +20,10 @@ from typing import Any
 
 from treval.citability import (
     FPR_DISCLOSURE_IDS as _FPR_IDS,
+    DECISION_STAGE_BLIND_IDS,
     FPR_PER_TENANT_ONLY,
     decision_fpr_measurability,
+    ruleset_pin,
     decision_fpr_refusal,
     derive_family_c_coreport,
     CRITERIA_VERSION,
@@ -44,7 +46,15 @@ from treval.models import (
 )
 from treval.registry import DimensionRegistry, serialize_registry
 
-SCHEMA_VERSION = 5  # EV-CITE: each measurement gains `interval_basis` (the EV-CIGATE §1.5 mechanism class)
+# 🔴 6: each measurement gains `excluded_count` / `arm_size` — 仪器损耗。Wilson 覆盖抽样、不覆盖
+# 「臂丢了大半」;两者区间相同而处置相反,所以它必须是结构化字段,不能只活在 notes 的散文里。
+# 🔴 7: `not_measured_count` / `stage_blocked_count` —— 缺口的另外两种理由。v6 只结构化了
+# 仪器损耗那一种,于是修好 extract_error 后那批件挪进 stage_blocked,arm_size 缩成存活子集、
+# excluded_count 归 0,报出来是一句自称量了整条臂的干净比率。缺口有几种理由就得有几个具名字段。
+# 🔴 8: `sample_unit` —— 分母数的是请求还是会话。与 `unit`（值的量纲）是两根轴：
+# 单轮件被软标记一次，一个 4 轮会话可能被标 4 次，两个率的差值没有意义，
+# 而它们在一张表里长得一模一样 ⇒ 渲染面据此【分表】，不靠人记得那条禁令。
+SCHEMA_VERSION = 8
 
 # --- R1 — target_kind (report-level) + evidence_basis (DERIVED, single source of truth) ---
 # target_kind names WHAT was evaluated; evidence_basis is its evidence strength and is NEVER
@@ -95,7 +105,18 @@ def assert_evidence_basis_derived(target_kind: str, evidence_basis: str) -> None
 # `availability` is a serialization overlay with a single source of truth — never stored
 # independently, always derived. The rubric grading is untouched.
 EVIDENCE_REQUIREMENTS = ("output_only", "needs_decision", "needs_wal")
-AVAILABILITY_VALUES = ("measured", "n/a_needs_gateway", "n/a_self_reported")
+# 🔴 `n/a_no_upstream` 是第四个值(2026-09-05)。此前这张表把 "gateway" 当成【一种】东西,
+# 而它其实有两种:带真上游的、挂 echo 转发器的。后者【测不了】任何 output_only 指标 ——
+# 模型根本不产出正文,`system_prompt_leak_rate` 之类会永久报 0.0 并盖 integrity: verified。
+# 那正是 Platform 想把 compose 默认翻成 echo 时会造出的【永久空绿】,而根源不是缺一个新字段,
+# 是这一格无条件写了 measured。⇒ 修在这里,不新增臂级的 requires_forwarder(那会是第三处说同一件事)。
+AVAILABILITY_VALUES = (
+    "measured",
+    "n/a_needs_gateway",
+    "n/a_self_reported",
+    "n/a_no_upstream",
+)
+NO_UPSTREAM = "n/a_no_upstream"
 
 # (evidence_requirement × target_kind) → availability (EV-FWD §5). For `gateway` EVERY
 # requirement is `measured` (the governed path produces every kind of evidence). Under a
@@ -116,7 +137,9 @@ _AVAILABILITY: dict[tuple[str, str], str] = {
 }
 
 
-def derive_availability(target_kind: str, evidence_requirement: str | None) -> str:
+def derive_availability(
+    target_kind: str, evidence_requirement: str | None, *, has_upstream: bool = True
+) -> str:
     """The availability of an indicator on a target — the single source of truth (EV-FWD §5).
 
     `evidence_requirement` is the indicator's declared need (see active_eval's
@@ -125,6 +148,11 @@ def derive_availability(target_kind: str, evidence_requirement: str | None) -> s
     `needs_wal` (a gateway run still resolves to `measured`; a standalone run to n/a). Fail-closed
     on an unknown target_kind so a typo cannot ship a bundle with a bogus availability."""
     req = evidence_requirement or "needs_wal"
+    # 🔴 无上游(echo 转发器)⇒ output_only 指标【测不了】,不许判 measured。
+    # 这是【声明】的,不从空响应体推断 —— 推断会让一个真坏了的上游把自己重贴成"哦,本来就没上游"。
+    # 决策侧指标不受影响:它们在转发之前就判完了,那正是 echo 栈存在的理由。
+    if not has_upstream and req == "output_only":
+        return NO_UPSTREAM
     try:
         return _AVAILABILITY[(req, target_kind)]
     except KeyError:
@@ -164,6 +192,18 @@ OFFLINE_HOLDER_ONLY = "holder_only"
 _OFFLINE_RECOMPUTABLE: dict[str, str] = {
     "en": OFFLINE_THIRD_PARTY,
     "cn": OFFLINE_HOLDER_ONLY,
+    # 🔴 W6 业务伪装诊断臂在【仓外受控卷】⇒ holder_only,与 cn 同理由。
+    # 本行是被这道门逼出来的:加 corpus-set 时只改了 CORPUS_SETS,出包时它 fail-closed 拦下 ——
+    # 拦的正是"把一个仓外语料的数标成第三方可复现"。门做对了,漏的是加集合的人(我)。
+    "w6": OFFLINE_HOLDER_ONLY,
+    # 🔴 W2 英文良性留出臂同样在【仓外受控卷】⇒ holder_only。
+    # 这道门第二次拦住同一个人（我）——它是本仓少数几处"加东西时逼你回答一个问题"的地方之一，
+    # 而那个问题（第三方复算得了吗）恰恰是加集合的人最容易不想的。
+    "w2": OFFLINE_HOLDER_ONLY,
+    # 🔴 `inj` 跑的是【仓内】注入臂（corpus/llm01_prompt_injection），第三方拿到本仓就能复算
+    # ⇒ third_party，与 `en` 同档。分母由 `--denominator-manifest` 的判据产生，而那份清单
+    # 也可随产物给出（它自带 sha256）—— 复算所需的两样都在。
+    "inj": OFFLINE_THIRD_PARTY,
 }
 
 
@@ -263,6 +303,7 @@ def serialize_measurement(
     *,
     target_kind: str,
     evidence_requirements: Mapping[str, str] | None = None,
+    has_upstream: bool = True,
 ) -> dict[str, Any]:
     """A `measurements[]` entry. `integrity` (EV-7 D1) rides along so the UI can show the
     trust basis of each value without a live call. `availability` (EV-FWD) is DERIVED from
@@ -278,7 +319,7 @@ def serialize_measurement(
     req = None
     if evidence_requirements is not None:
         req = evidence_requirements.get(m.indicator_id)
-    availability = derive_availability(target_kind, req)
+    availability = derive_availability(target_kind, req, has_upstream=has_upstream)
     assert_availability_derived(
         target_kind, req, availability
     )  # single source of truth
@@ -301,6 +342,17 @@ def serialize_measurement(
         # in-memory object — else the collect→report round-trip loses it and citation_form falls back.
         # "" (a detector / non-rate) is honest; a census / total_function declares its class.
         "interval_basis": m.interval_basis,
+        # 🔴 仪器损耗必须随产物走,否则 collect→report 一个来回就只剩 notes 里的散文,
+        # 而下游无法区分【小臂】与【大臂丢了大半】—— 两者的 Wilson 区间相同、处置相反。
+        # null = 该指标未声明排除口径;0 = 量过没排除;>0 = value 的作用域是存活子集。
+        "excluded_count": m.excluded_count,
+        "arm_size": m.arm_size,
+        # 🔴 v7 —— 缺口的另外两种理由。少了它们,arm_size 与 sample_size 之差就只是一个数,
+        # 读者得自己猜是该补件、该换读法、还是该修仪器（三者处置相反）。
+        "not_measured_count": m.not_measured_count,
+        "stage_blocked_count": m.stage_blocked_count,
+        # 🔴 v8 —— 样本单位必须随产物走：拒绝并表的门在【消费侧】，读不到它就没法拒绝。
+        "sample_unit": m.sample_unit,
         "evidence_refs": _serialize_refs(m.evidence_refs),
     }
 
@@ -311,6 +363,7 @@ def serialize_bundle(
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
     evidence_requirements: Mapping[str, str] | None = None,
+    has_upstream: bool = True,
 ) -> dict[str, Any]:
     """The full report bundle: `{schema_version, target_kind, evidence_basis, report,
     measurements}`. `target_kind` (report-level, R1) names what was evaluated; `evidence_basis`
@@ -327,7 +380,10 @@ def serialize_bundle(
         "report": serialize_report(report),
         "measurements": [
             serialize_measurement(
-                m, target_kind=target_kind, evidence_requirements=evidence_requirements
+                m,
+                target_kind=target_kind,
+                evidence_requirements=evidence_requirements,
+                has_upstream=has_upstream,
             )
             for m in ordered
         ],
@@ -340,6 +396,7 @@ def bundle_to_json(
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
     evidence_requirements: Mapping[str, str] | None = None,
+    has_upstream: bool = True,
 ) -> str:
     """Byte-identical (up to encoding) JSON for the bundle: sorted keys + compact, stable
     separators. `ensure_ascii=False` keeps the Chinese statements readable; UTF-8 encode
@@ -350,6 +407,7 @@ def bundle_to_json(
             measurements,
             target_kind=target_kind,
             evidence_requirements=evidence_requirements,
+            has_upstream=has_upstream,
         ),
         sort_keys=True,
         ensure_ascii=False,
@@ -389,6 +447,7 @@ def serialize_self_contained_bundle(
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
     evidence_requirements: Mapping[str, str] | None = None,
+    has_upstream: bool = True,
 ) -> dict[str, Any]:
     """The EV-R1 delivery envelope `{schema_version, target_kind, evidence_basis,
     registry_fingerprint, provenance, report, registry, measurements}`
@@ -404,6 +463,9 @@ def serialize_self_contained_bundle(
         materialized,
         target_kind=target_kind,
         evidence_requirements=evidence_requirements,
+        # 🔴 无上游(echo)时 output_only 指标判 n/a_no_upstream 而不是 measured ——
+        # 否则泄漏类指标会永久报 0.0 并盖 integrity: verified(一个永久空绿)。
+        has_upstream=has_upstream,
     )
     # EV-CITE 件一: the citability gate lives ON the delivery artifact — the only envelope that
     # carries `provenance` (pinned / segment hash), so it is the only one that can judge whether a
@@ -435,6 +497,11 @@ def serialize_self_contained_bundle(
     config_note = run_config_note(
         provenance
     )  # E3-h: the freeze-pack config, once per run
+    # 🔴 法务 2026-09-05 — 报数必须印 ruleset_sha256。算一次（run 级事实，同 config_note），
+    # **挂在哪个 id 上由 citation_form 决定** —— 键控集中在 citability.py，不在这里分叉。
+    ruleset_note = ruleset_pin(provenance)
+    # 🔴 本跑读的是哪一条良性臂 —— 分母构成声明只对 p1 臂成立，必须按臂键控（citability 侧决定挂不挂）。
+    benign_arm = (provenance or {}).get("benign_arm") or ""
     # 🔴 EV-JUDGE-UNION 件2 — the co-report gate is PER-MEASUREMENT (not the whole-report verdict): a judge-
     # movable number published without the mention-arm twin is not_citable ON ITS OWN, even in an otherwise
     # citable report. Derived from the ids actually present, asserted (derive-not-store).
@@ -483,7 +550,12 @@ def serialize_self_contained_bundle(
         )
         # 件5 — refuse the decision-stage FPR entirely (blind everywhere), or refuse only the GLOBAL row
         # (blind on some tenants ⇒ the number must be split, not voided). 🔴 A per-tenant row is fine.
-        _enforce_blind = bool(_fpr_refusal) and m.indicator_id in _FPR_IDS
+        # 🔴 盲区管的是【所有只读决策阶段的良性侧率】，不只 FPR —— benign_session_disruption_rate
+        # 同样读 denied_at_decision。用 _FPR_IDS 会把它漏掉，而它漏掉的后果比 FPR 更重：对一个
+        # 误伤率来说，enforce 藏起来的正是被测的东西。
+        _enforce_blind = (
+            bool(_fpr_refusal) and m.indicator_id in DECISION_STAGE_BLIND_IDS
+        )
         if _enforce_blind and _fpr_verdict == FPR_PER_TENANT_ONLY:
             _enforce_blind = not m.subject.startswith("tenant:")
         row["citation_form"] = citation_form(
@@ -503,6 +575,8 @@ def serialize_self_contained_bundle(
             ),
             satisfied_when=pred_by_indicator.get(m.indicator_id),
             config_note=config_note,
+            ruleset_note=ruleset_note,
+            benign_arm=benign_arm,
         )
     return {
         "schema_version": base["schema_version"],
@@ -535,6 +609,7 @@ def self_contained_bundle_to_json(
     *,
     target_kind: str = DEFAULT_TARGET_KIND,
     evidence_requirements: Mapping[str, str] | None = None,
+    has_upstream: bool = True,
 ) -> str:
     """Byte-deterministic JSON for the self-contained bundle (sorted keys + compact
     separators + ensure_ascii=False). This is the golden-fixture / delivery form."""

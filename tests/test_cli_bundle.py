@@ -89,7 +89,7 @@ def test_build_then_load_round_trips(tmp_path):
     assert loaded.tenant_id == "t"
     assert loaded.window == (1, 2)
     assert (
-        loaded.schema_version == 6
+        loaded.schema_version == 8
     )  # EV-CITE: collect bundle v6 (measurements gain interval_basis)
     assert loaded.target_kind == "gateway"  # R1: default, round-trips
     # same measurements (order-independent: compare as sets of key fields)
