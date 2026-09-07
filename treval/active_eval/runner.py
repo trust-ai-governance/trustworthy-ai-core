@@ -12,7 +12,7 @@ from dataclasses import replace
 
 from treval.active_eval.canary import CanarySet
 from treval.active_eval.corpus import CorpusCase
-from treval.active_eval.target import ProbeResult, Target
+from treval.active_eval.target import ProbeResult, Target, wire_message_count
 
 
 def run_corpus(
@@ -45,6 +45,7 @@ def run_corpus(
                 attack_class=case.attack_class,
                 source=case.source,
                 control_for=case.control_for,
+                wire_message_count=wire_message_count(case),
             )
             results.append(pr)
         except Exception as e:  # transport/target failure — record, don't drop
@@ -61,6 +62,9 @@ def run_corpus(
                     attack_class=case.attack_class,
                     source=case.source,
                     control_for=case.control_for,
+                    # 🔴 错误路径也要带：一条会话【被送出去了】才失败的，它的消息数是已知事实。
+                    # 只在成功路径附值，会让「臂里有几条消息」随失败率变动 —— 分母跟着结果动。
+                    wire_message_count=wire_message_count(case),
                 )
             )
     return tuple(results)

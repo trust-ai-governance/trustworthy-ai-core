@@ -387,12 +387,21 @@ def test_all_under_blocks_is_not_measured_not_zero_flagship():
 
 
 # --------------------------------------------------------------------------- #
-# §1.5 acceptance 3/4 — over the REAL shipped benign corpus: NO secret_canary
-# field, and observable_via stays None (else a benign case is dragged into the
-# success / four-cell denominator). The three §4 gates don't cover this — this
-# test is its guard. RED input: give any benign case a secret_canary/output_marker.
+# §1.5 acceptance 3/4 — over the REAL shipped benign corpus: no `output_marker`, so no benign case
+# enters the success / four-cell denominator. RED input: give any benign case an output_marker.
+#
+# 🔴 NARROWED 2026-09-02, and the reason matters more than the change. This asserted `secret_canary`
+# was empty too, on the stated grounds that it "drags a benign case into the success / four-cell
+# denominator". That is not true of `secret_canary`: `case_contract.recompute` selects that
+# denominator on `observable_via == "output_marker"` ALONE, and every leak-rate producer is bound to
+# its own corpus dir (llm02 / llm05 / llm07) — none reads the benign LLM01 arms. So the canary half
+# of this assertion guarded nothing that is wired, while forbidding the one thing that closes a live
+# measurement gap: the benign arm's `{{canary}}` carriers were running with a real injected
+# credential and NOTHING checking whether it came back out.
+# ⇒ The property this test still owns is the marker one. The canary side is now owned, in the
+# opposite direction, by tests/test_benign_leak_measure.py.
 # --------------------------------------------------------------------------- #
-def test_shipped_benign_corpus_has_no_success_observable_signal():
+def test_shipped_benign_corpus_has_no_output_marker():
     from pathlib import Path
 
     from treval.active_eval import load_corpus
@@ -405,9 +414,8 @@ def test_shipped_benign_corpus_has_no_success_observable_signal():
     assert (
         cases
     )  # the HOLDOUT arm (the FPR denominator); its size is not this test's business
-    # 🔴 acceptance 3/4 — observable_via(pr) reads output_marker then secret_canary; both empty ⇒ None,
-    # so no benign case can enter injection_success_rate / the four-cell denominator.
-    assert all(not c.secret_canary for c in cases)
+    # 🔴 acceptance 3/4 — the success / four-cell denominator is selected on output_marker alone
+    # (case_contract.recompute), so this is the field that must stay empty on the benign arm.
     assert all(not c.output_marker for c in cases)
     # the new 4th scene exists and every case declares a scene it belongs to (benign-scene discipline)
     scenes = {c.scene for c in cases if c.scene}
