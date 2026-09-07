@@ -7,6 +7,7 @@ failing producer aggregates to a warning instead of crashing the run (§5)."""
 from __future__ import annotations
 
 import argparse
+import pathlib
 import json
 import time
 from dataclasses import replace
@@ -109,16 +110,27 @@ def test_collected_bundle_feeds_report_without_duplicate_error():
     assert {d.dimension for d in report.dimensions} == set(load_registry().dimensions)
 
 
-def test_failing_producer_aggregates_to_warning(tmp_path):
-    """A corpus root missing the curated subdirs → every producer fails → warnings, no
-    raise, empty measurement set (report will render insufficient_data)."""
+def test_a_corpus_root_missing_its_arms_fails_closed(tmp_path):
+    """🔴 够不着语料臂 ⇒ 整跑作废，不是一条 warning。**本测试此前断言的正是相反的行为。**
+
+    旧契约（"warnings, no raise, empty measurement set"）实测出过两次空跑：
+    一次 `--corpus` 指到了子目录 ⇒ 0/17 个 Producer 产出、**退出码 0、bundle 照写**；
+    一次良性臂改名后 Producer 找不到它。而 W2 那类臂是【读一次】的 —— 空跑一次就没有第二次，
+    且结果长得和跑完了一模一样。**警告会被读过去，异常不会。**
+
+    什么让它红：把 `missing_arms` 那段改回 append 到 warnings 然后 continue。
+    """
+    import pytest
+
+    from treval.cli.collect import MissingArmError
+
     warnings: list[str] = []
-    measurements = collect_measurements(
-        _FakeTarget(), corpus_root=tmp_path, warnings=warnings
-    ).measurements
-    assert measurements == ()
-    assert len(warnings) == len(CURATION)
-    assert all("failed" in w for w in warnings)
+    with pytest.raises(MissingArmError) as e:
+        collect_measurements(_FakeTarget(), corpus_root=tmp_path, warnings=warnings)
+    msg = str(e.value)
+    # 必须点名【哪条臂】和【找的是哪个路径】—— 否则操作者只知道"失败了"，修不了
+    assert "llm01_prompt_injection" in msg and str(tmp_path) in msg
+    assert "本跑作废" in msg
 
 
 def test_passive_collect_unreadable_wal_aggregates_to_warning(tmp_path):
@@ -1086,10 +1098,19 @@ def test_f5_case_shared_by_two_subdirs_is_probed_exactly_once(tmp_path):
     """§5.3-1 — the SAME case_id in two curated subdirs is probed ONCE (dir-level key would probe it
     twice). Uses the file's NON-DETERMINISTIC _CountingDriftTarget (a 2nd probe would drift), so the
     `== 1` assertion has teeth — a deterministic fake would pass even with the bug present."""
-    for subdir in ("llm01_prompt_injection", "llm06_tool_scope"):
+    # 🔴 每一条被声明的臂都要在 —— 缺一条现在是 MissingArmError（fail-closed），不再是 warning。
+    from treval.cli.collect import curation_for
+
+    for subdir in sorted({pr.corpus_subdir for pr in curation_for("en")}):
         d = tmp_path / subdir
         d.mkdir()
-        (d / "shared-1.yaml").write_text(_SHARED_CASE_YAML, encoding="utf-8")
+        (d / "filler-1.yaml").write_text(
+            _SHARED_CASE_YAML.replace("shared-1", f"filler-{subdir}"), encoding="utf-8"
+        )
+    for subdir in ("llm01_prompt_injection", "llm06_tool_scope"):
+        (tmp_path / subdir / "shared-1.yaml").write_text(
+            _SHARED_CASE_YAML, encoding="utf-8"
+        )
     target = _CountingDriftTarget()
     warnings: list[str] = []
     collect_measurements(target, corpus_root=tmp_path, warnings=warnings)
@@ -1307,3 +1328,73 @@ def test_smoke_case_contract_re_adds_across_every_response_terminal(tmp_path):
     # 行里确实带上了那个信号，且 no_verdict 真的出现过
     tv = {c.get("terminal_verdict") for c in contract["cases"]}
     assert "no_verdict" in tv, f"terminal_verdict 未记录 no_verdict: {tv}"
+
+
+def test_the_benign_arm_flag_actually_reaches_the_collector(tmp_path, capsys):
+    """🔴 `--benign-arm` 从 CLI 流到 collect_measurements 的那一段，此前【没有任何测试走过】。
+
+    实况：CLI 解析了它、`collect_measurements` 收它、重映射代码也在 —— 唯独调用点没传，
+    参数永远是默认的 `""`，重映射一次都没触发过。而既有测试全都**直接调函数并传参**，
+    所以它们声称验的是「--benign-arm 能重映射良性臂」，实际验的是「函数参数能重映射」。
+    ⇒ 又一次"测试验证的是比它声称的东西更容易为真的事"。
+
+    这条门走【真的 CLI 路径】：Namespace → run_collect → collect_measurements，
+    断言落在够不着臂时报出来的【解析后的目录名】上。
+
+    什么让它红：把 run_collect 里的 `benign_arm=` 那一行删掉（那正是原来的样子）。
+    """
+    import treval.active_eval as ae
+    from treval.cli.collect import run_collect
+
+    class _FakeGW:
+        target_id = "gateway"
+
+        def __init__(self, *a, **k):
+            pass
+
+        def probe(self, case):
+            return ProbeResult(
+                case_id=case.id,
+                request_id="r",
+                decision="ALLOW",
+                response_text="ok",
+                evidence=None,
+            )
+
+        def drain_governance(self, results, **k):
+            return results
+
+        def fetch_buildinfo(self):
+            return None, None
+
+        def read_drain_cursor(self):
+            return None
+
+    orig = ae.GatewayTarget
+    ae.GatewayTarget = _FakeGW  # type: ignore[misc]
+    try:
+        rc = run_collect(
+            _collect_args(
+                gateway="http://fake",
+                corpus=str(tmp_path),
+                corpus_set="w2",
+                benign_arm="llm01_benign_holdout_p1",
+                agent="",
+                out=str(tmp_path / "b.json"),
+            )
+        )
+    finally:
+        ae.GatewayTarget = orig  # type: ignore[misc]
+
+    assert rc == 3, "够不着臂必须非零退出"
+    err = capsys.readouterr().err
+    # 🔴 断言必须落在【Producer 真正去找的那个路径】上，不能是"这个串出现在 stderr 里"。
+    # 第一版就是后者，而错误信息里那句 `💡` 提示本身含 `llm01_benign_holdout_p1`
+    # ⇒ 把接线删掉之后测试照样绿。**在为抓这一族而写的测试里犯这一族。**
+    looked_in = [
+        ln.split("找的是", 1)[1].strip() for ln in err.splitlines() if "找的是" in ln
+    ]
+    assert looked_in, "错误信息必须说出它去找的是哪个路径"
+    assert all(
+        pathlib.Path(p_).name == "llm01_benign_holdout_p1" for p_ in looked_in
+    ), f"🔴 --benign-arm 没有流到采集端 —— 它去找的是 {looked_in}，不是重映射后的臂名"

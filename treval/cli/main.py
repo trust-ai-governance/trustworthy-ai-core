@@ -439,6 +439,26 @@ def build_parser() -> argparse.ArgumentParser:
         # batch). NEVER inferred — a CN run must be declared, so an English `--language-scope` can never
         # silently probe the Chinese corpus.
         col.add_argument("--corpus-set", choices=CORPUS_SETS, default="en")
+        # 🔴 认证跑的分母由【判据】产生，不由"臂里有多少件"产生。仓内注入臂 212 件，
+        # 而分母是 134（剔 control_ 59 · behaviour 痕迹 4 · holdout 15）。不给这个清单，
+        # 跑出来的数分母是 212，与门（k ≥ 117/134）不是同一个量 —— 而它跑得完、退出码 0、
+        # 报告完全正常。臂名守卫拦不住它：问题不是"哪条臂"，是"臂里的哪些件"。
+        col.add_argument(
+            "--denominator-manifest",
+            default=None,
+            help="分母清单（p8 形态 JSON：arm / excluded_for_behaviour / excluded_holdout / "
+            "denominator）。按 attack_class 剔 control_ 前缀 + 两份具名剔除表，并断言筛出的件数"
+            "等于清单声明的数 —— 不等就非零退出。只作用于清单点名的那条臂",
+        )
+        col.add_argument(
+            "--benign-arm",
+            default="",
+            help=(
+                "英文良性臂的子目录名，覆盖默认的 llm01_benign_holdout。"
+                "🔴 新臂叫别的名字时必须给它，否则 Producer 找不到那条臂 —— "
+                "语料在、判据在，而那条臂在这条路上根本跑不了。只重映射良性臂，不通配"
+            ),
+        )
         col.add_argument(
             "--tenant", default=os.environ.get("TREVAL_EVAL_TENANT", "__eval__")
         )
@@ -616,6 +636,19 @@ def build_parser() -> argparse.ArgumentParser:
             default=None,
             help="where that τ came from — 'shipped' (detection_switches) is the only citable source; "
             "'fitted'/'other' ⇒ a calibration diagnostic, not_citable (N180 件6)",
+        )
+        # 🔴 弱门（PM 2026-09-07）—— 判官指纹的**声明**。不 block citability（按裁定不许红任何
+        # 现存可引产物），只把"缺席"从沉默变成产物里一个具名的第三态。
+        col.add_argument(
+            "--judge-imprint",
+            default=None,
+            metavar="PATH|none",
+            help="path to this run's judge-imprint JSON, or the literal 'none' to DECLARE that no "
+            "imprint was taken. Omitted ⇒ 'not_declared' (indistinguishable from a pre-gate bundle). "
+            "🔴 A 0-byte/unreadable file is REFUSED, never downgraded to 'none': an empty imprint's "
+            "sha256 is a perfectly valid hash, and accepting it would make this gate certify the very "
+            "run it exists to flag. It does NOT check that the imprint was taken within this run's "
+            "window — that gate needs `taken_at` on the imprint side (next round)",
         )
         # EV-COVERAGE E3-n ④ — the gateway admin base (GET /admin/v1/buildinfo). Passed to
         # GatewayTarget so collect can capture the build fingerprint before AND after the run and prove
