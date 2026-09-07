@@ -1,4 +1,7 @@
-trustworthy-ai-ir-spec @ git+ssh://git@github.com/olvandeng/trustworthy-ai-ir-spec.git@main
+# 🔴 钉 commit，不钉 @main。ir_spec_sha 是配置指纹的一部分：钉分支意味着编译所依据的 schema 可以在
+# 我方零改动的情况下变掉，于是两次跑的指纹不同而本地 diff 是空的 —— 那正是"冻结期零变更"要能被验证的反面。
+# C-1（正文从链式记录里分出去：record_type=5 / BodyState / body_sha256）合入于此。
+trustworthy-ai-ir-spec @ git+ssh://git@github.com/olvandeng/trustworthy-ai-ir-spec.git@a44fda8e52378c1fb31d6d5facdf4b01e7a89aa6
 pytest-cov>=7.1.0
 protobuf>=7.35.1
 types-protobuf>=3.20.4.20250408

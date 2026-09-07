@@ -199,7 +199,9 @@ def test_jian5_path_value_is_new_identity_bumped_to_5():
     from treval.citability import CRITERIA_BLOCKERS, CRITERIA_VERSION
 
     # 🔴 a DISTINCT identity from tau_not_shipped, on the other axis ⇒ its own bump (4→5), not merged into 4.
-    assert "path_not_product" in CRITERIA_BLOCKERS and CRITERIA_VERSION == 5
+    assert (
+        "path_not_product" in CRITERIA_BLOCKERS and CRITERIA_VERSION == 6
+    )  # 5→6：冻结面收窄
 
 
 # --------------------------------------------------------------------------- #
@@ -1240,3 +1242,97 @@ def test_registration_expected_arms_come_from_the_scope_not_a_hardcoded_pair():
     # 什么让它红：拿 CN 那一对去判这份 EN 文档 ⇒ 假的「未登记」（就是修之前的行为）
     wrong = check_registration(en, expected_arms=ARM_SETS["cn-benign"])
     assert wrong.status == "unregistered" and "未登记" in "\n".join(wrong.lines)
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 PM 2026-09-06 ① —— 良性案例表要能分出【是哪一层反应的】
+#
+# 缺口：攻击行有 `tier2_scored`（cases.py:266），**良性行没有**。于是一条被标记的良性件，
+# 从表上读不出是 Tier-1 决策段标的、还是 Tier-2 异步判官标的 —— 而两者的处置完全不同：
+# 前者调规则，后者调 τ。合成一个「被标记了」，看的人无从知道该动哪一个。
+#
+# 🔴 三态不许并：judge 没评过（not_scored）≠ 评过没标（scored 且未 hint）。
+# 前者是排空缺口（我们的仪器问题），后者是判官的判断。并成一个，drain 没跑完会读成"判官认为没问题"。
+# --------------------------------------------------------------------------- #
+def _benign_row(**kw):
+    from treval.active_eval.cases import build_benign_cases
+    from treval.active_eval.corpus import CorpusCase
+
+    case = CorpusCase(
+        id="b.1",
+        owasp="LLM01",
+        dimension="robustness",
+        attack_class="benign_hard_negative",
+        success_when="allowed",
+        severity="info",
+        source="core-authored",
+        tool_id="chat",
+        input="hi",
+    )
+    (row,) = build_benign_cases([case], [_probe_for_tier(**kw)], target_kind="gateway")
+    return row
+
+
+def _probe_for_tier(
+    *, decision="ALLOW", hint=False, tier2_record=False, tier2_hint=False
+):
+    from trustworthy_ai.v1 import request_context_pb2 as rc_pb
+
+    from treval.active_eval.target import ProbeResult
+    from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
+
+    def _ev(hint_emitted, tier2=False):
+        ctx = rc_pb.RequestContext()
+        ctx.envelope.request_id = "req-b1"
+        ctx.decision.final_decision = (
+            rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
+            if decision == "BLOCK"
+            else rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
+        )
+        r = ctx.decision.rules_evaluated.add()
+        r.rule_id = "t2-judge" if tier2 else "inj-1"
+        if tier2:
+            r.tags["tier"] = "2"
+        r.matched = hint_emitted
+        ctx.audit.hint_emitted = hint_emitted
+        return AuditEvidence(
+            ref=EvidenceRef(source="wal:x", seq=0, request_id="req-b1"),
+            integrity=IntegrityStatus.VERIFIED,
+            tenant_id="__eval__",
+            received_at_ns=0,
+            record=ctx,
+        )
+
+    return ProbeResult(
+        case_id="b.1",
+        request_id="req-b1",
+        decision="",
+        response_text="ok",
+        evidence=_ev(hint),
+        governance_evidence=_ev(tier2_hint, tier2=True) if tier2_record else None,
+        attack_class="benign_hard_negative",
+    )
+
+
+def test_benign_row_says_whether_the_judge_scored_it():
+    """🔴 三态。什么让它红：不带这一列 —— 一条 drain 没跑完的行，与一条判官看过没标的行，
+    在表上一模一样。"""
+    assert _benign_row(tier2_record=True)["tier2_scored"] == "scored"
+    assert _benign_row(tier2_record=False)["tier2_scored"] == "not_scored"
+
+
+def test_benign_row_separates_tier1_from_tier2_reaction():
+    """🔴 ① 本体：被标记的良性件要能读出是哪一层标的 —— Tier-1 调规则，Tier-2 调 τ。
+    什么让它红：只留一个「被标记了」的布尔。"""
+    assert _benign_row()["reacted_by"] == "none"
+    assert _benign_row(hint=True)["reacted_by"] == "tier1"
+    assert _benign_row(tier2_record=True, tier2_hint=True)["reacted_by"] == "tier2"
+    assert (
+        _benign_row(hint=True, tier2_record=True, tier2_hint=True)["reacted_by"]
+        == "both"
+    )
+
+
+def test_a_tier1_block_reads_as_tier1_not_as_unflagged():
+    """决策段硬拦也是 Tier-1 反应。什么让它红：只看软标记，硬拦的行读成 none。"""
+    assert _benign_row(decision="BLOCK")["reacted_by"] == "tier1"

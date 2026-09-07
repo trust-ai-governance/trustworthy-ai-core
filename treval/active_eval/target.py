@@ -103,6 +103,13 @@ class ProbeResult:
     attack_class: str = ""
     source: str = ""
     control_for: str = ""
+    # 🔴 会话级报数（PM 裁定③）—— 这条会话送出的 **wire 消息条数**，与上面三个同一条路子由 run_corpus
+    # 附上。判据只有一句，因为「消息数」有两种读法（含不含 system 行），在真实语料上差得不小：
+    #   **网关收到几条就是几条** —— 送出的 messages 数组长度，含 system 行。单轮件按它实际送出的
+    #   数组长度算（有 system_prompt 则 2，否则 1）。
+    # 🔴 `0` 是第三态「没采到」，不是「零条消息」：一条零消息的会话不存在，而缺计数的老 ProbeResult
+    # 恰好是 0 —— 会话级指标据此拒绝印出分母声明，而不是印一个看起来正常的 0。
+    wire_message_count: int = 0
     # HTTP-parsed token usage (EV-AE5, LLM10). This is the CROSS-CHECK working value;
     # the chain-verified WAL response record's token_usage is the AUTHORITATIVE oracle
     # (D1/D3). 0 when absent — e.g. a BLOCKed runaway has no completion (no consumption).
@@ -115,6 +122,18 @@ class ProbeResult:
     # empty answer (RC4 integrity — a clamped token count is NOT a valid governed response).
     reasoning_tokens: int = 0
     finish_reason: str = ""
+    # 🔴 响应阶段拦截 —— 入口放行、模型回了话、网关在输出侧拦下。它【不是】error，也【不是】
+    # 「没泄漏」：正当的治理动作有它自己的结局类别。折进前者会丢掉一个真实测量；折进后者会把
+    # 「治理拦住了」读成「模型本来就没吐」——两件事的处置相反。
+    response_stage_blocked: bool = False
+    # 🔴 响应期规则的【裁决面】—— `record.response.on_tool_response_rules` 里命中的 rule_id。
+    # 存在的理由：正文在被拦时落盘前就被换成占位符，所以"输出里有没有出现 X"这件事，从正文上
+    # 永远读不回来 —— 但**网关已经量过了**，结论就写在这一格上。不读它，就只能把这些件记成
+    # "测不了"，而那正是实跑中一整批件从分母上消失的原因。
+    # 🔴 三态：None = 没读到响应记录（没排空 / 无 WAL / 入口阶段就拦了，响应期规则根本没跑）；
+    #          ()   = 读到了，没有任何响应期规则命中；
+    #          (…) = 命中的 rule_id。把 None 与 () 合并，就会把"没看"读成"看了没有"。
+    response_rules_matched: tuple[str, ...] | None = None
     # EV-AE5.1: a ReadTimeout — the connection succeeded but the RESPONSE never arrived
     # in time. On an LLM10 runaway this means the model streamed past the timeout with no
     # gateway cap = an ungoverned runaway that blew the measurement window (NOT a neutral
@@ -133,6 +152,24 @@ class ProbeResult:
     # reads 0/False. False (the default) ⇒ the drain did not run ⇒ the Tier-2 indicators emit n/a /
     # unmeasurable, NEVER a zero lift/rate.
     tier2_drain_executed: bool = False
+    # 🔴 本窗判官【产出过分没有】。与上面那格是两件事，合并会漏掉最贵的一种：
+    #     排空没跑完        ⇒ tier2_drain_executed=False   ← 已有
+    #     排空干净跑完了     ⇒ tier2_drain_executed=True
+    #        而判官一分未出 ⇒ 🔴 每条探针 governance_evidence=None，Tier-2 各格算出一个
+    #                         看起来正常的 0 lift。被测方侧实测：连续多次跑批判官一分未打
+    #                         （路由不通），而没有任何东西变红。
+    # 判据：`inj.tier2.shadow` 记录是【无条件落盘】的（判官出分即落，与分值无关，不比 τ）
+    # ⇒ 本窗 shadow==0 无歧义地等于"判官没产出"，不会把"判官全判低分"误判成没产出。
+    # 三态：None = 没查成（无 WAL / 读不出）· False = 判官没产出 · True = 判官出过分
+    # 🔴 `False` 含【查了、盘上一条 Tier-2 记录都没有】—— 那不是极端情况，是判官路由不通
+    #    且期间重启过时的**预期状态**（give-up 记录要同件连失败 3 次才落，重试计数重启清零）。
+    tier2_judge_produced: bool | None = None
+    # 🔴 The run DECLARED there is no upstream model (echo forwarder). Stamped by GatewayTarget from
+    # `--no-output-side`, never inferred. The decoy-tool checks read it to return `not_measured`
+    # instead of False: with no model there can BE no tool_call, so "not observed" is not "did not
+    # happen". Same family as the `benign_shadow_flag_rate` incident (value=0.0 over sample_size=125
+    # while all 125 had no async record) — a perfect, citable, entirely false zero.
+    no_upstream_model: bool = False
     # P3C-harness C1-STABILITY-CURVE §1 — the vendor-neutral bearer seam for score-driven
     # judges (self-built logprob + future moderation APIs). Additive + honest-default ⇒ every
     # existing ProbeResult construction is unchanged and the WAL golden does not churn. Landing
@@ -200,6 +237,12 @@ def _extract_text(body: dict[str, object]) -> str:
         if isinstance(value, str):
             return value
     return ""
+
+
+# 🔴 上游状态头（Platform `forward.py:39` 的 `x-upstream-status`）。它在【上游从未被调用】时
+# 整个缺席 —— 那是被测方注释里写死的已决语义：「`0` 会被读成状态码，`""` 会被读成"调用了但没拿到"，
+# 只有【整个头不存在】不会被误读成这两者之一」。⇒ 它的【在/不在】就是阶段判别式的另一半。
+_RESPONSE_STAGE_HEADER = "x-upstream-status"
 
 
 def _finish_reason(body: dict[str, object]) -> str:
@@ -271,6 +314,16 @@ def _chat_params(
     if temperature is not None:
         params["temperature"] = temperature
     return params
+
+
+def wire_message_count(case: CorpusCase) -> int:
+    """这件送出的 wire 消息条数 —— 会话级分母声明里的「消息数」（PM 裁定③）。
+
+    🔴 它**不重新数一遍**，而是量 `_chat_params` 真正构造出来的那个数组：一个自己数一遍的实现，
+    会在下一次 wire 构造改动时与它悄悄分叉，而分叉出来的是一个仍然印得出来的、错的分母。
+    ⇒ 口径就是一句话：**网关收到几条就是几条**（含 system 行）。"""
+    messages = _chat_params(case, model="", temperature=None)["messages"]
+    return len(messages)  # type: ignore[arg-type]
 
 
 class GatewayTarget:
@@ -389,7 +442,24 @@ class GatewayTarget:
         request_id = resp.headers.get("x-request-id", "") or str(
             body.get("request_id", "")
         )
-        decision = str(body.get("decision", ""))
+        # 🔴 阶段判别式（Platform 2026-09-05 给，实证成立）—— 在 wire 上就判得完，不必 join 审计面：
+        #     入口阶段 BLOCK   403 + `x-upstream-status` 头【整个缺席】  ← 上游从未被调用
+        #     响应阶段 BLOCK   403 + `x-upstream-status: 200`          ← 上游被调用且回了话
+        # ⚠️ 判别式是那【一对组合】，不是状态码 —— 403 两个阶段都会返。
+        #
+        # 🔴 为什么非要它：403 的治理 JSON 里【没有 `decision` 键】（只有 error_code / request_id /
+        # decision_reason / decided_by / missing_scopes）⇒ 下面那行读出空串 ⇒ `!= "BLOCK"` 成立 ⇒
+        # 一次【正当的输出侧拦截】被记成「网关输出解不动」的工装错误。实测 W6 十件里 6 件如此
+        # （seq 47579–47609）：不是丢样本，是把「治理起作用了」这个测量结果当错误扔了。
+        # 🔴 而它先前把责任判给了被测方 —— 一条分派责任的判据，用在未验证的分类上，就是把人派错地方。
+        stage_blocked = getattr(resp, "status_code", 0) == 403 and (
+            _RESPONSE_STAGE_HEADER in getattr(resp, "headers", {})
+        )
+        # 🔴 403 的治理 JSON 里没有 `decision` 键 ⇒ 直接取会得到空串，而那是【被拦下了】。
+        # 只在 body 沉默时兜底，不覆盖它说出来的话 —— 覆盖会动到每一条既有判定。
+        decision = str(body.get("decision") or "") or (
+            "BLOCK" if getattr(resp, "status_code", 0) == 403 else ""
+        )
         if self._wal_dir is not None and request_id:
             evidence, response_evidence = self._read_evidence(request_id)
         else:
@@ -418,6 +488,9 @@ class GatewayTarget:
         extract_error = (
             f"gateway-output-unparseable（网关输出解不动，非工装失败）: 200/非拦截响应里没有可解析的 "
             f"completion —— body={raw_response[:160]}"
+            # 🔴 这里【不】再判 `stage_blocked`：它蕴含 403，而 403 已经让上面的 `decision` 兜底成
+            # "BLOCK" ⇒ 第一个条件就拦住了。多写一次是死代码，没有任何变异能杀死它。
+            # `stage_blocked` 仍然要留，但它的用途是【结局分类】，不是错误判定。
             if (decision != "BLOCK" and no_output and not self._no_output_side)
             else None
         )
@@ -435,6 +508,8 @@ class GatewayTarget:
             completion_tokens=completion,
             reasoning_tokens=reasoning,
             finish_reason=_finish_reason(body),
+            no_upstream_model=self._no_output_side,
+            response_stage_blocked=stage_blocked,
         )
 
     def _read_evidence(
@@ -564,6 +639,106 @@ class GatewayTarget:
                 break
             time.sleep(poll_interval)
 
+    def _tier2_rule_census(self) -> dict[str, int] | None:
+        """按 `rule_id` 清点本租户 WAL 里的 Tier-2 治理记录（record_type=3）。
+
+        🔴 为什么不能复用 `_scan_governance`：那一条按 `request_id` join，而**判官报错写出来的
+        `inj.tier2.unscored` 记录【没有 request_id】**（它用 `tags.seq` 指回决策记录）⇒ 那条链路
+        在结构上永远看不见判官报错。守卫因此只会说「没排完」，说不出「判官一分没打」——
+        而这两者的处置相反：前者等一等可能就有，**后者等多久都不会有**。
+
+        🔴 **`inj.tier2.shadow` 记录是【无条件落盘】的 —— 判官出分即落，与分值无关，不比 τ。**
+        （被测方 `guardrail.py:729` except 之后直接 `build_shadow_record` → `:763` append，
+        中间没有任何 τ 比较；Core 侧实测 445 条 shadow 全部带分，其中 389 条 < 0.5，最低 0.0012。）
+        ⇒ **一次读成功的普查里 `shadow == 0`，无歧义地等于"判官这一窗一分未出"。**
+
+        ⚠️ 这句话写成可搜到的一句，是因为它的**反面**已经在两个仓里各写过一遍
+        （本文件旧注释、以及被测方 W-1.1 的判据）：「记录只在 score ≥ τ 才落」——
+        **错前提，两处独立写出，两处都据此把判据放宽了一格。**
+
+        🔴 返回三态，不是两态 —— `{}` 只承载【读成功了，盘上一条都没有】这一件事：
+            None  ⇒ 没查成（没配 WAL / 读不出）        —— 调用方不许据此断言判官坏了
+            {}    ⇒ 查了，一条 Tier-2 记录都没有        —— 判官【没产出】，这是确凿的
+            非空  ⇒ 按 shadow / unscored 分格读
+        此前三种来源共用 `{}`，于是第三种（Platform 2026-09-06 证明它是**预期状态**：
+        判官路由不通且期间重启过，give-up 记录一条都不会落）继承了前两种的"别下结论"处置，
+        **在最该说话的那一跑上和一切正常时长得一模一样。**
+        """
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return None
+        census: dict[str, int] = {}
+        try:
+            evidence = list(
+                WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id)
+            )
+        except Exception:
+            # 🔴 这是一条【诊断】，不许把跑批弄挂。读不出证据 ⇒ 返回 `None`（没查成），
+            # 调用方退到"没排完"那句。一个读不出证据的诊断，绝不能因此做出更确定的断言。
+            #
+            # ⚠️ 旧注释在这里写的是"空普查会让调用方退到更保守的那句" —— 那句描述的是
+            # **打印的措辞**，不是**判定的方向**：`{}` 一路走到 `_tier2_judge_produced`
+            # 会变成 `None`，而 `None` 在那里不算 False ⇒ 判定退到的是【通过】那一侧。
+            # 🔴 措辞保守 ≠ 判定保守。返回 `None` 之后这两者才第一次指向同一边。
+            return None
+        for ev in evidence:
+            if ev.record.record_type != _GOVERNANCE_OBSERVED:
+                continue
+            for rule in ev.record.decision.rules_evaluated:
+                rid = rule.rule_id
+                if rid.startswith("inj.tier2."):
+                    census[rid] = census.get(rid, 0) + 1
+        return census
+
+    def _tier2_records_in_other_tenants(self) -> int | None:
+        """盘上有多少条类型 3 落在【本分片之外】—— 只在本分片普查为空时才问。
+
+        🔴 为什么必须问：`_tier2_rule_census` 那一趟读是 **带 tenant 过滤**的
+        （`read_audit(tenant_id=self._tenant_id)`）⇒ 它的 `{}` 其实还有第四个含义：
+        「本分片下没有，而判官可能在**另一个 tenant** 下产出了几百条」。
+
+        实测（Core WAL，2026-09-06 21:40 CST，段 48287..49684）：
+            tenant=__eval__            → shadow 436
+            tenant=default             → shadow   9
+            tenant=acme-not-a-tenant   → {}            ← 盘上 445 条就在那儿
+        ⇒ 不问这一句，门会说"判官没产出"，而**实际是查错了分片**，
+        于是有人被派去修一个没坏的东西 —— 比不报警更贵。
+
+        ⚠️ 处置不同，所以必须分得开：
+            判官没产出   ⇒ 查判官可达性 / 路由
+            查错分片     ⇒ 查 tenant / 配置，判官很可能好着
+        两者的 Tier-2 结局都是 `not_measured`（这一层确实观测不到），**分开的是那句话**。
+
+        ⚠️ 本仓这两趟读**都不带时间窗**（`read_audit` 支持 `time_from_ns/time_to_ns`，
+        这里一个都不传）—— 钉在这里，免得以后有人加上去之后 `{}` 又长出第五个含义。
+
+        🔴 返回三态，理由和 `_tier2_rule_census` 一模一样，只是位置低一层：
+            None ⇒ 这一趟【没查成】       —— 不许据此说出"判官没有产出"那句确凿话
+            0    ⇒ 查了，别处也确实没有
+            >0   ⇒ 查了，别处有 N 条
+        第一版这里写的是 `except → return 0`，注释是"读不出 ⇒ 不加戏；本分片那句照旧"——
+        ⚠️ **而"照旧"的那句正是那句确凿话。** 注释描述的是【意图】（不加戏），
+        效果是给一句确凿的判定背书。实测：让这趟读抛异常，输出的确是
+        「判官【没有产出】…先查判官可达性/路由」。**同一形状，比上面那层低一级。**
+
+        🔴 **只数不取**：这一趟【跨租户】，所以只取条数、绝不把记录带出这个函数
+        （`sum(1 for …)` 的生成器，不 `list()`、不返回记录、不打印内容）。
+        一个计数是元数据，一批记录是跨租户内容 —— 这个工装将来若跑在客户盘上，
+        两者的性质不一样。写清"只数不取"，比将来解释便宜（Platform 2026-09-07）。
+        """
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return None
+        try:
+            return sum(
+                1
+                for ev in WalEvidenceReader(wal_dir).read_audit()
+                if ev.record.record_type == _GOVERNANCE_OBSERVED
+                and ev.tenant_id != self._tenant_id
+            )
+        except Exception:
+            return None  # 没查成 —— 不是"别处没有"
+
     def drain_governance(
         self,
         results: list[ProbeResult],
@@ -674,20 +849,111 @@ class GatewayTarget:
         #
         # This is the flag's whole purpose, and it was defeated by the one branch that needed it most:
         # a drain that completes cleanly has nothing to hide, and only the truncated one does.
-        if not drain_complete:
+        # 🔴 无条件算一次 —— 不只在排空失败时算。"排空干净跑完了而判官一分未出"是最贵的
+        # 那一种，而它恰好走的是 drain_complete=True 这条分支。
+        census = self._tier2_rule_census()
+        shadow = (census or {}).get("inj.tier2.shadow", 0)
+        unscored = (census or {}).get("inj.tier2.unscored", 0)
+        # 🔴 `census is None`（没查成）才是"没查过"；`census == {}`（查了，盘上零条）是
+        # **确凿的"判官没产出"** —— 后者此前也算成 None，于是在 `_tier2_judge_produced`
+        # 里不算 False，Tier-2 各格照常算出一个看起来正常的 0 lift。
+        judge_produced: bool | None = None if census is None else shadow > 0
+        # 🔴 本分片零条时，先问一句"是不是查错了分片" —— 两者的 Tier-2 结局都是
+        # not_measured，但处置相反，而把人派去修一个没坏的判官比不报警更贵。
+        # 与 drain 完成与否无关（这是作用域错，不是排空结果），所以在这里单独说。
+        # `foreign`：本分片零条时才去问的第二趟读。三态 —— None=没查成 · 0=别处也没有 · >0=别处有。
+        # 非空普查不问（省一趟读），此时它恒为 0：那条路上"别处有没有"根本不参与判断。
+        foreign = self._tier2_records_in_other_tenants() if census == {} else 0
+        if census == {} and foreign:
             print(
-                "🔴 drain: stopped WITHOUT cursor catch-up ⇒ tier2_drain_executed stays false. Every "
-                "Tier-2 row reads not_measured, NOT 0% — the judge did not finish this batch",
+                f"🔴 drain: 本分片 tenant={self._tenant_id!r} 下【一条类型 3 都没有】，"
+                f"而同一份 WAL 里另有 {foreign} 条落在别的 tenant 下。"
+                "⚠️ 这更像【查错了分片】，不是判官坏了 —— 先核 tenant/配置，别去查判官路由。"
+                "（两者 Tier-2 都读 not_measured，分开的是处置）",
                 file=sys.stderr,
             )
+        elif census == {} and foreign is None:
+            print(
+                f"🔴 drain: 本分片 tenant={self._tenant_id!r} 下一条类型 3 都没有，"
+                "而【跨分片那一趟读没查成】⇒ 说不出这是判官没产出还是查错了分片。"
+                "⚠️ 不作判定 —— 先让那趟读成功（WAL 路径/权限），再看是哪一种。"
+                "（Tier-2 照旧读 not_measured）",
+                file=sys.stderr,
+            )
+        if not drain_complete:
+            # 🔴 词表扩一格：「没排完」与「判官报错 N 次」处置相反 ——
+            # 前者【等一等可能就有】，后者【等多久都不会有】。合成一个词就等于把处置也合成了一个，
+            # 而操作者看到"没排完"的第一反应是加大 timeout 重跑，那在第二种情形下是纯浪费。
+            # 🔴 判据是 `census is not None and shadow == 0`，【不】再要求 `unscored > 0`：
+            # shadow 无条件落盘 ⇒ 一次读成功的普查里 shadow==0 本身就是决定性的。
+            # 旧判据多要的那一格 `unscored > 0`，恰好在最要紧的那一跑上取不到值 ——
+            # 判官路由不通且期间重启过时，give-up 记录一条都不落（重试计数在进程内存里，
+            # 重启清零，Platform 2026-09-06）⇒ 盘上零条 ⇒ 旧判据说不出话，落进 else。
+            # 🔴 `foreign is not None` 是第三个必要条件，不是装饰：跨分片那趟读没查成时，
+            # 「判官没有产出」这句**确凿话**说不出口 —— 那时我们连"别处有没有"都不知道。
+            if census is not None and shadow == 0 and foreign is not None:
+                print(
+                    f"🔴 drain: 判官【没有产出】—— shadow 0 / unscored {unscored}"
+                    "（判据：shadow 无条件落盘，读成功的普查里 shadow==0 即决定性）。"
+                    "tier2_drain_executed=false，"
+                    "Tier-2 行读 not_measured。⚠️ 这【不是】排空不够 —— 加大 timeout 重跑不会有任何改善，"
+                    "先查判官可达性/路由",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "🔴 drain: stopped WITHOUT cursor catch-up ⇒ tier2_drain_executed stays false. "
+                    "Every Tier-2 row reads not_measured, NOT 0% — the judge did not finish this "
+                    f"batch（本窗 shadow {shadow} / unscored {unscored}）",
+                    file=sys.stderr,
+                )
+        # 🔴 顺带把【响应期裁决面】也带回来。同一趟 WAL、同一个 request_id join，零额外流量。
+        # 它与 governance_evidence 是两件事：后者是 Tier-2 影子判官（异步、type-3），
+        # 这个是响应期规则的同步裁决（type-2）—— 正文被扣下时，它是唯一还说得出话的那一面。
+        response_rules = self._response_rule_verdicts(wanted)
         return [
             replace(
                 r,
                 tier2_drain_executed=drain_complete,
+                tier2_judge_produced=judge_produced,
                 governance_evidence=found.get(r.request_id, r.governance_evidence),
+                response_rules_matched=response_rules.get(
+                    r.request_id, r.response_rules_matched
+                ),
             )
             for r in results
         ]
+
+    def _response_rule_verdicts(self, wanted: set[str]) -> dict[str, tuple[str, ...]]:
+        """{request_id: 命中的响应期 rule_id}，从 type-2 记录读。
+
+        🔴 只为出现过 type-2 记录的 request_id 建键。**缺键 ≠ 空元组**：前者是"没有响应记录"
+        （入口阶段就拦了，响应期规则从未运行），后者是"跑了，一条都没命中"。合并它们，
+        一次入口拦截就会被读成"输出侧检查通过"。
+        """
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return {}
+        out: dict[str, tuple[str, ...]] = {}
+        try:
+            evidence = list(
+                WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id)
+            )
+        except Exception:
+            return {}
+        for ev in evidence:
+            rec = ev.record
+            if rec.record_type != _RESPONSE_OBSERVED:
+                continue
+            rid = rec.envelope.request_id
+            if rid not in wanted:
+                continue
+            out[rid] = tuple(
+                rule.rule_id
+                for rule in rec.response.on_tool_response_rules
+                if rule.matched
+            )
+        return out
 
 
 class OpenAITarget:

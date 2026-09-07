@@ -28,7 +28,6 @@ from treval.active_eval import load_corpus
 from treval.active_eval.corpus import CorpusError
 from treval.case_contract import is_control_attack_class
 
-_ATTACK_SUBDIR = "llm01_cn_injection"
 _PROBE_CLASS = "control_survival_probe"
 
 
@@ -55,6 +54,25 @@ def survival_probes(cases) -> list:
     ]
 
 
+def all_survival_probes(root: Path) -> list:
+    """🔴 Every survival probe under `root`, whichever arm it lives in — NOT just the attack dir.
+
+    Why the scope had to widen: the multi-turn benign arm is entirely "should be allowed", so a clean
+    run is all-ALLOW — and a scanner that is switched off produces all-ALLOW too. The canary normally
+    separates those two, but `canary.inject` only substitutes `system_prompt`/`input`/`secret_canary`
+    and never reaches `messages`, so a multi-turn arm carries no canary at all. Its probes are the ONLY
+    thing that can tell the two apart, and a gate scoped to one directory could not see them —
+    i.e. that arm's green would have been unreadable with nothing saying so.
+
+    Dirs holding no YAML are skipped (a corpus root also holds `meta/`, which once broke a tree walk)."""
+    out: list = []
+    for sub in sorted(p for p in root.iterdir() if p.is_dir()):
+        if not any(sub.glob("*.y*ml")):
+            continue
+        out += survival_probes(load_corpus(sub))
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="check_survival_probes", description=__doc__)
     ap.add_argument(
@@ -67,18 +85,18 @@ def main(argv: list[str] | None = None) -> int:
         help="the run's CAUGHT case_ids (one per line), extracted from the run's WAL/results",
     )
     args = ap.parse_args(argv)
-    attack_dir = args.corpus / _ATTACK_SUBDIR
-    if not attack_dir.exists():
+    if not args.corpus.exists():
         print(
             "survival-probe gate: PASS —— 🔴 本批语料不在本仓，本项未校验"
-            f"（作用域：{attack_dir}）"
+            f"（作用域：{args.corpus} 下全部臂）"
         )
         print(
             "    只在跑前预检/真跑后校验；绿色公开 CI 不构成探针存活的证据（§6/§8.5）"
         )
         return 0
     try:
-        probes = survival_probes(load_corpus(attack_dir))
+        # 🔴 整根扫，不只扫攻击臂 —— 见 all_survival_probes 的说明。
+        probes = all_survival_probes(args.corpus)
     except (CorpusError, OSError) as e:
         print(f"survival-probe gate: ERROR — {e}", file=sys.stderr)
         return 2

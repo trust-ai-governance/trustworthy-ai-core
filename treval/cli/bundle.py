@@ -10,13 +10,20 @@ a dropped Measurement would quietly understate maturity.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from treval.models import EvidenceRef, IntegrityStatus, Measurement
 
-SCHEMA_VERSION = 6  # EV-CITE: each measurement gains `interval_basis` (EV-CIGATE §1.5 mechanism class)
+SCHEMA_VERSION = (
+    8  # +sample_unit（分母的单位）；v7 加了缺口三桶且 `arm_size` 改为【整条臂】
+)
+# 🔴 `arm_size` 的【语义】在 v7 变了：v6 = 存活 + 仪器损耗；v7 = 整条臂（四桶之和）。
+# 版本分叉在本仓是"警告后照渲染"，所以缺字段无害（读成 None = 未声明），而**语义变了的旧字段有害**：
+# 一个 v6 的 `arm_size=n` 按 v7 读就是"整条臂只有 n 件"，而它真实的意思是"存活的有 n 件"。
+# ⇒ 读到 v7 以前的 bundle 时把 `arm_size` 丢掉（回落到 v6 的算法），不要拿它当整条臂。
+_ARM_SIZE_IS_WHOLE_ARM_SINCE = 7
 # The bundle version that INTRODUCED the ci_low/ci_high fields. A bundle below this predates them —
 # so an injection_catch_rate with no interval means "produced before the fields existed" (re-collect),
 # NOT "a non-rate indicator" (EV-CIGATE F1: without the bump both looked identical and mis-diagnosed).
@@ -123,6 +130,25 @@ def parse_measurement(raw: object, where: str) -> Measurement:
     if not isinstance(interval_basis, str):
         raise BundleError(f"{where}: interval_basis must be a string")
 
+    # 🔴 仪器损耗同样【必须活过 collect→report 这个来回】—— 与上面 ci / interval_basis 一模一样的理由，
+    # 而这条教训就写在上面两段里，我第一版仍然只做了写这一侧：collect 产物里 excluded_count=6 存在，
+    # 回读时丢成 None，于是 citation_form 的「存活子集」改写一次都没触发过。
+    # ⚠️ 三态照旧不许合并：absent/null ⇒ None（该指标未声明排除口径），0 ⇒ 量过没排除，>0 ⇒ 存活子集。
+    excluded_count = _parse_count(raw.get("excluded_count"), "excluded_count", where)
+    arm_size = _parse_count(raw.get("arm_size"), "arm_size", where)
+    # 🔴 v7 —— 同一条教训的第二遍：写了不回读 = 没写。这两格是 citation_form 点名缺口理由的唯一来源。
+    not_measured_count = _parse_count(
+        raw.get("not_measured_count"), "not_measured_count", where
+    )
+    stage_blocked_count = _parse_count(
+        raw.get("stage_blocked_count"), "stage_blocked_count", where
+    )
+    # 🔴 v8 —— 缺席 ⇒ "request"（v8 之前每个 producer 的分母数的都是请求，这是读过之后的结论）。
+    # 取值域由 Measurement 构造期把关：拼错的单位在这里就炸，不会流到拒绝并表的门那里去。
+    sample_unit = raw.get("sample_unit", "request")
+    if not isinstance(sample_unit, str) or not sample_unit:
+        raise BundleError(f"{where}: sample_unit must be a non-empty string")
+
     return Measurement(
         indicator_id=indicator_id,
         dimension=dimension,
@@ -136,7 +162,22 @@ def parse_measurement(raw: object, where: str) -> Measurement:
         ci_low=ci_low,
         ci_high=ci_high,
         interval_basis=interval_basis,
+        excluded_count=excluded_count,
+        arm_size=arm_size,
+        not_measured_count=not_measured_count,
+        stage_blocked_count=stage_blocked_count,
+        sample_unit=sample_unit,
     )
+
+
+def _parse_count(v: object, name: str, where: str) -> int | None:
+    """一个可空的非负计数（仪器损耗）。None（缺席或显式 null）保持 None —— 那是"该指标未声明排除口径"，
+    与 0（"量过、没有排除"）是两件事，不许合并。类型不对 fail-closed，不静默丢掉。"""
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise BundleError(f"{where}: {name} must be a non-negative integer or null")
+    return v
 
 
 def _parse_ci(v: object, name: str, where: str) -> float | None:
@@ -186,6 +227,20 @@ def load_bundle(path: str | Path) -> LoadedBundle:
         parse_measurement(m, f"bundle {p} measurements[{i}]")
         for i, m in enumerate(raw_measurements)
     )
+    # 🔴 语义降级 —— 缺字段可以读成 None，语义变了的旧字段不能照读。
+    # v6 的 `arm_size` 是「存活 + 仪器损耗」，按 v7 的「整条臂」读会把一个残缺分母说成完整的臂
+    # （实跑中正是这个形状）。丢掉它 ⇒ citation_form 回落到 v6 的算法，旧数照旧诚实。
+    if (
+        isinstance(schema_version, int)
+        and schema_version < _ARM_SIZE_IS_WHOLE_ARM_SINCE
+        and any(m.arm_size is not None for m in measurements)
+    ):
+        measurements = tuple(replace(m, arm_size=None) for m in measurements)
+        warnings.append(
+            f"bundle schema_version={schema_version} < {_ARM_SIZE_IS_WHOLE_ARM_SINCE}: "
+            "`arm_size` 在 v7 改成了【整条臂】，旧值是【存活+仪器损耗】—— 已丢弃该字段，"
+            "作用域按 sample_size+excluded_count 回落（旧口径），不按整条臂读"
+        )
 
     tenant_id = doc.get("tenant_id")
     if not isinstance(tenant_id, str) or not tenant_id:

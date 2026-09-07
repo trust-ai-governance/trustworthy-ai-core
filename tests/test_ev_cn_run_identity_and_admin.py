@@ -410,3 +410,106 @@ def test_preflight_case_is_synthetic_not_from_the_corpus() -> None:
     c = _synthetic_preflight_case()
     assert c.id.startswith("__") and c.source == "synthetic"
     assert c.attack_class == "benign"
+
+
+# --------------------------------------------------------------------------- #
+# 🔴 PM 2026-09-06 放行条件⑤ —— 跑一次性臂之前，先用【跑批工具自己】发一件非语料试探件，
+# 三条判据：① HTTP 200 ② final_terminal 不是 BLOCKED ③ 响应体含 choices。
+#
+# 🔴 合成探针本来就在（`_synthetic_preflight_case`），但它此前只判①（传输可达）。
+# 而 ③ 正是 PM 点名的那个陷阱：echo 回的是合法 JSON、200、无 choices ——
+# 传输一切正常，171 件照样全花在一个不产出正文的目标上。
+# ⇒ 「检查比它声称的东西更容易为真」，而这一条就写在它上面那段注释里（讲的是 admin 游标那次）。
+# --------------------------------------------------------------------------- #
+def test_preflight_refuses_a_gateway_that_returns_no_choices() -> None:
+    """🔴 判据③。什么让它红：只看 `error.startswith("harness-transport")` ——
+    那样 N7（合法 JSON、200、无 choices）会一路放行，然后一次性臂被花掉。"""
+    from treval.active_eval.target import ProbeResult
+    from treval.cli.collect import preflight_refusal
+
+    pr = ProbeResult(
+        case_id="__preflight__",
+        request_id="r",
+        decision="ALLOW",
+        response_text="",
+        evidence=None,
+        raw_response='{"id":"x","object":"chat.completion"}',
+        error="gateway-output-unparseable（网关输出解不动，非工装失败）: 200/非拦截响应里没有可解析的 completion",
+    )
+    why = preflight_refusal(pr)
+    assert why and "choices" in why
+
+
+def test_preflight_refuses_a_blocked_probe() -> None:
+    """🔴 判据②。合成探针是良性的 —— 它被拦，说明这条身份/配置下良性件都过不去，
+    那么 171 件良性件的 FPR 会是一个被配置决定的数，不是被检测决定的数。
+    什么让它红：不看 decision。"""
+    from treval.active_eval.target import ProbeResult
+    from treval.cli.collect import preflight_refusal
+
+    pr = ProbeResult(
+        case_id="__preflight__",
+        request_id="r",
+        decision="BLOCK",
+        response_text="",
+        evidence=None,
+        raw_response='{"decision":"BLOCK"}',
+    )
+    why = preflight_refusal(pr)
+    assert why and "BLOCK" in why
+
+
+def test_preflight_refuses_an_unreachable_target() -> None:
+    """判据①（原有行为，不许丢）。什么让它红：改写时把传输那一支删掉。"""
+    from treval.active_eval.target import ProbeResult
+    from treval.cli.collect import preflight_refusal
+
+    pr = ProbeResult(
+        case_id="__preflight__",
+        request_id="",
+        decision="",
+        response_text="",
+        evidence=None,
+        error="harness-transport: ConnectError",
+    )
+    assert preflight_refusal(pr)
+
+
+def test_preflight_passes_a_healthy_probe() -> None:
+    """🔴 另一个方向：一次健康的试探必须放行 —— 一道对什么都红的门会被关掉。"""
+    from treval.active_eval.target import ProbeResult
+    from treval.cli.collect import preflight_refusal
+
+    pr = ProbeResult(
+        case_id="__preflight__",
+        request_id="r",
+        decision="ALLOW",
+        response_text="pong",
+        evidence=None,
+        raw_response='{"choices":[{"message":{"content":"pong"}}]}',
+    )
+    assert preflight_refusal(pr) is None
+
+
+def test_preflight_allows_a_declared_echo_forwarder() -> None:
+    """🔴 `--no-output-side` 声明了「本目标没有上游模型」⇒ 缺 completion 是设计行为。
+    这一层**不重判**：`GatewayTarget` 在那个声明下根本不产生 extract_error（target.py:492），
+    所以 echo 的试探件到这里 `error is None`，③ 自然不触发。
+
+    ⚠️ 本条钉的是**这个形状**（无 error 的空响应必须放行），不是一个开关：
+    我第一版在这里加过 `no_output_side` 形参，一次变异证明它改不了任何结果（死参数），已删。
+    什么让它红：把 ③ 改成看 `raw_response` 里有没有 choices —— 那会绕过上游那条声明，
+    让每一次 echo 跑批在试探件上就死掉。"""
+    from treval.active_eval.target import ProbeResult
+    from treval.cli.collect import preflight_refusal
+
+    pr = ProbeResult(
+        case_id="__preflight__",
+        request_id="r",
+        decision="ALLOW",
+        response_text="",
+        evidence=None,
+        raw_response='{"id":"x"}',
+    )
+    assert pr.error is None  # 上游已按声明压掉；这里不该再判一次
+    assert preflight_refusal(pr) is None
