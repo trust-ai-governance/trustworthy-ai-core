@@ -802,3 +802,55 @@ def test_a_clean_drain_with_a_silent_judge_is_unmeasurable_not_zero() -> None:
     assert _tier2_measurable([_pr(True)]) is True
     # 🔴 三态：None（没查过）不算作没产出 —— 那会把"没看"读成"看了没有"
     assert _tier2_measurable([_pr(None)]) is True
+
+
+def test_a_produced_judge_with_an_unconfirmed_drain_says_so_and_not_the_other_thing():
+    """🔴 2026-09-17 实测发现的第二种病因 —— 在此之前它走进了第一种的文案。
+
+    实况：英文网格臂那一跑，排空看到 shadow=122（判官确实产出了），
+    只是 admin 的 drain cursor 端点读不到、无法确认追平。
+    而产物报出来的是「本窗 inj.tier2.shadow == 0 ⇒ 先查判官可达性/路由」
+    ⇒ 读产物的人会去查一个没坏的东西，而真正的分数【就在 WAL 里】。
+
+    什么让它红：两种病因又合回一句文案。
+    """
+    from dataclasses import replace
+
+    from treval.active_eval.indicators import (
+        _NA_DRAIN_UNCONFIRMED,
+        _tier2_na_reason,
+        _tier2_not_measured,
+    )
+
+    # 判官【产出了】(不是 False)，而排空【没确认追平】
+    base = ProbeResult(
+        case_id="inj.1",
+        request_id="req-1",
+        decision="ALLOW",
+        response_text="",
+        evidence=_decision_ev("inj.1", final=_ALLOW),
+    )
+    produced_but_unconfirmed = [
+        replace(base, tier2_judge_produced=True, tier2_drain_executed=False)
+    ]
+    assert _tier2_na_reason(produced_but_unconfirmed) == _NA_DRAIN_UNCONFIRMED
+
+    (m,) = _tier2_not_measured("injection_combined_recall", _NA_DRAIN_UNCONFIRMED)
+    assert m.sample_size == 0 and "UNMEASURABLE" in m.notes
+    assert "判官【有产出】" in m.notes, "必须说清判官没坏 —— 否则人会去查一个没坏的东西"
+    assert "查判官可达性是白查" in m.notes, "必须把【错误的处置方向】点掉"
+    assert "判官一分未出" not in m.notes, "🔴 又走回另一种病因的文案了"
+
+
+def test_the_two_causes_never_share_a_sentence():
+    """🔴 判据的判据：两句文案必须真的不同，否则"分开了"只是改了变量名。"""
+    from treval.active_eval.indicators import (
+        _NA_DRAIN_UNCONFIRMED,
+        _NA_JUDGE_SILENT,
+        _NA_NOTES,
+    )
+
+    a, b = _NA_NOTES[_NA_JUDGE_SILENT], _NA_NOTES[_NA_DRAIN_UNCONFIRMED]
+    assert a != b
+    # 处置方向相反，各自必须明说，而且不能都说同一句
+    assert "不会有任何改善" in a and "可能有救" in b

@@ -117,6 +117,79 @@ def split_by_threshold(
     return [p for p in pairs if p[0] >= red], [p for p in pairs if p[0] < red]
 
 
+# 🔴 臂 A 两侧的近重复判据 —— 口径由语料作者 2026-09-15 落笔，本处实现。
+#
+# 立论是：§八③ **强制**两侧同源载体，而 `_case_text` 把载体算进比较面 ⇒ 跨集比较必然成片红。
+#
+# 🔴 而这条立论【实测不成立】（Sr Core Engineer 2026-09-15，用臂 A 真实载荷量的）：
+#   同载体 + 不同载荷   最高 0.559   ✅ 一对都不命中（红线 0.90 · 观察带 0.75 且观察带不设门）
+#   同载体 + 同载荷     1.000        🔴 必红
+# 成因：`shingles()` 是【集合】—— 载体再长也只贡献同一批 shingle，分数由【互异 shingle 的重叠比】
+# 决定，不由载体占文本的比例决定。所以"载体占大部分文本 ⇒ 两种情形只差一点点"这个推理是错的，
+# 实测差 0.44 以上。⇒ 本函数今天防的不是一个正在发生的红。
+#
+# 🔴 那它为什么还留着：判据本身（比身份、不比相似度）仍然是对的形状，而且是 fail-closed 的；
+#   留着的代价是零，删掉的代价是下次有人调低红线时没人记得这件事。测试里有一条专盯红线变化。
+#
+# ⚠️ 但它的【轴】还没裁定，落到真件之前必须先裁 —— 见 `_ARM_A_AXIS_UNSETTLED`。
+#
+# ⚠️ 作用域【严格】限于臂 A 内部两侧。臂 A × 任何其他臂仍走全文相似度：那里载体不同源，
+#    相似就是真相似。把豁免读成"臂 A 不查近重复"是它最可能的误用形态，测试里有一条专打它。
+#
+# ⚠️ 本豁免的依据是 §八① 与 §八③ 三处（:237/:245/:253），**未通读 §八全文**（落笔人自陈）。
+#    写在这里，是为了将来真撞上 §八 别处的冲突要求时，读的人一眼看出它建立在三处而不是全文。
+_ARM_A_EXEMPTION_BASIS = (
+    "完成判据 §八①（载荷字节相同）+ §八③（载体同源）；未通读 §八全文"
+)
+
+# 🔴 未裁定：口径写的是「臂 A 两侧」，而本臂有【两个】都叫"两侧"的轴，判据在两个轴上都误触发。
+#
+#   轴甲 攻击侧 × 良性侧（§八③ :262 逐字「良性侧是载体本身，攻击侧是载荷被放进同一载体」）
+#        ⇒ 良性侧【没有载荷】⇒ payload_case_id 缺失 ⇒ 本函数每次都抛 MissingPayloadIdError
+#        ⇒ 判据在它被写来管的那个轴上【不可执行】
+#   轴乙 T × U（§八① :235 逐字「每一件 U 都能指名它配对的 T，且两者载荷字节相同」）
+#        ⇒ 每一对 T/U 的 payload_case_id 【必然相同】（那是判据强制的）
+#        ⇒ 本函数把 15 对强制配对全部判成重复 ⇒ 判据把【设计】判成【缺陷】
+#
+# ⇒ 落到真件之前必须先裁这个轴。今天臂 A 一件都还没造 ⇒ 不阻塞，但不能"等造出来再说"：
+#   两种误触发都是【成片】的，见到之后再改就是照着结果改判据。
+_ARM_A_AXIS_UNSETTLED = "「臂A 两侧」= 攻击/良性 还是 T/U —— 两个轴上判据都误触发，待裁"
+
+
+class MissingPayloadIdError(Exception):
+    """臂 A 两侧比对时够不着 `payload_case_id`。
+
+    🔴 为什么是异常不是"回落到相似度判据"：回落会让缺字段的那一批【静默走另一条判据】，
+    而那条判据在同载体上必然成片红或成片放行 —— 两种都不是"这件事没被检查"的诚实表示。
+    缺字段 ⇒ 本豁免无法执行 ⇒ 停。
+    """
+
+
+def arm_a_cross_side_duplicates(
+    left: dict[str, str | None], right: dict[str, str | None]
+) -> list[tuple[str, str]]:
+    """臂 A 攻击侧 × 良性侧：仅当两件复用了【同一个】既有载荷件时算重复。
+
+    入参是 {case_id: payload_case_id}。返回 (left_id, right_id) 逐对，载体像不像一概不看。
+    🔴 载体不同【不能】洗掉载荷重复 —— 判据只读 `payload_case_id`，它本就不看载体。
+    """
+    missing = sorted(
+        cid for side in (left, right) for cid, pid in side.items() if not pid
+    )
+    if missing:
+        raise MissingPayloadIdError(
+            "臂 A 近重复豁免要求每件都带 payload_case_id，缺失："
+            + "、".join(missing)
+            + "；缺字段时不回落到相似度判据（那会静默换一条判据），停"
+        )
+    return sorted(
+        (lid, rid)
+        for lid, lpid in left.items()
+        for rid, rpid in right.items()
+        if lpid == rpid
+    )
+
+
 # 🔴 件④ 加载规则 — the ORIGINAL merged benign dir and the calib arm must NEVER be loaded together. The
 # original 25 cases were folded INTO the calib arm under NEW ids, so a load set containing both counts
 # those 25 TWICE, under two different ids — and because the ids differ, no duplicate-id check can see it.
