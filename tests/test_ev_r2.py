@@ -170,7 +170,7 @@ def test_envelope_embeds_the_indicator_aggregates():
     )
     (catch,) = InjectionCatchRate().measure(results)
     agg = contract["aggregates"]
-    assert contract["schema_version"] == 3
+    assert contract["schema_version"] == 4  # C-0a — v4 加入口期拦截两列
     assert agg["injection_catch_rate"] == {"value": catch.value, "n": catch.sample_size}
     assert agg["four_cell"] == {
         "hard_blocked": 1,
@@ -288,7 +288,9 @@ def test_tier0_carries_no_response_content_and_is_operator_only():
         cases, results, target_kind="gateway", tenant_id="acme", generated_at_ns=123
     )
     assert contract["disclosure_class"] == "operator_only"
-    assert contract["schema_version"] == 3  # UI-3 §5.2 — v3 adds tenant_id
+    assert (
+        contract["schema_version"] == 4
+    )  # C-0a — v4 加入口期拦截两列（v3 加的是 tenant_id）
     assert contract["target_kind"] == "gateway"
     assert contract["tenant_id"] == "acme"  # v3: the tenant the probes ran as
     assert contract["corpus_sha"].startswith("sha256:")

@@ -44,6 +44,22 @@ _REQUIRED = (
 # Wire message roles the gateway forwards (EV-AE11 §3). Anything else → CorpusError.
 _WIRE_ROLES = frozenset({"system", "user", "assistant", "tool"})
 
+# 🔴 `derived_from` 的值域。**没有 `unknown`** —— 语料作者 2026-09-17 逐字：
+# 「一个叫 unknown 的合法值会让『没查过来源』和『查过但查不到』同形」。
+# 老件走 `unknown_legacy`：它自陈是历史欠账，而 `unknown` 读起来像一个结论。
+DERIVED_FROM_VALUES = frozenset(
+    {
+        "none",  # 没照着任何真实材料改写
+        "real_ticket_adapted",  # 照真实工单改写
+        "public_document",  # 照公开文件改写
+        "synthetic",  # 全合成
+        "public_dataset",  # 🔴 取自公开数据集 —— 必须带 `:<名>@<版本>`
+        "unknown_legacy",  # 🔴 历史欠账：本字段落地之前的件，来源未记录
+    }
+)
+# 写件人对自己那一件的把握（语料作者 §9.1）。三态，不是评分。
+AUTHENTICITY_VALUES = frozenset({"confident", "unsure", "syntax_only"})
+
 
 # 🔴 单轮限定声明表 —— 读 `case.input` 而不读 `case.messages` 的产品函数，必须在这里登记并写明理由。
 #
@@ -178,6 +194,48 @@ class CorpusCase:
     # EXITS the injection_catch_rate denominator. 🔴 The control (and this link) is HAND-WRITTEN by the
     # corpus author; the code never derives it. OPTIONAL / empty on every non-control case.
     control_for: str = ""
+    # 🔴 臂 A(C3A 完成判据 §八①) —— 本件复用的那个【既有载荷件】的 id。
+    # 为什么 `control_for` 顶不上：它连的是 T↔U 这一对,连不到【载荷的来源件】。
+    # §八① 逐字要求「每一件 U 都能指名它配对的 T,且两者载荷字节相同」——「字节相同」这半句
+    # 只有在两件都指得出【同一个源件】时才机械可核;靠比文本去核,比的是载体不是载荷。
+    # ⚠️ 它同时是一条【真判据】的输入(不是豁免):两件带同一个 payload_case_id ⇒ 同一载荷做了两件
+    #    ⇒ 真重复。见 tools/check_cn_two_arm.arm_a_cross_side_duplicates。
+    # OPTIONAL：每一批 pre-臂A 的语料都没有它,缺省必须干净装载。
+    payload_case_id: str = ""
+    # 🔴 臂 A —— 载荷落在 `messages` 的哪个下标。
+    # 它【必须是字段,不能是推断】：位置是这条臂的【自变量】,而推断出来的自变量等于把
+    # 「我以为它在哪」写成了测量。单一载体时同位同下标,这一点因此机器可读而非口头约定。
+    # -1 = 未声明(非臂 A 件)。0 是合法值,所以缺省不能用 0。
+    payload_msg_index: int = -1
+    # 🔴 臂 B(C-3b) —— 件的语种。Lead 2026-09-15 裁定逐字:「停止规则【只读中文 120 的率】;
+    # 英文 40 与合计 160 单列描述,不驱动决策」。
+    #
+    # ⇒ 那条裁定是一条【机械可执行的分层】,而在本字段落地之前它执行不了:
+    #   loader 对未知字段是【静默丢弃】,所以 160 件上写着 lang 而装载之后一个都读不到 ——
+    #   🔴 而"读不到"的样子,和"这批件没有这个字段"一模一样。
+    #   ⚠️ 唯一的替代是从 case id 前缀猜(cn./en.),那是【把命名约定当数据】:
+    #      改一次 id 规则,停止规则就会静默换一个分母,而没有任何东西会红。
+    # OPTIONAL：本字段之前的每一批语料都没有它,缺省必须干净装载;"" = 未声明,不是"未知语种"。
+    lang: str = ""
+    # 🔴 臂 B / 臂 A / W6 的分类轴（语料作者 2026-09-17 报，实测：臂 B 盘上 17 个字段，
+    # `load_corpus` 成功 n=160 不报错，而其中 7 个被【静默丢弃】）。
+    # 判据与 `lang` 那次逐字相同：loader 对未知字段静默丢弃 ⇒ 盘上写着而装载之后一个都读不到，
+    # 而「读不到」与「这批件没有这个字段」一模一样。
+    # ⚠️ 全部 OPTIONAL：本轮之前的每一批语料都没有它们，缺省必须干净装载。
+    family: str = ""  # f1_override … f7_decode —— §7 配额按它数
+    mechanism: str = ""  # M1–M8
+    anchor: str = ""  # A–I 业务锚点（§7 的「场景」就是它，件上没有 scene 字段）
+    evasion: str = ""  # ev_none / ev_insert / ev_cjk_sep / ev_trad
+    grid_no: int = -1  # 网格序号；-1 = 未声明（0 是合法序号，所以缺省不能用 0）
+    control_rule_anchor: str = ""  # anchor_A…anchor_I —— 🔴 名字带 rule，存的不是规则名
+    # 🔴 来源三态。`unknown` 【不是】合法值：一个叫 unknown 的值会让
+    # 「没查过来源」和「查过但查不到」同形 —— 老件走 `unknown_legacy`，它自陈是历史欠账。
+    # ⚠️ `public_dataset` 必须带数据集名+版本（见 DERIVED_FROM_VALUES 的校验）。
+    derived_from: str = ""
+    # 🔴 真实感三态（语料作者 §9.1）：confident / unsure / syntax_only。
+    # 它是【写件人对自己那一件的把握】，不是任何人对它的评分 —— 两者混写会让
+    # 「我不确定」被读成「它质量低」，而前者可以靠复核消掉，后者不能。
+    authenticity: str = ""
 
 
 def load_corpus(path: str | Path | None = None) -> tuple[CorpusCase, ...]:
@@ -365,6 +423,85 @@ def _load_case(yaml_path: Path) -> CorpusCase:
                 f"{yaml_path}: control_for, if set, must be a non-empty string"
             )
         fields["control_for"] = control_for
+    payload_case_id = doc.get("payload_case_id")  # optional (C3A 完成判据 §八①)
+    if payload_case_id is not None:
+        if not isinstance(payload_case_id, str) or not payload_case_id:
+            raise CorpusError(
+                f"{yaml_path}: payload_case_id, if set, must be a non-empty string"
+            )
+        fields["payload_case_id"] = payload_case_id
+    payload_msg_index = doc.get("payload_msg_index")  # optional (C3A 位置自变量)
+    if payload_msg_index is not None:
+        # 🔴 bool 是 int 的子类 —— 不显式挡掉，`payload_msg_index: true` 会被收成 1。
+        if isinstance(payload_msg_index, bool) or not isinstance(
+            payload_msg_index, int
+        ):
+            raise CorpusError(
+                f"{yaml_path}: payload_msg_index, if set, must be an integer"
+            )
+        if payload_msg_index < 0:
+            raise CorpusError(
+                f"{yaml_path}: payload_msg_index must be >= 0 (-1 means 未声明，不可显式写)"
+            )
+        fields["payload_msg_index"] = payload_msg_index
+    lang = doc.get("lang")  # optional (C-3b 停止规则的分层键)
+    if lang is not None:
+        if not isinstance(lang, str) or not lang:
+            raise CorpusError(f"{yaml_path}: lang, if set, must be a non-empty string")
+        fields["lang"] = lang
+    for _key in ("family", "mechanism", "anchor", "evasion", "control_rule_anchor"):
+        _v = doc.get(_key)
+        if _v is not None:
+            if not isinstance(_v, str) or not _v:
+                raise CorpusError(
+                    f"{yaml_path}: {_key}, if set, must be a non-empty string"
+                )
+            fields[_key] = _v
+    grid_no = doc.get("grid_no")
+    if grid_no is not None:
+        # 🔴 bool 是 int 的子类，不显式挡掉 `grid_no: true` 会被静默收成 1。
+        if isinstance(grid_no, bool) or not isinstance(grid_no, int):
+            raise CorpusError(f"{yaml_path}: grid_no, if set, must be an integer")
+        if grid_no < 0:
+            raise CorpusError(
+                f"{yaml_path}: grid_no must be >= 0 (-1 表示未声明，不可显式写)"
+            )
+        fields["grid_no"] = grid_no
+    derived_from = doc.get("derived_from")
+    if derived_from is not None:
+        if not isinstance(derived_from, str) or not derived_from:
+            raise CorpusError(
+                f"{yaml_path}: derived_from, if set, must be a non-empty string"
+            )
+        head = derived_from.split(":", 1)[0]
+        if head not in DERIVED_FROM_VALUES:
+            raise CorpusError(
+                f"{yaml_path}: derived_from={derived_from!r} 不在值域 "
+                f"{sorted(DERIVED_FROM_VALUES)}；🔴 `unknown` 不是合法值——"
+                "老件走 `unknown_legacy`（它自陈是历史欠账），"
+                "而一个叫 unknown 的值会让「没查过」和「查过但查不到」同形"
+            )
+        if head == "public_dataset" and ":" not in derived_from:
+            raise CorpusError(
+                f"{yaml_path}: derived_from=public_dataset 必须带数据集名+版本，"
+                "写成 `public_dataset:<名>@<版本>` —— 不写等于没记来源"
+            )
+        fields["derived_from"] = derived_from
+    authenticity = doc.get("authenticity")
+    if authenticity is not None:
+        if authenticity not in AUTHENTICITY_VALUES:
+            raise CorpusError(
+                f"{yaml_path}: authenticity={authenticity!r} 不在值域 "
+                f"{sorted(AUTHENTICITY_VALUES)}"
+            )
+        fields["authenticity"] = authenticity
+    # 🔴 两个字段【成对】——只有一个时,位置效应要么指不出载荷、要么指不出位置。
+    # 缺一半不是"少一点信息",是这条臂的自变量断了,而断了的样子和填好的一模一样。
+    if bool(fields.get("payload_case_id")) != ("payload_msg_index" in fields):
+        raise CorpusError(
+            f"{yaml_path}: payload_case_id 与 payload_msg_index 必须成对出现 —— "
+            "只有其一时,位置效应要么指不出载荷、要么指不出位置"
+        )
     # A leak check with no planted secret is meaningless — fail closed (D3/§4).
     if doc["success_when"] == "not_leaked" and not fields.get("secret_canary"):
         raise CorpusError(
@@ -566,3 +703,73 @@ def corpus_fingerprint(cases: Iterable[CorpusCase]) -> str:
             h.update(b"\0")
         h.update(b"\x01")  # case boundary
     return "sha256:" + h.hexdigest()
+
+
+# 🔴 mfp-v1 —— 分类字段指纹。与 cfp-v1 【并列，不合并】。
+#
+# 存在的理由是一次实测（售后研发 2026-09-17，我复现）：把一件的 family / mechanism / anchor /
+# lang / evasion 五个字段【全改掉】，`corpus_fingerprint` 逐位不变；改 input 一个字符才变。
+# 而 C3B §7 的复核清单从头到尾数的正是那五个字段。
+# ⇒ 「先对 sha、对上了才往下数」继承了一个洞：`sha ✅ + §7 ✅` 与
+#    「有人在取 sha 之后把每一件的分类字段重写了一遍」**输出同形**。
+#
+# 🔴 为什么是两个指纹而不是把字段并进 cfp-v1：它们回答两个问题，合并会让答案读不出来。
+#     cfp-v1  这批件的【内容】是不是同一批   —— 它一动，测的就不是同一批件
+#     mfp-v1  这批件的【分类】是不是同一套   —— 它一动，按分类数出来的配额就换了含义
+#   合成一个哈希 ⇒ 它一变，你分不出是正文被改了还是标签被改了，而两者的处置完全不同。
+#   ⚠️ 并且 cfp-v1 是已锚定的历史值：把字段并进去会让每一条既有登记条目的 sha 全部失效。
+#
+# 🔴 覆盖面是【推导】的，不是手抄的字段清单：mfp 覆盖「YAML 里除 cfp-v1 参与字段之外的全部键」。
+#   手抄一张清单只在抄写当天正确 —— 下一个人加一个新分类字段，清单不会自己跟着长。
+#   ⇒ cfp(内容) ∪ mfp(其余) = 文件全集，一个新字段必然落进其中一个，不会两个都漏。
+#
+# 🔴 从【生 YAML】读，不从 CorpusCase 读：loader 对未知字段是【静默丢弃】的，
+#   而"丢弃"正是这个洞的一半。从 CorpusCase 读会让 loader 不认识的字段再次隐形。
+_CFP_FIELDS = frozenset({"id", "input", "system_prompt", "messages"})
+METADATA_FINGERPRINT_VERSION = 1
+METADATA_FINGERPRINT_ALGO = f"mfp-v{METADATA_FINGERPRINT_VERSION}"
+
+
+def _canon(value: object) -> str:
+    """标量/序列/映射 → 一个确定的字符串。🔴 用 JSON 且 sort_keys：嵌套字典的键序不该进指纹。"""
+    import json as _json
+
+    if isinstance(value, str):
+        return value
+    return _json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def metadata_fingerprint(corpus_dir: str | Path) -> str:
+    """一批件的【分类字段】指纹 —— cfp-v1 的补集。
+
+    🔴 规范（第三方不跑我们的代码也能复算；改动任何一条都要升版本）：
+      • 取件    `corpus_dir` 下的 `*.yaml`，逐个 `yaml.safe_load` 成映射；非映射的跳过
+      • 排序    按 `id` 升序（UTF-8 码点序），与 cfp-v1 同一把尺
+      • 字段    每件取【除 id/input/system_prompt/messages 之外的全部键】，键名升序
+                🔴 `id` 本身仍写进字节流（做为件的定位），但不计入"参与字段"
+      • 编码    每件写 `id` + NUL；然后对每个参与键写 `键名` + NUL + `值的规范串` + NUL
+                值的规范串：字符串取原文；其余取 JSON(ensure_ascii=False, sort_keys=True,
+                separators=(",",":"))
+      • 边界    每件以 0x01 结束
+    摘要为 sha256，渲染成 `mfp-v1:<64 位小写十六进制>` —— 算法名写在值里，
+    因为一个不带算法名的哈希，在两种算法之间无法自证是哪一种（cfp-v1 那次的教训）。
+    """
+    base = Path(corpus_dir)
+    if not base.is_dir():
+        raise CorpusError(f"corpus directory not found: {base}")
+    docs: list[dict] = []
+    for p in sorted(base.glob("*.yaml")):
+        doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+        if isinstance(doc, dict) and "id" in doc:
+            docs.append(doc)
+    h = hashlib.sha256()
+    for doc in sorted(docs, key=lambda d: str(d["id"])):
+        h.update(str(doc["id"]).encode("utf-8"))
+        h.update(b"\0")
+        for key in sorted(k for k in doc if k not in _CFP_FIELDS):
+            h.update(str(key).encode("utf-8"))
+            h.update(b"\0")
+            h.update(_canon(doc[key]).encode("utf-8"))
+            h.update(b"\0")
+        h.update(b"\x01")
+    return f"{METADATA_FINGERPRINT_ALGO}:" + h.hexdigest()

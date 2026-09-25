@@ -319,11 +319,18 @@ _NOT_IN_CURATION: dict[str, str] = {
     "benign_compliance_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C, not authored yet)",
     "benign_over_refusal_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C)",
     "benign_soft_flag_no_comply_rate": "needs the benign-marker corpus (EV-CAPCTRL 提交 C)",
-    # Driven by tools/eval_report.py's own verticals (they need the Tier-2 drain / a type-2 record).
-    "wire_indirect_catch_rate": "eval_report vertical (llm01_wire_indirect)",
-    "output_neutralize_inert_rate": "eval_report vertical — reads the type-2 hint_variables (EV-AE13)",
-    "output_neutralize_fidelity_rate": "eval_report vertical — reads the type-2 hint_variables (EV-AE13)",
-    "cost_runaway_caught": "eval_report vertical (cost/runaway probes)",
+    # 🔴 这一族条目**全部**在 C-3a-1 / C-3a-2 里离开了本表。它们共用的理由曾是
+    # 「eval_report vertical」—— 而那句话从来只解释了它**在哪里也跑**，没有解释它为什么
+    # **不产出可引的 Measurement**。一条运维 CLI 跑过，不等于「这条路测过没有」在产物上答得出来。
+    # ⇒ 一个解释不了缺席的理由，不是理由；它让缺口以「已声明」的形态继续静默。
+    #
+    # 🔴 C-3a-2 那三条**全部离开了本表**（2026-09-11 接线）。留档它们为什么曾在这里：
+    #   旧理由是 `"eval_report vertical"` —— 那句话只解释了它**在哪里也跑**，没有解释它为什么
+    #   **不产出可引的 Measurement**。一个解释不了缺席的理由，不是理由。
+    #   接线当天还证出一件更一般的事：本仓那道 CI 机制门枚举的是 `{p.factory for p in CURATION}`
+    #   ⇒ **它的作用域就是"已接线的"**，所以在接上之前它对这三个指标是**瞎的**，不是放行的。
+    #   一接上就同时拒绝了三个（发 ratio、无 CI、无 interval_basis）。
+    #   ⇒ 🔴 **接线不是"让它出数"，接线是把一个指标放进所有既有门的视野。**
     # Needs a constructor ARG; Producer.factory() is no-arg (EV-PAIR-A §3, deliberate).
     "within_cost_budget": "needs a budget argument — Producer.factory() is no-arg by design",
     # 🔴 会话级误伤率 —— 判据与接线已落，**两条候选臂今天都绑不上**，理由不同且都不是疏漏：

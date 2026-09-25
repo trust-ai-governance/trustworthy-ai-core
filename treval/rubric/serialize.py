@@ -117,6 +117,10 @@ AVAILABILITY_VALUES = (
     "n/a_no_upstream",
 )
 NO_UPSTREAM = "n/a_no_upstream"
+# 🔴 架构性缺席的**专名**，给它一个名字是因为已经有第二处要引用它（`cli/pair.py` 的判官指纹格）。
+# 裸模型上没有网关 ⇒ 没有判官 ⇒ 没有判官指纹，而那不是"缺数据"，是"这一侧按结构不可能有"。
+# ⚠️ 不在别处硬编码这个字符串：两处各own一份同一个词，就是迟早不等的那个形状。
+NEEDS_GATEWAY = "n/a_needs_gateway"
 
 # (evidence_requirement × target_kind) → availability (EV-FWD §5). For `gateway` EVERY
 # requirement is `measured` (the governed path produces every kind of evidence). Under a
@@ -204,6 +208,38 @@ _OFFLINE_RECOMPUTABLE: dict[str, str] = {
     # ⇒ third_party，与 `en` 同档。分母由 `--denominator-manifest` 的判据产生，而那份清单
     # 也可随产物给出（它自带 sha256）—— 复算所需的两样都在。
     "inj": OFFLINE_THIRD_PARTY,
+    # 🔴 C-3c 贴边臂 与 use-mention-18 —— 两条中文臂都在【仓外受控卷】⇒ holder_only，与 cn 同理由。
+    # 这道门第三次拦住同一个人（我）：接线时我改了 CORPUS_SETS，没改这里。
+    # ⚠️ 它值得记的地方在于【它拦得早】—— w6 那次是 10 次真上游调用之后在出包时才红，
+    #    而那条单测把同一次失败提前到了接线当天。一道拦得晚的门与一道拦得早的门，
+    #    拦的是同一件事，代价差一整趟跑。
+    "cn_edge": OFFLINE_HOLDER_ONLY,
+    "cn_um18": OFFLINE_HOLDER_ONLY,
+    "cn_inj": OFFLINE_HOLDER_ONLY,
+    # 🔴 臂B(中文卷) 与 臂A(英文 P1 卷) 同样在仓外受控卷 ⇒ holder_only。
+    "armb": OFFLINE_HOLDER_ONLY,
+    "arma": OFFLINE_HOLDER_ONLY,
+    # 英文攻击网格臂同样在仓外受控卷（EN-P1 卷）⇒ holder_only。
+    "en_grid": OFFLINE_HOLDER_ONLY,
+    # 🔴 P3 设计臂同在仓外受控卷（EN-P1 卷）⇒ holder_only。
+    # 这道门第四次拦住同一个人（我）：接线 p3 时我改了 CORPUS_SETS，又没改这里。
+    # ⚠️ 而这一次它拦的东西与前三次不同，值得单记：p3 的数本来就是 diagnostic_only、
+    #    不进验收 —— 很容易顺手觉得"反正不对外，标什么都行"。恰恰相反：
+    #    一个【不进验收】的数被引用时，读者更没有别的线索去判断它能不能复算。
+    "p3": OFFLINE_HOLDER_ONLY,
+    # 🔴 A2 留出臂同在仓外受控卷（EN-P1 卷）⇒ holder_only。
+    # ⚠️ 它是 read-once：第三方即便拿到卷也只能复算【这一次】的数，不能重跑产生新数 ——
+    #    而本格答的是"谁能重跑"，不是"谁能复算"。两者今天同为 holder_only，理由不同。
+    "en_a2": OFFLINE_HOLDER_ONLY,
+    # F1 析因证伪臂同在仓外受控卷（EN-P1 卷）⇒ holder_only。
+    "en_f1": OFFLINE_HOLDER_ONLY,
+    # A4a 中途探测臂同在仓外受控卷 ⇒ holder_only。
+    "en_a4a": OFFLINE_HOLDER_ONLY,
+    "en_a4b": OFFLINE_HOLDER_ONLY,
+    "en_a4c": OFFLINE_HOLDER_ONLY,
+    "en_a3": OFFLINE_HOLDER_ONLY,
+    "en_a5": OFFLINE_HOLDER_ONLY,
+    "en_a6": OFFLINE_HOLDER_ONLY,
 }
 
 

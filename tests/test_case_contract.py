@@ -74,7 +74,18 @@ _EXCLUSION_TO_ROW_SIGNAL = {
 # 🔴 A3 — evaluated_miss 不是排除：它【留在分母】当漏检（reacted via non-injection while injection was
 # evaluated）。recompute 用 catch_attribution=null 复现它当 miss（与"未反应"的 null 同为分母内漏检），
 # 故它无需独立案级信号 ⇒ 归为非排除。
-_NON_EXCLUSION_FIELDS = {"refs", "caught", "prefix_fallback", "evaluated_miss"}
+# 🔴 C-0a — `stage_cells` 归【非排除】：它是分母**内部**的划分（拦截发生在哪一阶段），
+# 不从分母里剔任何一件（四格加总恒等于 len(refs)，由 test_c0a 的
+# `test_the_four_stage_cells_are_mutually_exclusive_and_add_up` 钉住）。
+# ⚠️ 它仍然有案级信号（行上的 `denied_at_decision`）并被 `recompute_from_cases` 读取 ——
+# 但那是「新聚合数能被重加」这条要求，不是「排除要有信号」这条。两条不许混。
+_NON_EXCLUSION_FIELDS = {
+    "refs",
+    "caught",
+    "prefix_fallback",
+    "evaluated_miss",
+    "stage_cells",
+}
 
 
 def test_every_catch_exclusion_has_a_case_row_signal():

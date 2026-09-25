@@ -24,7 +24,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from treval.citability import OBSERVABLE_BIAS_NOTE, OBSERVABLE_BIASED_IDS
+from treval.citability import (
+    OBSERVABLE_BIAS_NOTE,
+    OBSERVABLE_BIASED_IDS,
+    judge_imprint_state,
+)
+from treval.rubric.serialize import NEEDS_GATEWAY
 from treval.stats import binomial_ci
 
 EXIT_OK = 0
@@ -312,6 +317,20 @@ def pair_bundles(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
             # reader see the two sides are not the same thing — recomputability is the same kind of thing.
             "raw_offline_recomputable": raw.get("offline_recomputable"),
             "gateway_offline_recomputable": gw.get("offline_recomputable"),
+            # 🔴 C-1b 后半件① —— 网关侧的【判官指纹】随 delta 走，与上面那几对同一形状。
+            # 为什么必须随数走：这个 delta 被归因给「治理」，而治理里有判官；判官的身份这一跑
+            # 有没有被钉住，是一个**缺席不留痕**就再也查不回来的事实（2026-09-05 的 0 字节指纹
+            # 文件，跑照常继续，产物里没有任何字段会红、会问、会被搜到）。
+            # ⚠️ 它是**披露格，不是门**：值为 not_declared 不进 citable_blockers、不拒发 delta ——
+            # 诊断跑被拦住就什么也拿不到，而那个代价比"看得见的缺席"大。
+            "gateway_judge_imprint": judge_imprint_state(gw.get("provenance")),
+            # 🔴 裸模型侧是【架构性缺席】，用仓里已有的专名，**不是**从它的 provenance 算出来的：
+            # 没有网关 ⇒ 没有判官 ⇒ 不可能有判官指纹。所以这一格恒等于这个词，而这正是它必须
+            # 被印出来的理由 —— 一个永远是同一个值的格子，读的人一眼就知道这一侧从来没有过。
+            # ⚠️ 两侧**不做对称比较**，也不折成一个布尔：在这条轴（raw×gateway）上"不对称"是
+            # 设计事实不是发现，报它会恒真 ⇒ 假红一样贵，它训练人去忽略这条门。
+            # 前后（时间轴）的不对称具名归 C2A0，那里才有"两次跑比对"这条路。
+            "raw_judge_imprint": NEEDS_GATEWAY,
             "traffic_tier": raw_tier,
             "statistical": True,  # output-side rates are model-nondeterministic; small n ≠ conclusion
             "citable": not blockers,  # disclosure verdict; the delta is emitted either way (§5.4)

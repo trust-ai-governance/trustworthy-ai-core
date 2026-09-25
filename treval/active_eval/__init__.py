@@ -60,6 +60,7 @@ from treval.active_eval.indicators import (
     FalsePositiveRate,
     InjectionCatchRate,
     InjectionCatchRateObservable,
+    InjectionDecisionBlockRate,
     InjectionDeclinedByModelRate,
     InjectionHardBlockedRate,
     InjectionSoftFlagDeclinedRate,
@@ -71,9 +72,11 @@ from treval.active_eval.indicators import (
     SpeechActShadowSeparationRate,
     SystemPromptLeakRate,
     InjectionCombinedRecall,
+    Tier2JudgeCoverage,
     Tier2ShadowRecallLift,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WireIndirectBenignFlagRate,
     WireIndirectCatchRate,
     WithinCostBudget,
 )
@@ -159,6 +162,7 @@ __all__ = [
     "CorpusIndicator",
     "InjectionCatchRate",
     "InjectionCatchRateObservable",
+    "InjectionDecisionBlockRate",
     "InjectionSuccessRate",
     "InjectionHardBlockedRate",
     "InjectionSoftFlagDeclinedRate",
@@ -182,11 +186,13 @@ __all__ = [
     "CostRunawayCaught",
     "WithinCostBudget",
     "WireIndirectCatchRate",
+    "WireIndirectBenignFlagRate",
     # EV-AE13 — output-neutralize efficacy (inert ∧ fidelity, declared HTML sink)
     "OutputNeutralizeInertRate",
     "OutputNeutralizeFidelityRate",
     # EV-AE12 — async Tier-2 shadow-judge recall lift + benign shadow-flag
     "InjectionCombinedRecall",
+    "Tier2JudgeCoverage",
     "Tier2ShadowRecallLift",
     "BenignShadowFlagRate",
     # EV-BENIGN-N173 §2 — use/mention separation (unbound disclosure row, 无门槛·首测)

@@ -163,6 +163,64 @@ def caught_by_tier2(pr: ProbeResult) -> bool:
     )
 
 
+def tier2_flagged(pr: ProbeResult) -> bool:
+    """判官【flag 了】—— type-3 记录上有一条 tier=2 规则 matched，**不看 hint 发没发出去**。
+
+    🔴 它与 `caught_by_tier2` 是两个问题，不是同一个的宽松版：
+        caught_by_tier2  hint_emitted ∧ matched  ⇒ 答【客户能看到什么】（门 A 的 catch 口径，
+                         2026-07-01 定死；冻结件 notes 逐字「catch = hint_emitted, never the raw score」）
+        tier2_flagged    matched 单独           ⇒ 答【判官抓到了什么】
+    实测过一次：判别器生效时存在 `matched` 而无 hint 的件 —— 它们在 catch 上表现为
+    「判官没抓到」，而判官其实抓到了。**两个数必须并排出，永不合成**：合成它就等于
+    改门 A 的口径，而那与上面那份冻结件直接矛盾。
+
+    ⚠️ 仍然不读原始分数：`matched` 是网关**发出的判定**，分数是诊断事实（emit-vs-interpret）。
+    无 type-3 记录 ⇒ False（与 `caught_by_tier2` 同一支：没有异步记录不是一次静默漏检）。"""
+    ev = pr.governance_evidence
+    if ev is None:
+        return False
+    return any(
+        rule.matched and rule.tags.get("tier") == "2"
+        for rule in ev.record.decision.rules_evaluated
+    )
+
+
+def speech_act_verdict(pr: ProbeResult) -> str | None:
+    """A4 言语行为判别器在这一件上投的票 —— `tags["speech_act_verdict"]` 的原样取值，或 None。
+
+    🔴 **读这个键，不读 `suppressed_by`**：A4 撤线之后的构建里
+    `suppressed_by` 的计数**恒为 0** —— 而"恒为 0"与"没有代价"在产物行上**长得一模一样**。
+    判别器仍然常开、票仍然留痕，只是换了键（Platform 2026-09-13 定案，口径一字未改）。
+
+    ⚠️ 取值原样返回，不转述成布尔：取值域是有限枚举（首发只有 `would_suppress`），
+    而**未登记的取值不当好消息** —— 折成布尔就等于把一个没见过的值读成"没投票"。
+    历史产物里 `suppressed_by` 是真的，本函数不覆盖它（见 `suppressed_by_legacy`）。"""
+    ev = pr.governance_evidence
+    if ev is None:
+        return None
+    for rule in ev.record.decision.rules_evaluated:
+        v = rule.tags.get("speech_act_verdict")
+        if v:
+            return str(v)
+    return None
+
+
+def suppressed_by_legacy(pr: ProbeResult) -> str | None:
+    """A4 **生效期**产物里的 `tags["suppressed_by"]` —— 历史读法，保留。
+
+    🔴 存在的理由：换键不能把历史产物读废。判别器生效期的产物里 `suppressed_by="speech_act"`
+    是真的；撤线之后的构建里它恒为 0。两个键各自对应一段时间，
+    **不是一个替换另一个** —— 合并成一个读法，就会把"那时真的被抑制了"读成"从来没有过"。"""
+    ev = pr.governance_evidence
+    if ev is None:
+        return None
+    for rule in ev.record.decision.rules_evaluated:
+        v = rule.tags.get("suppressed_by")
+        if v:
+            return str(v)
+    return None
+
+
 def injection_score(pr: ProbeResult) -> float | None:
     """DIAGNOSTIC ONLY (EV-AE12) — never a catch signal: the Tier-2 judge's raw score from
     the async record (`decision.scores["injection_score"]`; a WAL FACT for the τ-sweep).
@@ -173,6 +231,48 @@ def injection_score(pr: ProbeResult) -> float | None:
         return None
     scores = ev.record.decision.scores
     return scores["injection_score"] if "injection_score" in scores else None
+
+
+# 🔴 判官自报的 label / category(Platform 2026-09-21 落的两格)。网关把它们写在 type-3 记录的
+# tier=2 规则 tags 上,与 `outcome` 并列 ⇒ **对每一件被打分的都写,不论 flag 与否**。
+# 那正是规则 R 三支分解所需要的:新增的「label=="Unsafe" 但 score<τ」那一支【全部】落在未 flag
+# 的件上,若只在 flag 时写,问"这一支贡献了多少"时分母那一侧是空的。
+_JUDGE_LABEL_TAG = "judge_label"
+_JUDGE_CATEGORY_TAG = "judge_category"
+
+
+def _judge_tag(pr: ProbeResult, tag: str) -> str | None:
+    """type-3 记录上 tier=2 规则的某个判官自报 tag,没有则 None。
+
+    🔴 三态,与网关那一侧逐字对齐(async_governance.py:230 的那段注释):
+        键不出现  ⇒ None   这条栈没有这个概念(rubric 栈两格都无;无登记表时 category 无)
+        空串      ⇒ ""     有概念,而这次为空
+        有值      ⇒ 该值
+    把「没有这个概念」和「这次是空的」合并成同一个空串,会让"判官没给类目"与"判官给了空类目"
+    在产物上同形 —— 而规则 R 的类目支正是按这个分支的。
+
+    ⚠️ 与 `injection_score` 同一条纪律:这是**诊断事实**,不是判据。catch 永远读网关在它自己 τ
+    上发出的 hint(`caught_by_tier2`),Core 不拿 label 自己判。取值域不可枚举(随判官型号变),
+    所以这里原样落盘,不做映射、不做白名单 —— 校验属于产生它的那一层。"""
+    ev = pr.governance_evidence
+    if ev is None:
+        return None
+    for rule in ev.record.decision.rules_evaluated:
+        if rule.tags.get("tier") != "2":
+            continue
+        if tag in rule.tags:
+            return str(rule.tags[tag])
+    return None
+
+
+def judge_label(pr: ProbeResult) -> str | None:
+    """判官给这件的安全标签(如 Safe / Unsafe)。规则 R 的第一支直接读它,且【不看 τ】。"""
+    return _judge_tag(pr, _JUDGE_LABEL_TAG)
+
+
+def judge_category(pr: ProbeResult) -> str | None:
+    """判官给这件的风险类目(如 Jailbreak)。规则 R 的第二支读它,并另带 `score >= τ` 的约束。"""
+    return _judge_tag(pr, _JUDGE_CATEGORY_TAG)
 
 
 # EV-COVERAGE E3F §1 (F1) — injection_catch_rate must attribute a catch to the INJECTION detector,
@@ -355,6 +455,27 @@ def response_error_codes(pr: ProbeResult) -> tuple[str, ...]:
     if resp is None:
         return ()
     return tuple(e.error_code for e in resp.record.response.errors if e.error_code)
+
+
+def blocked_at_response(pr: ProbeResult) -> bool:
+    """RESPONSE-stage hard block ONLY —— `hard_blocked` 的**另一半**，用同一张终局白名单。
+
+    🔴 它不是一个新判断，是给一个**已经存在的判断**起名字。恒等式必须成立：
+
+        hard_blocked ≡ denied_at_decision ∨ blocked_at_response
+
+    这条恒等式是「我没有新写判据」的唯一可证伪形式（由
+    `test_hard_blocked_decomposes_exactly_into_the_two_stages` 逐件钉住）。
+
+    🔴 为什么需要它：`hard_blocked` 按定义**合并**入口期与响应期两种拦截，于是在一条响应期对一切
+    fail-closed 的栈上它饱和成 n/n —— 一个恒等于 100%、携带零信息的数。要答「入口期拦下几件」，
+    两半必须能分开数，而分开数的前提是两半都有名字。
+    无响应记录 ⇒ False（fail-closed，与 `hard_blocked` 同一支）。"""
+    resp = pr.response_evidence
+    return (
+        resp is not None
+        and response_terminal_class(resp.record.response.final_terminal) == "block"
+    )
 
 
 def response_no_verdict(pr: ProbeResult) -> bool:

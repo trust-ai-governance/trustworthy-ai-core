@@ -1330,6 +1330,13 @@ def test_smoke_case_contract_re_adds_across_every_response_terminal(tmp_path):
     assert "no_verdict" in tv, f"terminal_verdict 未记录 no_verdict: {tv}"
 
 
+# 2026-09-24: arm name changed from the real p1 arm to a SYNTHETIC name that is in no registry.
+# 🔴 原因：那天把臂名解析提到四道跑前门【之前】之后，冻结门与一次性门第一次真的看见了
+#   重映射后的臂名 —— 而本测试用的是【真实已消耗臂的名字】配 tmp_path 的合成语料，
+#   于是冻结门当场红（实测 sha 与冻结值不符）、一次性门也会红（那条臂已消耗）。
+# 两道门红得都对：它们防的正是「拿一条花掉的留出臂再跑一次」。
+# ⇒ 本测试要验的是『--benign-arm 有没有流到采集端』，与臂是谁无关 ⇒ 换成合成名。
+# 🔴 顺带记下：这三条测试此前是绿的，而绿的一半原因是那两道门看不见重映射后的名字。
 def test_the_benign_arm_flag_actually_reaches_the_collector(tmp_path, capsys):
     """🔴 `--benign-arm` 从 CLI 流到 collect_measurements 的那一段，此前【没有任何测试走过】。
 
@@ -1378,7 +1385,7 @@ def test_the_benign_arm_flag_actually_reaches_the_collector(tmp_path, capsys):
                 gateway="http://fake",
                 corpus=str(tmp_path),
                 corpus_set="w2",
-                benign_arm="llm01_benign_holdout_p1",
+                benign_arm="llm01_benign_holdout_synthetic_testarm",
                 agent="",
                 out=str(tmp_path / "b.json"),
             )
@@ -1396,5 +1403,6 @@ def test_the_benign_arm_flag_actually_reaches_the_collector(tmp_path, capsys):
     ]
     assert looked_in, "错误信息必须说出它去找的是哪个路径"
     assert all(
-        pathlib.Path(p_).name == "llm01_benign_holdout_p1" for p_ in looked_in
+        pathlib.Path(p_).name == "llm01_benign_holdout_synthetic_testarm"
+        for p_ in looked_in
     ), f"🔴 --benign-arm 没有流到采集端 —— 它去找的是 {looked_in}，不是重映射后的臂名"

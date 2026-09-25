@@ -100,14 +100,23 @@ def test_jian1_the_english_run_is_untouched():
     # What reds it: put a CN producer into CURATION ⇒ every English run starts reading Chinese corpora.
     from treval.cli.collect import CURATION
 
+    # 🔴 C-3a-1（2026-09-11）新增 `llm01_indirect_benign` / `llm01_wire_indirect` 两条 —— 那是本单
+    # **有意**的落点（两条臂本来就在公开仓，缺的是消费方），不是一次 CN 泄漏。
+    # ⚠️ 改这张清单只是为了让它继续说真话：它守的是「CN 语料不许混进英文跑」，那一条由下面
+    # 那行 `llm01_cn_` 前缀断言承担，本行只是清单的当前形状。一条被改宽的清单如果不写明
+    # 改宽的**理由**，下一次有人加臂时会照着"上次也是改清单"办，而那次可能不是有意的。
     assert sorted({p.corpus_subdir for p in CURATION}) == [
         "llm01_benign_holdout",
+        "llm01_indirect_benign",
         "llm01_prompt_injection",
         "llm01_speech_act",
+        "llm01_wire_indirect",
         "llm02_sensitive_disclosure",
         "llm05_improper_output",
+        "llm05_neutralize",
         "llm06_tool_scope",
         "llm07_system_prompt_leak",
+        "llm10_unbounded_consumption",
     ]
     assert not any(p.corpus_subdir.startswith("llm01_cn_") for p in CURATION)
 

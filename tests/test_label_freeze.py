@@ -165,6 +165,21 @@ def test_every_one_shot_arm_is_frozen_before_it_is_spent():
         "llm01_cn_benign_mt_calib",
         "llm01_cn_benign_mt_holdout",
         "llm01_benign_holdout_p1",
+        # 🔴 P2 是 P1 花掉之后的那条新留出臂 ⇒ 同样 read-once（语料作者 2026-09-17）。
+        "llm01_benign_holdout_p2",
+        # 🔴 A2 英文攻击留出臂（296 条，2026-09-21）—— 门 A 的【可引用】读数所在的臂。
+        # 它是本仓第一条 read-once 的【攻击】臂：此前一次性臂全是良性侧的。
+        "llm01_en_holdout_a2",
+        # 🔴 A4c 英文攻击中途探测臂（100 条，2026-09-22）—— 最后一个未见子集，用掉没有第三次。
+        # 它是第一条【既一次性、其数又不作验收数】的臂（READ_ONCE_ARMS ∩ FIT_ARMS 由空变非空）。
+        "llm01_en_interim_a4c",
+        # 🔴 A3 英文攻击留出臂（416 条，2026-09-22）—— 门 A 的验收数所在的那条臂。
+        # 它一直没登记，而它是本仓最该早登记的一条。
+        "llm01_en_holdout_a3",
+        # 🔴 A5（416 条，2026-09-23）—— 攻击侧最后一条未见臂。
+        "llm01_en_holdout_a5",
+        "llm01_en_holdout_a6",
+        "llm01_benign_holdout_p4",
     }
     missing = one_shot - set(FROZEN_LABEL_SHA)
     assert not missing, f"一次性臂未冻结：{sorted(missing)}"
@@ -199,3 +214,81 @@ def test_every_frozen_arm_declares_which_volume_it_lives_in():
 
     assert set(ARM_VOLUME_ENV) == set(FROZEN_LABEL_SHA)
     assert all(v.startswith("TREVAL_") for v in ARM_VOLUME_ENV.values())
+
+
+def test_every_volume_env_name_is_in_the_closed_vocabulary():
+    """🔴 什么让它红：卷变量名写错一个字母。
+
+    语料作者 2026-09-17 报的形态：拼错的名字 → 未设 → 该臂静默跳过，
+    而它的邻居照常校验 —— 两者输出不同形，但都不红。
+    ⚠️ 这个形态【不能靠环境分辨】：拼错的和有意不设的，在 os.environ 里完全同形。
+    ⇒ 判据只能建在【封闭词表】上：不在词表里的名字，当场红。
+    """
+    from treval.label_freeze import ARM_VOLUME_ENV, KNOWN_VOLUME_ENVS
+
+    bad = {a: v for a, v in ARM_VOLUME_ENV.items() if v not in KNOWN_VOLUME_ENVS}
+    assert not bad, f"卷变量名不在封闭词表里（拼错？新卷未登记？）：{bad}"
+
+
+def test_each_read_once_arm_has_its_own_dedicated_gate():
+    """🔴 钉住【闸门规则】—— 而本条的前一版钉的是一个错的设计，PM 纠正了它。
+
+    前一版逐字断言 `ARM_VOLUME_ENV["llm01_en_grid_attack"] == "TREVAL_EN_P1_CORPUS"`，
+    即"攻击臂与已花掉的 p1 共用一个闸门"。PM 2026-09-17 指出那与我自己给 p2 单独变量的
+    理由自相矛盾：若变量是【访问闸门】，那么开着它去跑攻击臂，就把 p1 也开着了。
+    ⚠️ 这条测试当时【红得对】—— 改设计时它拦住了我，逼我回头看它钉的是什么。
+       一条钉住错设计的测试，价值不在它挡住了改动，而在它让改动变得必须解释。
+
+    什么让它红：任何 read-once 臂失去自己专属的变量。
+    """
+    from treval.label_freeze import ARM_VOLUME_ENV, READ_ONCE_ARMS
+
+    for arm in READ_ONCE_ARMS:
+        env = ARM_VOLUME_ENV[arm]
+        owners = [a for a, v in ARM_VOLUME_ENV.items() if v == env]
+        assert owners == [arm], f"{arm} 的闸门 {env} 还开给了：{owners}"
+
+
+def test_no_read_once_arm_shares_its_gate_with_another_arm():
+    """🔴 什么让它红：一条 read-once 臂与别的臂共用卷变量。
+
+    PM 2026-09-17 报出 grid_attack 与【已花掉的】p1 共用一个变量；核对时又查出
+    第二处：cn_mt_calib(可重跑) 与 cn_mt_holdout(一次性) 也共用。
+    ⇒ 设一个变量去跑可重跑臂时，同一个闸门会把那条 read-once 臂【一并打开】，
+      而"又读了一次"于是成了不需要任何人决定的事。
+    """
+    from treval.label_freeze import ARM_VOLUME_ENV, READ_ONCE_ARMS
+
+    by_env: dict[str, list[str]] = {}
+    for arm, env in ARM_VOLUME_ENV.items():
+        by_env.setdefault(env, []).append(arm)
+    bad = {
+        env: arms
+        for env, arms in by_env.items()
+        if len(arms) > 1 and any(a in READ_ONCE_ARMS for a in arms)
+    }
+    assert not bad, f"read-once 臂与别的臂共用闸门：{bad}"
+
+
+def test_read_once_roster_matches_the_one_shot_set():
+    """🔴 什么让它红：两张"一次性"清单不等。
+
+    `READ_ONCE_ARMS`(闸门规则用) 与 test_every_one_shot_arm_is_frozen_before_it_is_spent
+    里那个字面集合(冻结规则用) 说的是同一件事 —— 两处各写一份，就是迟早不等的那个形状。
+    """
+    from treval.label_freeze import READ_ONCE_ARMS
+
+    one_shot = {
+        "llm01_cn_benign_mt_calib",
+        "llm01_cn_benign_mt_holdout",
+        "llm01_benign_holdout_p1",
+        "llm01_benign_holdout_p2",
+        "llm01_en_holdout_a2",
+        "llm01_en_interim_a4c",
+        "llm01_en_holdout_a3",
+        "llm01_en_holdout_a5",
+        "llm01_en_holdout_a6",
+        "llm01_benign_holdout_p4",
+    }
+    # calib 档可重复跑，它在 one_shot 里是历史遗留的宽松登记；此处只要求 READ_ONCE ⊆ one_shot。
+    assert READ_ONCE_ARMS <= one_shot, sorted(READ_ONCE_ARMS - one_shot)
