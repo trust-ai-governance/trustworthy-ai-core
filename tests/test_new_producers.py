@@ -158,6 +158,13 @@ def test_unmeasurable_and_errored_are_counted_separately() -> None:
 # --------------------------------------------------------------------------- #
 
 
+# 2026-09-24: arm name changed from the real p1 arm to a SYNTHETIC name that is in no registry.
+# 🔴 原因：那天把臂名解析提到四道跑前门【之前】之后，冻结门与一次性门第一次真的看见了
+#   重映射后的臂名 —— 而本测试用的是【真实已消耗臂的名字】配 tmp_path 的合成语料，
+#   于是冻结门当场红（实测 sha 与冻结值不符）、一次性门也会红（那条臂已消耗）。
+# 两道门红得都对：它们防的正是「拿一条花掉的留出臂再跑一次」。
+# ⇒ 本测试要验的是『--benign-arm 有没有流到采集端』，与臂是谁无关 ⇒ 换成合成名。
+# 🔴 顺带记下：这三条测试此前是绿的，而绿的一半原因是那两道门看不见重映射后的名字。
 def test_benign_arm_is_remappable_and_only_the_benign_arm(tmp_path) -> None:
     """🔴 W2 那条臂叫 `llm01_benign_holdout_p1`，而登记表里写死的是默认名 ⇒ 在此之前
     语料在、判据在，而 Producer 找不到它，那条臂在这条路上根本跑不了。
@@ -184,15 +191,23 @@ def test_benign_arm_is_remappable_and_only_the_benign_arm(tmp_path) -> None:
         collect_measurements(
             _T(),
             corpus_root=tmp_path,
-            benign_arm="llm01_benign_holdout_p1",
+            benign_arm="llm01_benign_holdout_synthetic_testarm",
             warnings=warnings,
         )
     # 🔴 断言落在【解析后的路径】上 —— 那是 Producer 真正会去找的地方。
     # 此前这条断言读的是 warnings，而 warnings 现在没有了：够不着臂是异常，不是警告。
     seen = [ln for ln in str(e.value).splitlines() if "找的是" in ln or "·" in ln]
-    assert any("llm01_benign_holdout_p1" in ln for ln in seen), "良性臂没有被重映射"
-    assert not any(
-        "/llm01_benign_holdout" in w.replace("_p1", "") for w in seen if "_p1" not in w
+    assert any("llm01_benign_holdout_synthetic_testarm" in ln for ln in seen), (
+        "良性臂没有被重映射"
+    )
+    # 🔴 本断言的本意：默认臂名不得是【真正被查找的那一段】。
+    # 原写法靠 `.replace("_p1","")` 做字符串手术，换一个臂名就失效 —— 而它失效的方式是
+    # 【恒红】还是【恒绿】取决于新名字的形状，两种都不是它要说的那件事。
+    # ⇒ 改成整段匹配：默认名只有在【后面不再接词】时才算出现。
+    import re as _re
+
+    assert not any(_re.search(rf"/{BENIGN_ARM_DEFAULT}(?![\w-])", ln) for ln in seen), (
+        f"默认臂名仍是被查找的那一段 ⇒ 重映射没发生：{seen}"
     )
     # 攻击臂不受影响 —— 它仍然按自己的名字找
     assert any("llm01_prompt_injection" in w for w in seen), "重映射不该动攻击臂"
@@ -269,7 +284,9 @@ def test_the_remapped_arm_is_actually_consumed_not_just_loaded(tmp_path) -> None
     """
     from treval.cli.collect import collect_measurements
 
-    arm = tmp_path / "llm01_benign_holdout_p1"  # 盘上的真名，与代码默认名不同
+    arm = (
+        tmp_path / "llm01_benign_holdout_synthetic_testarm"
+    )  # 盘上的真名，与代码默认名不同
     arm.mkdir()
     for i in range(2):
         (arm / f"b{i}.yaml").write_text(
@@ -293,7 +310,7 @@ def test_the_remapped_arm_is_actually_consumed_not_just_loaded(tmp_path) -> None
     scan = collect_measurements(
         _T(),
         corpus_root=tmp_path,
-        benign_arm="llm01_benign_holdout_p1",
+        benign_arm="llm01_benign_holdout_synthetic_testarm",
         warnings=[],
         corpus_set="w2",
     )

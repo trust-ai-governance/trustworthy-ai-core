@@ -20,6 +20,7 @@ renders insufficient_data, honest missing data, not a crash).
 from __future__ import annotations
 
 import argparse
+import json
 import secrets
 import sys
 import time
@@ -33,6 +34,9 @@ from treval.active_eval import (
     DecoyToolPartialRate,
     PlantedSecretInOutputRate,
     CorpusIndicator,
+    CostRunawayCaught,
+    OutputNeutralizeFidelityRate,
+    OutputNeutralizeInertRate,
     BenignFlagRate,
     BenignFlagRateHardOnly,
     BenignShadowFlagRate,
@@ -40,6 +44,7 @@ from treval.active_eval import (
     InjectionCatchRate,
     InjectionCombinedRecall,
     InjectionCatchRateObservable,
+    InjectionDecisionBlockRate,
     InjectionDeclinedByModelRate,
     InjectionHardBlockedRate,
     InjectionSoftFlagDeclinedRate,
@@ -48,9 +53,12 @@ from treval.active_eval import (
     SpeechActSeparationRate,
     SpeechActShadowSeparationRate,
     SystemPromptLeakRate,
+    Tier2JudgeCoverage,
     Tier2ShadowRecallLift,
     ToolScopeViolationRate,
     UnsafeOutputPassthroughRate,
+    WireIndirectBenignFlagRate,
+    WireIndirectCatchRate,
     load_corpus,
     run_corpus,
 )
@@ -65,6 +73,10 @@ from treval.active_eval.cases import (
 )
 from treval.active_eval.corpus import CorpusCase, corpus_fingerprint
 from treval.active_eval.indicators import DEFAULT_ARM_PARITY, check_arm_parity
+
+# 🔴 C2 —— 决策记录的类型号从 target 导入，不在这里另写一个字面量：
+# 它是从 proto 描述符算出来的（target.py:50），写第二份就是两个迟早不等的真相。
+from treval.active_eval.target import _DECISION_MADE
 from treval.active_eval.target import AdminAuthError, ProbeResult
 from treval.case_contract import CaseContractError
 from treval.denominator import Denominator, DenominatorError, load_denominator
@@ -140,6 +152,27 @@ def _apply_declared_subject(prod: Producer, m: Measurement) -> Measurement:
     return m
 
 
+# 🔴 C-3a-1 红线③ —— 随数走的那句限定。**写进 notes，不是写进文档**：数会被摘出去引用，
+# 而文档不跟着走。
+SMALL_ARM_NOTE = "⚠️ 本臂 n 太小，出不了有统计意义的率，只给方向读数"
+
+
+def _apply_arm_note(prod: Producer, m: Measurement) -> Measurement:
+    """把 Producer 声明的【臂级限定】追加到行的 notes 上。
+
+    🔴 为什么不落在指标里：本单要给两条小臂的数挂一句「n 太小，只给方向读数」，而其中一条
+    (`wire_indirect_catch_rate`) 是**空类体 + 继承** —— 它的 notes 由 `InjectionCatchRate.measure()`
+    产出，那是完整注入臂（以及别的臂）共用的一份。把限定写进指标，等于把一句**只对某条臂成立**
+    的话，印到每一条共用同一个 `measure()` 的臂上。
+
+    🔴 而这句限定确实是【绑定】的属性、不是【指标】的属性：同一个指标绑到大臂上时这句话是**假的**。
+    印一句假的限定不是保守 —— 它给一个不需要打折的数打折，还会把这句话读成套话，
+    于是下一个人在它**真**成立的臂上也不读它了。⇒ 谁声明，谁带着；不声明的绑定原样通过。"""
+    if not prod.arm_note:
+        return m
+    return replace(m, notes=f"{m.notes}；{prod.arm_note}" if m.notes else prod.arm_note)
+
+
 def _run_arm_parity() -> str:
     """E3F §4 (F4) — the single arm-parity口径 this run stamped. The curated producers all build via
     the zero-arg factory, so catch and benign both use DEFAULT_ARM_PARITY; check_arm_parity enforces
@@ -164,6 +197,9 @@ class Producer:
     factory: type[CorpusIndicator]
     corpus_subdir: str
     subject: str = ""
+    # 🔴 C-3a-1 红线③ —— 一句随【这条绑定的数】走的限定，追加到行的 notes 上（见 `_apply_arm_note`）。
+    # 它与 `subject` 同层，理由也同源：两者都是「这条绑定声明了什么」，而不是「这个指标是什么」。
+    arm_note: str = ""
 
 
 # W6 业务伪装诊断臂的子目录名。语料在仓外受控卷 ⇒ 用 --corpus 指到那个根,子目录名在这里。
@@ -190,6 +226,15 @@ BENIGN_ARM_DEFAULT = "llm01_benign_holdout"
 CURATION: tuple[Producer, ...] = (
     # decision-side
     Producer("injection_catch_rate", InjectionCatchRate, "llm01_prompt_injection"),
+    # 🔴 C-0a —— 入口期拦截率。此前指标建好、三条判据在位、14 发变异全红，**但没有 Producer**：
+    # 于是 2026-09-12 的 C-2a 诊断跑把它写进了预登记块的主判据，而那一跑【产不出这个数】。
+    # 一个"已建好没接上"的指标，在台账上和一个不存在的指标长得一样 —— 差别只在有人去跑它的那一天。
+    # 分母与 InjectionCatchRate 同源（同一个 `_catch_counts`），两者的 sample_size 由测试钉死相等。
+    Producer(
+        "injection_decision_block_rate",
+        InjectionDecisionBlockRate,
+        "llm01_prompt_injection",
+    ),
     # EV-ATTRIB §3.1 — the SAME catch metric re-denominated to the marker-bearing subset, so catch
     # and success read on ONE denominator. Shares the injection_catch_rate id, differentiated by
     # subject="outcome_observable" (a disclosure row — never binds, never trips DuplicateIndicatorError).
@@ -292,6 +337,49 @@ CURATION: tuple[Producer, ...] = (
         SpeechActShadowSeparationRate,
         "llm01_speech_act",
     ),
+    # 🔴 C-3a-1 件A —— 判据建好了、分类登记了、语料在公开仓里，而**没有消费方**：这条臂被运维 CLI
+    # (`tools/eval_report.py`) 跑过，却不产出可引的 Measurement ⇒「作者位/信任区这条路测过没有」
+    # 产物答不出来。指标零改动（空类体 + 继承 `InjectionCatchRate.measure()`），本行只接线。
+    # 限定走 `arm_note`（绑定级），**不进指标** —— 那个 measure() 是完整注入臂共用的。
+    Producer(
+        "wire_indirect_catch_rate",
+        WireIndirectCatchRate,
+        "llm01_wire_indirect",
+        arm_note=SMALL_ARM_NOTE,
+    ),
+    # 🔴 C-3a-1 件B —— 上一条的良性对照面。**新 id**，不复用 `false_positive_rate` /
+    # `benign_flag_rate`：载体率门的两条臂是从【指标↔语料绑定】派生的（`carrier_arm_dirs`），
+    # 用既有良性 id 会把这条臂**自动**拉进那个门的良性臂，于是那个门的量不再是它声称的量。
+    # ⇒ 与上面 `speech_act_separation_rate` 同一条理由：新 id、不进 _BENIGN_ARM_INDICATOR_IDS。
+    Producer(
+        "wire_indirect_benign_flag_rate",
+        WireIndirectBenignFlagRate,
+        "llm01_indirect_benign",
+        arm_note=SMALL_ARM_NOTE,
+    ),
+    # 🔴 C-3a-1 件C —— 覆盖率落在 Tier-2 lift 那几个 producer 所在的注入臂上，因为本指标存在的
+    # 理由正是「lift 看起来正常而覆盖率无人知晓」：lift 出数、覆盖率不出数，那个缺陷就原样保留着。
+    # ⚠️ 它是完整注入臂，**不带** SMALL_ARM_NOTE —— 那句限定在这里是假的，而印一句假的限定
+    # 会把这句话读成套话，下一个人在它真成立的臂上也就不读它了。
+    # ⚠️ 写在表尾而不是紧挨 lift：插在中间会移动既有行在产物里的位置（PHASE 3 的顺序不变约定）。
+    Producer("tier2_judge_coverage", Tier2JudgeCoverage, "llm01_prompt_injection"),
+    # 🔴 C-3a-2 —— 「已建好没接上」的第七、八笔。A2 输出中和的**双侧**效能：
+    # inert 答「活性标记还能不能执行」，fidelity 答「它是不是一个盲目消毒器」。
+    # ⚠️ 两条必须**成对**接 —— 只接 inert，一个把正文整段删掉的实现也能拿满分。
+    # 🔴 它们的分母是【交付且已中和】那一桶，不是整条臂（`_is_neutralized` 是可测性门）：
+    # 403 作用域拦截与未声明路由都没有那个标记 ⇒ 退出分母。**那是设计，不是缺口。**
+    # 🔴 接线这一步顺带解掉了一个此前看不见的缺陷：本仓那道 CI 机制门枚举的是
+    # `{p.factory for p in CURATION}` —— **它的作用域就是"已接线的"**，所以在接上之前
+    # 它对这三个指标是**瞎的**，不是放行的。⇒ 接线不只是让它出数，是把它放进所有既有门的视野。
+    Producer(
+        "output_neutralize_inert_rate", OutputNeutralizeInertRate, "llm05_neutralize"
+    ),
+    Producer(
+        "output_neutralize_fidelity_rate",
+        OutputNeutralizeFidelityRate,
+        "llm05_neutralize",
+    ),
+    Producer("cost_runaway_caught", CostRunawayCaught, "llm10_unbounded_consumption"),
 )
 
 
@@ -357,12 +445,161 @@ CURATION_CN: tuple[Producer, ...] = (
     ),
 )
 
+# 🔴 C-3c 贴边臂 —— 自成一个编组，**不并进 `cn`**。这不是洁癖，是 `_assert_one_subdir_per_id`
+# （件1）在接线当天挡下来的一次真实错法：本臂与留出臂用【同一个 `false_positive_rate` id】，
+# 而 `corpus_sha` 是按 indicator_id 建键的 ⇒ 两条臂进同一个编组，其中一条的指纹会被另一条
+# 静默覆盖，产物照写、退出码照 0。
+#
+# ⚠️ 顺带把一件事变成结构：两条臂的数【本来就不许合池】—— 贴边臂量的是
+# `P(误拦 | 良性 且 贴近治理边界)`，留出臂量的是另一个条件分布，合池出来的数会因【构成】而动、
+# 不因【系统】而动。分成两个编组之后，"合池"连打字都打不出来。
+#
+# 🔴 它既不是标定臂也不是留出臂 ⇒ `_assert_no_calib_producer` 不拦它，而"它从未被拟合过"
+#    今天只由本注释与登记表承担 —— 写在这里，不冒充它是一道门。
+CURATION_CN_EDGE: tuple[Producer, ...] = (
+    Producer(
+        "false_positive_rate",
+        FalsePositiveRate,
+        "llm01_cn_benign_edge",
+        subject="language:zh",
+    ),
+    Producer(
+        "benign_flag_rate",
+        BenignFlagRate,
+        "llm01_cn_benign_edge",
+        subject="language:zh",
+    ),
+    Producer(
+        "benign_shadow_flag_rate",
+        BenignShadowFlagRate,
+        "llm01_cn_benign_edge",
+        subject="language:zh",
+    ),
+)
+
+# 🔴 use-mention-18 —— 中文 use/mention 配对臂，同样自成编组。与英文 `llm01_speech_act` 同一个
+# 指标、同一条判据，换一门语言 ⇒ 同 id 不同目录，进 `cn` 会撞上件1 那道门（同上）。
+# `speech_act_separation_rate` 已在 `FIRST_MEASUREMENT_NO_GATE_IDS` 里 ⇒ 它出的数【不代表通过】，
+# 是一次首测；门排在拿到首测之后单独裁定。
+# ⚠️ 本臂件全部 `control_speech_act_*` ⇒ 通用 `control_` 过滤把它们挡在【每一个既有分母】之外
+#    ⇒ 接这条线不改动任何既有数字（纪律③）。
+CURATION_CN_UM18: tuple[Producer, ...] = (
+    Producer(
+        "speech_act_separation_rate",
+        SpeechActSeparationRate,
+        "llm01_cn_speech_act",
+        subject="language:zh",
+    ),
+)
+
+# 🔴 中文【攻击臂单侧】—— `cn` 的攻击那三行，良性三行一行不带。
+#
+# 存在的理由是一次差点发生的实际损失（2026-09-16）：Tier-1 单侧那一跑本来要用 `--corpus-set cn`，
+# 而 `cn` 里挂着三个跑在 `llm01_cn_benign_holdout` 上的良性 producer —— 那是门 B 的
+# **125 件一次性留出臂**。那一跑只需要攻击侧的逐件判定，却会顺手在留出臂上花掉一次观测。
+#
+# 🔴 为什么"花掉一次"是真代价而不是洁癖：留出臂的全部价值在于它只被看一次。
+#    看第二次本身不改数，但它让"看了不满意再看一次"在结构上成为可能 —— 而 optional stopping
+#    正是两段式预登记要堵的那个洞。⇒ 堵法是【够不着】，不是【记得别看】。
+#
+# ⚠️ 它与 `cn` 共用 injection 那三个 id、指向同一个目录 ⇒ 同组不冲突（同 id 同 subdir 是允许的），
+#    但仍然自成编组：一个编组就是一次跑的射程，而"这一跑碰不碰留出臂"必须由编组决定，不由人记得。
+CURATION_CN_INJ: tuple[Producer, ...] = tuple(
+    p for p in CURATION_CN if p.corpus_subdir == "llm01_cn_injection"
+)
+
+# 🔴 臂 B(C-3b 网格 160)—— 门 A 认证数的唯一来源,因此【自成编组】而不是并进 `cn`:
+# 它与 `llm01_cn_injection` 共用 injection 那三个 id,同组会撞 `_assert_no_id_subdir_collision`
+# （corpus_sha 按 indicator_id 建键）。
+# ⚠️ 本臂是 120 中文 + 40 英文的混合臂 ⇒ subject 只标 `language:zh` 会是错的。
+#    标 `arm:cn_armb` —— 臂名回答"哪批件",语种由件自己带,一个键不兼任两个量。
+CURATION_ARMB: tuple[Producer, ...] = (
+    Producer(
+        "injection_catch_rate",
+        InjectionCatchRate,
+        "llm01_grid_attack",
+        subject="arm:cn_armb",
+    ),
+    Producer(
+        "tier2_shadow_recall_lift",
+        Tier2ShadowRecallLift,
+        "llm01_grid_attack",
+        subject="arm:cn_armb",
+    ),
+    Producer(
+        "injection_combined_recall",
+        InjectionCombinedRecall,
+        "llm01_grid_attack",
+        subject="arm:cn_armb",
+    ),
+)
+
+# 🔴 英文攻击网格臂(C-3b EN,160 件)—— 门 A 的英文侧,与中文侧 `armb` 结构相同、语料不同。
+# 自成编组的理由同 armb:与 `en`/`inj` 共用 injection 三个 id,同组会撞
+# `_assert_no_id_subdir_collision`(corpus_sha 按 indicator_id 建键)。
+# ⚠️ 本臂【可重跑、零消耗】(不在 READ_ONCE_ARMS)⇒ 门 A 第一段取数、补件、再跑,都不花掉它。
+#    这正是 PM 定的顺序能成立的前提:门 A 反复跑、门 B 只跑一次且排在门 A 件数定死之后。
+CURATION_EN_GRID: tuple[Producer, ...] = (
+    Producer(
+        "injection_catch_rate",
+        InjectionCatchRate,
+        "llm01_en_grid_attack",
+        subject="arm:en_grid",
+    ),
+    Producer(
+        "tier2_shadow_recall_lift",
+        Tier2ShadowRecallLift,
+        "llm01_en_grid_attack",
+        subject="arm:en_grid",
+    ),
+    Producer(
+        "injection_combined_recall",
+        InjectionCombinedRecall,
+        "llm01_en_grid_attack",
+        subject="arm:en_grid",
+    ),
+)
+
+# 🔴 臂 A(C-3a 不可信通道位置效应)—— 每个载荷各做两件:T 可信位 / U 不可信位。
+#
+# ⚠️ 本编组【只产出每件的判定】,不产出"位置效应"那个数 —— 而那正是这条臂要的东西。
+#    理由写清楚,不冒充覆盖:位置效应 = T 组与 U 组的 BLOCK 率【落差】,那是一次【配对比较】,
+#    不是一个单臂 producer 能算的量。今天 `pair.py` 的配对轴是 raw_model×gateway(归因轴),
+#    不是 T×U(位置轴)——【同名不同轴】,拿它直接套会得到一个算得出来但答非所问的数。
+# ⇒ 位置落差那一列是一件独立的活(新的配对指标),本行不假装它已经接上了。
+CURATION_ARMA: tuple[Producer, ...] = (
+    Producer(
+        "injection_decision_block_rate",
+        InjectionDecisionBlockRate,
+        "llm01_arma_untrusted_position",
+        subject="arm:en_arma_position",
+    ),
+)
+
 # 🔴 The producers that read ONLY the decision/judge stage — the only ones whose numbers survive a
 # target with no upstream model (`--no-output-side`). An indicator NOT on this list is presumed to read
 # the response, so declaring `--no-output-side` alongside it is REFUSED rather than measured: with an
 # echo forwarder every output-side rate would come back a clean, self-consistent, entirely false 0.
 # 🔴 Fail-closed by construction: add a producer to CURATION_CN without adding it here and the CN
 # no-output-side run stops, instead of quietly measuring the new one against an absent output.
+#
+# 🔴 这个集合有【两个消费方】，同名不同量的经典形状。**往里加一个 id，要同时答两问：**
+#
+#   ① 它凭什么可以与 `--no-output-side` 并存？（＝它真的不读模型输出）
+#      消费方是 `assert_no_output_side_is_legitimate`，而这个集合对它是**白名单** ——
+#      加一个成员就是默许这个 id 和「本目标没有上游模型」同时成立。答错了守卫不再拒绝，
+#      失效形态逐字就是那个函数里那句：**「从来就没有输出」被读成「什么都没泄漏」**。
+#      ⚠️ 判据是【它读不读正文】，不是【它碰不碰响应记录】：数一条类型 2 记录**在不在**，
+#      在 echo 转发器上是真的；读那条记录里的 completion 才是假的。
+#
+#   ② 它在认证跑编组里落在哪？若它绑注入臂，加进来就会把它**推进认证跑的产物**
+#      （`CURATION_INJ` 的过滤是 subdir ∧ 本集合，见下）；若它不绑注入臂，对编组无影响 ——
+#      但那是一句**会过期**的话，所以它要被核实，不是被相信。
+#
+# 🔴 为什么写在这里还不够：这两问此前只是注释，而一发变异证明 ② 那个方向**没有任何门看见**
+# （加一个只放宽守卫、不动编组的 id ⇒ 全量门全绿）。成员表因此被手写钉死在测试里，
+# 两问的答案是**必填字段**而不是可选注释 —— 见 `_DECISION_SIDE_RATIONALE`。
+# ⚠️ 不拆这个集合（拆是重构）。只让「加成员」变成一次必须答两问的显式动作。
 _DECISION_SIDE_ONLY: frozenset[str] = frozenset(
     {
         "injection_catch_rate",
@@ -371,6 +608,22 @@ _DECISION_SIDE_ONLY: frozenset[str] = frozenset(
         "tier2_shadow_recall_lift",
         "injection_combined_recall",
         "benign_shadow_flag_rate",
+        # 🔴 C-3a-1 件C —— 对 ① 成立的理由要写清，因为它**读了响应记录**：本指标数的是
+        # 类型 2 记录【在不在】，不是记录里的正文。`--no-output-side` 要防的是"从来就没有输出"
+        # 被读成"什么都没泄漏"，那是【正文】上的病；一条记录的存在与否在 echo 转发器上是真的，
+        # 所以它的数在没有上游模型的目标上照样成立。
+        # 对 ② 则是本单要的落点：不进这里，覆盖率就进不了认证跑，于是 lift 出数、覆盖率不出数 ——
+        # 正是本指标存在的理由所描述的那个缺陷，原样保留在编组里。
+        "tier2_judge_coverage",
+        # 🔴 C-0a 入口期拦截率 —— 加成员必答的两问，答案写在这里而不是注释在别处：
+        # ① 它是决策侧吗？**是，且是最纯的一个**：分子逐字是 `decision.final_decision == BLOCK`，
+        #    只读类型 1 决策记录，**一个字节的响应正文都不读** ⇒ `--no-output-side` 要防的
+        #    「从来就没有输出 被读成 什么都没泄漏」在它身上结构上不可能发生。
+        # ② 它绑注入臂吗？**绑**：Producer 的 `corpus_subdir == "llm01_prompt_injection"`，
+        #    与 `injection_catch_rate` 同一条臂、同一个分母（`_catch_counts`）。
+        #    ⚠️ 这一问必须答，因为 `CURATION_INJ` 的过滤是 subdir ∧ 本集合 —— 只答①不答②，
+        #    会放进一个守卫放宽了、却不在这条臂上的 id，而那个方向【没有任何门看见】。
+        "injection_decision_block_rate",
     }
 )
 
@@ -424,6 +677,156 @@ def _synthetic_preflight_case() -> Any:
         source="synthetic",
         tool_id="chat",
         input="ping",
+    )
+
+
+# 🔴 C2A0 —— 跑前基线比对的三态。**三个词原样进产物、原样印给操作者，不许转述。**
+# 为什么不许转述：去掉路径之后（见 `_baseline_ruleset_sha` 的判据），一个 `mismatch` 不再能区分
+# 「规则集漂移了」和「载入的是另一份规则集」——`citability` 里那条既有明文正是为此要求带路径的。
+# 门只把 `mismatch` 摆出来就诚实；一旦转述成「规则集已漂移」，就等于替读者做了那条被去掉的推断。
+BASELINE_NOT_DECLARED = "not_declared"
+BASELINE_MATCHED = "matched"
+BASELINE_MISMATCH = "mismatch"
+
+
+class BaselineError(Exception):
+    """基线产物读不出 / 缺那一格 ⇒ 本跑停机。
+
+    🔴 为什么是停不是跳过：本项的全部用途是「确认可比」，而**一个读不出基线的跑，
+    恰恰是最不可比的那一种**。与 `judge_imprint` 的 0 字节拒收同形 ——
+    **一次失败的读取不是一次通过的检查。**
+    """
+
+
+def _baseline_ruleset_sha(path: str | None) -> str | None:
+    """基线产物里 `provenance.build_fingerprint_before.runtime.ruleset_sha256` 那一格。
+
+    不声明 `--baseline-bundle` ⇒ `None`（调用方记 `not_declared`，**不是** `matched`）。
+    读不出 / 缺那一格 ⇒ `BaselineError`（停机，见该异常）。
+
+    🔴 **只取这一格，不取路径，也不取整块 fingerprint**，三条理由各不相同：
+      · 不取整块：`build_fingerprint` 里含**我们自己发流量就会动**的计数器
+        （`arrival_evidence.egress_attempts` 一类）⇒ 整块比会让**任何真发过探针的跑都踩红**，
+        而本仓已因此收窄过一次白名单（`citability` 那段注释：假红一样贵，它训练人去忽略这条门）。
+      · 不取路径：**路径是自述，哈希是测量。** 产物记了路径，但那一格不可校验 ——
+        拿一个校验不了的东西参与比对，只是多一个能悄悄错掉的格子。
+      · 取「运行时实际加载的那一份」而不是任何源文件：deploy copy 与 master 可以不一致，
+        而被测的是 deploy copy ⇒ 一条规则可以**只存在于被跑的那一份里**，
+        任何「看源文件」的核对都看不见它。
+    """
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            bundle = json.load(fh)
+    except (OSError, ValueError) as e:
+        raise BaselineError(
+            f"🔴 基线产物读不出（{type(e).__name__}: {e}）—— 本跑停机。\n"
+            "  本项的用途是确认【可比】，而一个读不出基线的跑恰恰是最不可比的那一种；\n"
+            "  一次失败的读取不是一次通过的检查。⇒ 修路径或去掉 --baseline-bundle（那会记 "
+            f"{BASELINE_NOT_DECLARED}，是一个诚实的空格子）"
+        ) from None
+    if not isinstance(bundle, dict):
+        raise BaselineError(f"🔴 基线产物不是一个 JSON 对象（{path}）—— 本跑停机")
+    prov = bundle.get("provenance")
+    fp = (
+        (prov or {}).get("build_fingerprint_before") if isinstance(prov, dict) else None
+    )
+    sha = (
+        (fp or {}).get("runtime", {}).get("ruleset_sha256")
+        if isinstance(fp, dict)
+        else None
+    )
+    if not isinstance(sha, str) or not sha:
+        raise BaselineError(
+            "🔴 基线产物里取不到 "
+            "`provenance.build_fingerprint_before.runtime.ruleset_sha256` —— 本跑停机。\n"
+            "  这一格是本门唯一的判据；取不到它，本跑与基线是否可比【无法回答】，"
+            "而无法回答不等于可比"
+        )
+    return sha
+
+
+def compare_baseline_ruleset(
+    baseline_sha: str | None, build_fingerprint_before: dict[str, Any] | None
+) -> str:
+    """三态之一，**原样返回那三个词**。比的只有 `runtime.ruleset_sha256` 一格。
+
+    ⚠️ 本跑那一格取不到时同样记 `not_declared` —— 它与「没声明基线」是不同的原因，
+    却是同一个事实：**这一跑没有做过这个比对**。而做过与没做过的区别，才是三态要守的那个区别。
+    """
+    if baseline_sha is None:
+        return BASELINE_NOT_DECLARED
+    fp = build_fingerprint_before or {}
+    this_sha = (fp.get("runtime") or {}).get("ruleset_sha256")
+    if not isinstance(this_sha, str) or not this_sha:
+        return BASELINE_NOT_DECLARED
+    return BASELINE_MATCHED if this_sha == baseline_sha else BASELINE_MISMATCH
+
+
+#: `--baseline-expect` 的取值域 —— 操作者对"本跑的规则集与基线是否相同"的【事前声明】。
+#: 🔴 有限枚举，不是自由文本：一个拼错的词会让这道门静默退回"未声明"。
+BASELINE_EXPECT_SAME = "same"
+BASELINE_EXPECT_DIFFERENT = "different"
+BASELINE_EXPECTATIONS = (BASELINE_EXPECT_SAME, BASELINE_EXPECT_DIFFERENT)
+
+
+def baseline_gate_verdict(compared: str, expect: str | None) -> tuple[bool, str]:
+    """C2A0 的形态改判（规则专家 2026-09-13 提，2026-09-14 落地）——
+    返回 `(要不要停机, 说给操作者的那句话)`。
+
+    🔴 **旧形态「不一致就拦」会拦住我们正要跑的那一跑**：块一落地之后
+    `ruleset_sha256` 是【故意】改的（R-1b），而那一跑必须跑得成。
+    ⇒ 正确形态是**记录 + 要求显式声明**：不一致【且未声明】才红。
+
+    🔴 **而它必须双向守，不能只守一个方向**：
+        不一致 + 声明"预期不同"  ⇒ 放行并记录      —— 操作者知道自己在做什么
+        不一致 + 未声明          ⇒ 🔴 停机          —— 这就是这道门存在的理由
+        一致   + 声明"预期不同"  ⇒ 🔴 也出声        —— 声明与事实【反方向】不符，
+                                                      一样是错：它说明操作者对本跑的
+                                                      认识与实际不一致，而下一步很可能
+                                                      是把这一跑当成"改动已生效"来读
+        一致   + 声明"预期相同"  ⇒ 放行，这是最强的一种通过（事前说了，事后对上）
+    ⚠️ 未做过比对（`not_declared`）时，任何声明都不成立 —— 没有事实可以与它对照。
+    """
+    if compared == BASELINE_NOT_DECLARED:
+        if expect is not None:
+            return False, (
+                f"⚠️ 声明了 --baseline-expect {expect}，而本跑【没有做过基线比对】"
+                "（未传 --baseline-bundle，或本跑那一格取不到）⇒ 该声明没有对照物，不成立。"
+            )
+        return False, ""
+    if compared == BASELINE_MISMATCH:
+        if expect == BASELINE_EXPECT_DIFFERENT:
+            return False, (
+                "✅ 规则集与基线不同，且【事前声明了预期不同】⇒ 放行并记录。"
+                "🔴 与基线的任何跨批比较必须写明这一点 —— 两批不在同一份规则集上。"
+            )
+        return True, baseline_mismatch_message()
+    # matched
+    if expect == BASELINE_EXPECT_DIFFERENT:
+        return False, (
+            "🔴 声明了预期【不同】，而实测规则集与基线【相同】—— 反方向的不符一样是错。"
+            "最可能的成因：以为某个改动已经生效，而它没有上到被跑的这一份。"
+            "本跑不停机，但在查清之前，不要把它当作『改动已生效』的证据。"
+        )
+    return False, ""
+
+
+def baseline_mismatch_message() -> str:
+    """停机文案。**抽成具名函数是为了让「原样打印那三个词、绝不转述」可被断言** ——
+    一段只活在 `print(...)` 里的文案，测试只能去 grep 源码，而那测的是源码文本不是行为。
+
+    🔴 它只摆出 `mismatch` 那个词，不替读者判定是「漂移」还是「载入了另一份规则集」：
+    判据里不含 `ruleset_path`，而两种情形正是靠路径消歧的 ⇒ 这一格上它们不可区分。
+    """
+    return (
+        f"跑前基线比对 {BASELINE_MISMATCH} —— "
+        "本跑的 ruleset_sha256 与基线产物记录的那一个不一致。\n"
+        "  ⇒ 语料一件未动。这两跑的数不可并排读（同一个名字下是两套规则）。\n"
+        "  🔴 本门只报这一个词，**不替你判定它是「漂移」还是「载入了另一份」** —— "
+        "判据里不含路径，而路径是自述、哈希是测量，\n"
+        "     所以这两种情形在这一格上不可区分。要分清，去核运行时实际加载的那一份。"
     )
 
 
@@ -536,13 +939,213 @@ CURATION_INJ: tuple[Producer, ...] = tuple(
     and p.indicator_id in _DECISION_SIDE_ONLY
 )
 
-CORPUS_SETS: tuple[str, ...] = ("en", "cn", "w6", "w2", "inj")
+# 🔴 P3 设计臂(300 件) —— 可反复读 · 可据它拟合 · 不消耗。它的全部用途是在【生产刻度】上
+# 给 τ 找工作点，所以它要的正是良性侧那三个 producer：FPR(硬拒)· flag(软标)· 判官侧软标。
+#
+# 🔴 每一个都带 subject="arm:fit_p3"，不是装饰，是这一编组能存在的唯一理由：
+#   带 subject 的行永不绑定 rubric objective、永不参与评级 ⇒ p3 的数在结构上进不了验收，
+#   而 `_assert_no_calib_producer` 的词表那道正是按这一格放行的。
+#   ⚠️ 去掉任何一个 subject，这一编组当场红 —— 那道门在跑之前拦，不在报告里提醒。
+#
+# 🔴 arm_note 是 PM 要的「半年后还分得出来它能不能重读」那个标记 —— 它随【这条绑定的数】走，
+#   印在行的 notes 上。subject 让机器分得出来，arm_note 让人分得出来，两个都要：
+#   一个只有 subject 的行，在被复制进某份材料之后，就只剩一个看不出性质的字符串。
+_P3_ARM_NOTE = (
+    "arm=llm01_benign_design_p3（设计臂）：可反复读 · 可据它拟合 · 不消耗。"
+    "🔴 本行是 diagnostic_only，永不作验收数 —— 门 B 的验收数只出自 llm01_benign_holdout_p2。"
+)
+
+# 🔴 subject 只在【指标自己不盖】时填，不拼、不覆盖 —— 这是 `_apply_declared_subject` 的契约：
+#   指标不盖 ⇒ Producer 声明的填进去；指标自己盖了 ⇒ 声明的必须【等于】它，否则 raise。
+# ⚠️ 我第一版拼成 "arm:fit_p3|<原键>"，在 `BenignFlagRateHardOnly`（它自己盖
+#   `arm_parity:hard_only`）上当场被那道门拦下 —— 而我的 11 条单测全绿，因为它们钉的是
+#   我自己的意图（复合键唯一），不是仓里的契约。⇒ 见 test_p3_design_arm_lane 里那条契约测试。
+# ⇒ 三行仍然各自唯一：("false_positive_rate","arm:fit_p3") ·
+#   ("benign_flag_rate","arm:fit_p3") · ("benign_flag_rate","arm_parity:hard_only")。
+# 🔴 而臂名靠 `arm_note` 随数走，不靠 subject —— subject 是口径键，臂名是限定，两件事。
+CURATION_P3: tuple[Producer, ...] = tuple(
+    Producer(
+        p.indicator_id,
+        p.factory,
+        "llm01_benign_design_p3",
+        subject=p.subject or "arm:fit_p3",
+        arm_note=_P3_ARM_NOTE,
+    )
+    for p in CURATION_W2
+)
+
+# 🔴 A2 英文攻击【留出臂】296 件 —— 门 A 的【可引用】读数所在的那条臂。
+#
+# 它与 `en_grid` 同构（同三个 producer、换一条语料），而存在的理由正是那个"不同"：
+# τ 是在网格臂上扫出来的 ⇒ 网格臂上的门 A 数是【拟合数】；A2 不参与定 τ，
+# 所以只有它上面的数才是测量数。⚠️ 两条臂的数不许互换，也不许相加。
+#
+# 🔴 A2 是 read-once：跑它就花掉它。所以这一编组的每一次使用都要有人点头，
+#   而不是"顺手带上"——它不出现在任何其它编组里（见 test_a2_holdout_arm_lane）。
+CURATION_EN_A2: tuple[Producer, ...] = tuple(
+    Producer(p.indicator_id, p.factory, "llm01_en_holdout_a2", subject="arm:en_a2")
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 A3 英文攻击【留出臂】416 件 —— 门 A 的【验收数】所在的那条臂，与 A2 同构、同性质。
+#
+# ⛔ 它【不在】FIT_ARMS：A4a/A4b/A4c 三条同卷同轴的臂都在里面（其数只作诊断），
+#   A3 是那三条旁边唯一一条"数要进验收"的。登记时照抄上一条 = 门 A 从此没有读数。
+#
+# 🔴 read-once：跑它就花掉它，没有第二次。所以本编组不出现在任何其它编组里
+#   （见 test_a3_holdout_arm_lane 的射程测试）。
+CURATION_EN_A3: tuple[Producer, ...] = tuple(
+    Producer(p.indicator_id, p.factory, "llm01_en_holdout_a3", subject="arm:en_a3")
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 A5 英文攻击【留出臂】416 件 —— 攻击侧【最后一条】未见臂，门 A 的验收数所在。
+#
+# ⛔ 不在 FIT_ARMS：与 A3 同档。它旁边同卷同轴的 A4a/A4b/A4c 三条全在 FIT_ARMS 里，
+#   照抄它们 = 宣布门 A 没有读数。
+# ⛔ 用掉没有第三次，且【不得因未过而另造一条重跑当门】—— 那会把验收臂变成可重试的。
+CURATION_EN_A5: tuple[Producer, ...] = tuple(
+    Producer(p.indicator_id, p.factory, "llm01_en_holdout_a5", subject="arm:en_a5")
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 A6 英文攻击【留出臂】1000 件 —— 攻击侧最后一条未见臂，门 A 的验收数所在。
+# ⛔ 不在 FIT_ARMS（与 A3/A5 同档）· ⛔ 跑完不得因未过而造 A7。
+CURATION_EN_A6: tuple[Producer, ...] = tuple(
+    Producer(p.indicator_id, p.factory, "llm01_en_holdout_a6", subject="arm:en_a6")
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 F1 英文良性【析因证伪臂】576 件 —— 四根设计因子 24 格 × 24 件，量的是【误报】。
+#
+# 它与 P3 同为可反复读的诊断臂，而用途不同：P3 用来找工作点，F1 用来【证伪一根轴】——
+# 「误报到底跟着哪个因子走」。所以它进 FIT_ARMS 的理由是「其数不作验收数」，
+# 不是「可据它拟合 τ」（见 label_freeze.FIT_ARMS 里那段）。
+#
+# 🔴 每个 producer 都带 subject="arm:en_f1"：带 subject 的行永不绑定 rubric objective、
+#   永不参与评级，而 `_assert_no_calib_producer` 的词表那道正是按这一格放行的。
+#   去掉任何一个 subject，这一编组当场红。
+_F1_ARM_NOTE = (
+    "arm=llm01_en_factorial_f1（析因证伪臂）：576 件 · 可反复读 · 不消耗 · "
+    "四因子 24 格均分。🔴 本行是 diagnostic_only，永不作验收数 —— "
+    "门 B 的验收数只出自 llm01_benign_holdout_p2。"
+)
+
+CURATION_EN_F1: tuple[Producer, ...] = tuple(
+    Producer(
+        p.indicator_id,
+        p.factory,
+        "llm01_en_factorial_f1",
+        subject=p.subject or "arm:en_f1",
+        arm_note=_F1_ARM_NOTE,
+    )
+    for p in CURATION_W2
+)
+
+# 🔴 A4a 中途探测臂 100 件 —— 与 en_grid/en_a2 同构（攻击侧三个 producer）。
+# 它存在的理由是折扣：网格臂(拟合)与 A2(留出)之间量出了一个显著落差（值在私有仓台账，
+# 🔴 纪律②：不进公开仓），而那个落差是"规则认识哪批件"的函数。A4a 按规避轴构造，用来拆开它。
+# ⛔ 其数 diagnostic_only：subject 非空 ⇒ 永不绑定 rubric objective（FIT_ARMS 那道门按此放行）。
+_A4A_ARM_NOTE = (
+    "arm=llm01_en_interim_a4a（中途探测臂）：100 件 · 可反复读 · 不消耗 · 按规避轴构造。"
+    "🔴 本行是 diagnostic_only，永不作验收数 —— 门 A 的验收数只出自 llm01_en_holdout_a3。"
+)
+
+CURATION_EN_A4A: tuple[Producer, ...] = tuple(
+    Producer(
+        p.indicator_id,
+        p.factory,
+        "llm01_en_interim_a4a",
+        subject="arm:en_a4a",
+        arm_note=_A4A_ARM_NOTE,
+    )
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 A4b 中途探测臂 100 件 —— 与 A4a 同构、按 case.id 零重叠（实核：A4a∩A4b=0、A4b∩A3=0、A4b∩A2=0）。
+# 它要回答的唯一问题：规则专家这一轮的新检出，在一条【从未被读过】的臂上还剩多少（泛化率）。
+# ⛔ 其数 diagnostic_only；判门 A 归 llm01_en_holdout_a3。
+_A4B_ARM_NOTE = (
+    "arm=llm01_en_interim_a4b（中途探测臂·未被读过）：100 件 · 可反复读 · 不消耗。"
+    "🔴 本行是 diagnostic_only，永不作验收数 —— 门 A 的验收数只出自 llm01_en_holdout_a3。"
+)
+
+CURATION_EN_A4B: tuple[Producer, ...] = tuple(
+    Producer(
+        p.indicator_id,
+        p.factory,
+        "llm01_en_interim_a4b",
+        subject="arm:en_a4b",
+        arm_note=_A4B_ARM_NOTE,
+    )
+    for p in CURATION_EN_GRID
+)
+
+# 🔴 A4c 中途探测臂 100 件 —— 与 A4a/A4b 同构、同轴分布（规避轴逐格相同），按 case.id 与
+# 【按件正文】双重零重叠（实核对 A4a/A4b/A3/P2/A2/网格 六条臂各取一次，两道判据都是 0）。
+# 它要回答的唯一问题：A4a 重量给出的 91−93 里，【拟合增益】与【臂间差异】两个未知数混在一起；
+# A4c 与 A4b 对同一份规则都未见过 ⇒ 拟合增益项恒为 0 ⇒ 这一跑量的是【纯臂间差异】。
+# ⛔ 一次性：它是最后一个未见子集（PM 2026-09-22 写死），用掉没有第三次 ⇒ 同时在 READ_ONCE_ARMS。
+# ⛔ 其数 diagnostic_only；判门 A 归 llm01_en_holdout_a3。
+_A4C_ARM_NOTE = (
+    "arm=llm01_en_interim_a4c（中途探测臂·未被读过·一次性）：100 件 · 最后一个未见子集。"
+    "🔴 本行是 diagnostic_only，永不作验收数 —— 门 A 的验收数只出自 llm01_en_holdout_a3。"
+)
+
+CURATION_EN_A4C: tuple[Producer, ...] = tuple(
+    Producer(
+        p.indicator_id,
+        p.factory,
+        "llm01_en_interim_a4c",
+        subject="arm:en_a4c",
+        arm_note=_A4C_ARM_NOTE,
+    )
+    for p in CURATION_EN_GRID
+)
+
+CORPUS_SETS: tuple[str, ...] = (
+    "en",
+    "cn",
+    "cn_edge",
+    "cn_um18",
+    "cn_inj",
+    "armb",
+    "arma",
+    "en_grid",
+    "w6",
+    "w2",
+    "inj",
+    "p3",
+    "en_a2",
+    "en_f1",
+    "en_a4a",
+    "en_a4b",
+    "en_a4c",
+    "en_a3",
+    "en_a5",
+    "en_a6",
+)
 _CURATION_BY_SET: dict[str, tuple[Producer, ...]] = {
     "en": CURATION,
     "cn": CURATION_CN,
+    "cn_edge": CURATION_CN_EDGE,
+    "cn_um18": CURATION_CN_UM18,
+    "cn_inj": CURATION_CN_INJ,
+    "armb": CURATION_ARMB,
+    "arma": CURATION_ARMA,
+    "en_grid": CURATION_EN_GRID,
     "w6": CURATION_W6,
     "w2": CURATION_W2,
     "inj": CURATION_INJ,
+    "p3": CURATION_P3,
+    "en_a2": CURATION_EN_A2,
+    "en_f1": CURATION_EN_F1,
+    "en_a4a": CURATION_EN_A4A,
+    "en_a4b": CURATION_EN_A4B,
+    "en_a4c": CURATION_EN_A4C,
+    "en_a3": CURATION_EN_A3,
+    "en_a5": CURATION_EN_A5,
+    "en_a6": CURATION_EN_A6,
 }
 
 
@@ -566,7 +1169,22 @@ def _assert_no_calib_producer(producers: tuple[Producer, ...]) -> None:
     reporting FPR over it reports the FIT, not a measurement (k=0 is a construction guarantee there). Make
     train/test separation a MECHANICAL FACT: no producer may bind a `_calib` corpus ⇒ the fit set is
     structurally unreachable by any run. "记得别在拟合集上报 FPR" is an unguarded promise; this raise IS
-    the guard (same discipline as `subject != ""` never grading — 靠机制不靠记性)."""
+    the guard (same discipline as `subject != ""` never grading — 靠机制不靠记性).
+
+    🔴 两道判据（词表那道见下），不是一道的两种写法（2026-09-21 补的第二道）：后缀认的是【命名约定】，词表认的是
+    【声明的性质】。P3 是一条不带 `_calib` 后缀的拟合臂 —— 只有后缀那道时，这道门对它完全是瞎的，
+    而瞎的方式看起来与「它本来就不是拟合臂」一模一样。反过来，只有词表那道时，一条随手叫了
+    `_calib` 却没登记进词表的新臂会溜过去。两种疏忽方向相反，所以两道都留。
+
+    🔴 口径（2026-09-21 第二次改，Lead 裁定开路）：词表那道拦的是**不带 subject 的** producer，
+    不是"绑定该臂的一切"。第一版一律拦，把「p3 的数不得进验收」做成了机制 —— 对的 —— 而同时
+    把【在生产刻度上给 p3 打分】这条唯一的路也关了。而那条路比离线复刻强一档：离线要自己实现
+    规则 R 的 `label=="Unsafe"` 那一支，实现偏差没有任何东西查得出来。
+    ⇒ 改成按 subject 分：带 subject 的行永不绑定 rubric objective、永不参与评级（仓里既有机制，
+      CURATION_CN 那一族就是靠它把诊断批挡在评级外的）⇒ 放行；不带 subject 的 ⇒ 仍然红。
+    ⚠️ 这不是放宽：两种状态的【后果】不同，所以判据按状态分，而不是按臂分。"""
+    from treval.label_freeze import FIT_ARMS
+
     for p in producers:
         if p.corpus_subdir.endswith(_CALIB_SUFFIX):
             raise ValueError(
@@ -574,6 +1192,103 @@ def _assert_no_calib_producer(producers: tuple[Producer, ...]) -> None:
                 "set must NEVER be a producer's corpus (τ was fitted on it ⇒ FPR there is CONSTRUCTED, "
                 "not measured). EV-CN-BENIGN-N180 件2."
             )
+        if p.corpus_subdir in FIT_ARMS and not p.subject:
+            raise ValueError(
+                f"producer {p.indicator_id!r} binds the FIT arm {p.corpus_subdir!r} "
+                "(label_freeze.FIT_ARMS) 且【不带 subject】—— 该臂上的数是 diagnostic_only，"
+                "永不作验收数。带 subject 的诊断行放行（带 subject 的行永不绑定 rubric objective、"
+                "永不参与评级，与 CURATION_CN 同一机制）；不带 subject = 想拿它当验收数 ⇒ 红。"
+                "它不带 `_calib` 后缀 ⇒ 后缀那道门看不见它；本条判据建在词表上，不建在命名约定上。"
+            )
+
+
+def _assert_frozen_arms_unchanged(
+    producers: tuple[Producer, ...], corpus_root: Path
+) -> None:
+    """跑前校验：本跑要打的臂里，凡是【已冻结标签】的，其实测标签 sha 必须等于冻结值。
+
+    🔴 存在的理由是 PM 2026-09-17 核出的一格：`assert_labels_frozen` 在 `label_freeze.py:87`
+    定义得好好的、fail-closed、文档齐全 —— 而它的【全部调用点都在测试里】，生产路径一次都不调。
+    ⇒ 冻结表今天没有任何【跑时】校验；`labelset_pin` 只把 sha 写进 citation_form，不判红。
+    而那个函数自己的 docstring 逐字写着「只能在跑之前拦」——**它从来没有在跑之前拦过。**
+
+    ⚠️ 这一族 PM 已数到第六个（`tools/send_material.py` 开头自列三条 + 本条 + 英文侧去重量具）：
+    **建了、测了、文档写了，就是没人调。** 一个只被自己的测试调用的 fail-closed 守卫，
+    与一个不存在的守卫，在生产路径上是同一个东西。
+
+    🔴 射程写死，不扩大：只校验【本跑真的会读】且【已在冻结表里登记】的臂。
+      • 未登记的臂 ⇒ 跳过（冻结是自愿登记制；把未登记当红会让每一条新臂无法开工）
+      • 登记了但目录不在 ⇒ 也跳过，交给 `MissingArmError` 去红 —— 两道门各报各的，
+        一道门替另一道门报错，会让人去修错的那一处
+    """
+    from treval.label_freeze import FROZEN_LABEL_SHA, assert_labels_frozen
+
+    arms: dict[Path, str] = {}
+    for p in producers:
+        frozen = FROZEN_LABEL_SHA.get(p.corpus_subdir)
+        if frozen is None:
+            continue
+        d = corpus_root / p.corpus_subdir
+        if d.is_dir():
+            arms[d] = frozen
+    if arms:
+        assert_labels_frozen(arms)
+
+
+def _resolve_arm(subdir: str, benign_arm: str) -> str:
+    """良性臂的子目录名重映射 —— 臂名解析的【唯一】一份实现。
+
+    🔴 只重映射良性臂那一个默认名，不做通配：通配会让一次手误把攻击臂也指过去，
+    而那种错在结果里长得完全正常（数照出、分母是另一条臂）。
+
+    🔴 「只此一处」这条纪律归本函数（2026-09-25 从消费侧的 `_arm_of` 移来）：
+    此前映射写在装载侧、查找写在消费侧，两处必须永远相等 —— 而它们不相等时的表现是
+    探针照跑、producer 一个都没消费到、退出码 0、bundle 写了、报告 ✅ CITABLE。
+    W2 一次性臂就是这么空跑掉的（2026-09-06 实测）。
+    ⇒ 一个"必须永远相等"的东西出现两次，就是它迟早不等的原因。
+    ⚠️ 而它还有第二半：解析必须排在【所有跑前门之前】，否则门看到的是重映射前的名字
+    （2026-09-24 实测，三种表现同一根因，见 `collect_measurements` 开头那段）。
+    """
+    return benign_arm if (benign_arm and subdir == BENIGN_ARM_DEFAULT) else subdir
+
+
+def _with_arm_resolved(
+    producers: tuple[Producer, ...], benign_arm: str
+) -> tuple[Producer, ...]:
+    """把 producers 的 corpus_subdir 换成解析后的臂名，供跑前门与装载侧共用同一份事实。"""
+    if not benign_arm:
+        return producers
+    return tuple(
+        p
+        if p.corpus_subdir == _resolve_arm(p.corpus_subdir, benign_arm)
+        else Producer(
+            p.indicator_id,
+            p.factory,
+            _resolve_arm(p.corpus_subdir, benign_arm),
+            subject=p.subject,
+            arm_note=p.arm_note,
+        )
+        for p in producers
+    )
+
+
+def _assert_read_once_arms_intact(
+    producers: tuple[Producer, ...], wal_dir: str
+) -> None:
+    """跑前两道一次性臂的门。🔴 射程写死：只看【本跑真的会打】的臂。
+
+    ⚠️ 两道分开报，不合并成一句：一道说"这条臂已经花掉了"，另一道说"你要写进别人的卷"，
+    处置完全不同（前者要人裁定作废，后者改一个 --wal 参数就好）。
+    合成一条 message，看的人得先分辨是哪一种。
+    """
+    from treval.label_freeze import (
+        assert_read_once_not_spent,
+        assert_wal_belongs_to_this_run,
+    )
+
+    arms = {p.corpus_subdir for p in producers}
+    assert_read_once_not_spent(arms)
+    assert_wal_belongs_to_this_run(wal_dir, arms)
 
 
 def _assert_no_id_subdir_collision(producers: tuple[Producer, ...]) -> None:
@@ -662,6 +1377,52 @@ class PassiveScan:
     record_count: int
 
 
+# 🔴 C1 —— 被动侧的【输出侧】指标：它们读的是模型输出的内容。
+#
+# 起因是一次实跑的对照：`pii_exposure_surface` 在 echo 上报出一个高值，而在有真实上游的
+# 那一跑上是低值 —— 两跑同一指标、同一份良性语料。（具体数字不写公开仓 —— 纪律②。）
+# 根因不是泄漏，是 **echo 转发器把请求原样回显** ⇒ 请求里的 PII 出现在"输出"里
+# ⇒ 这些指标在 echo 上【量的是输入】。
+#
+# 🔴 而 `--no-output-side` 当时【没有挡住它们】：`assert_no_output_side_is_legitimate`
+# 只看主动 producer，看不到被动扫描 ⇒ 那道守卫本该红而没红。
+# ⚠️ 不走"把 echo 的回显从输出里剔掉"那条路 —— 那是给一个测错对象的量具打补丁，
+#    而它在下一种转发器上会用另一种方式错。正确的是：**声明了没有输出侧，
+#    输出侧指标就不该出数**，而不是出一个看起来正常的数。
+_OUTPUT_SIDE_PASSIVE: frozenset[str] = frozenset(
+    {
+        # 读 response 正文里的 PII 类型集合
+        "pii_exposure_surface",
+        # 读"有几条请求的输出本可被脱敏"
+        "redaction_hit_ratio",
+        # 读响应侧规则面 + authz 的交叉——同样要有真实模型输出才成立
+        "boundary_breach_rate",
+    }
+)
+
+_NO_OUTPUT_SIDE_NOTE = (
+    "n/a — 本跑声明了 --no-output-side（没有上游模型 / echo 转发器）⇒ 输出侧【不可测】。"
+    "🔴 不是 0，也不是「什么都没泄漏」：echo 会把请求原样回显，于是这一格量到的是【输入】。"
+    "实证：同一指标在 echo 上与在有真实上游的那一跑上取值相反。"
+)
+
+
+def _blank_output_side(m: Measurement) -> Measurement:
+    """把一个输出侧被动指标改写成【不可测】—— 保留行，清掉数。
+
+    🔴 保留行而不是删掉：删掉会让"这一跑没有这个指标"与"这一跑不可测"同形，
+    而它们的处置相反（前者去接线，后者去换目标）。"""
+    return replace(
+        m,
+        value=0.0,
+        sample_size=0,
+        evidence_refs=(),
+        ci_low=None,
+        ci_high=None,
+        notes=_NO_OUTPUT_SIDE_NOTE,
+    )
+
+
 def scan_passive(
     wal_dir: str,
     tenant: str,
@@ -669,6 +1430,7 @@ def scan_passive(
     warnings: list[str],
     window_from_ns: int | None = None,
     window_to_ns: int | None = None,
+    no_output_side: bool = False,
 ) -> PassiveScan:
     """Read the eval WAL ONCE (optionally windowed) and measure every passive indicator over
     its AuditEvidence stream (EV-5 §6). Best-effort (§5): an unreadable WAL or a failing
@@ -695,16 +1457,56 @@ def scan_passive(
     measurements: list[Measurement] = []
     for ind in PASSIVE:
         try:
-            measurements.extend(ind.measure(evidence))
+            produced = list(ind.measure(evidence))
         except Exception as e:
             warnings.append(
                 f"passive {ind.indicator_id} failed: {type(e).__name__}: {e}"
             )
+            continue
+        # 🔴 C1 —— 声明了没有输出侧，输出侧被动指标就不出数（见 _OUTPUT_SIDE_PASSIVE）。
+        if no_output_side and ind.indicator_id in _OUTPUT_SIDE_PASSIVE:
+            produced = [_blank_output_side(m) for m in produced]
+            warnings.append(
+                f"passive {ind.indicator_id}: --no-output-side ⇒ 标为不可测"
+                "（echo 会回显请求 ⇒ 该格会量到输入）"
+            )
+        measurements.extend(produced)
     return PassiveScan(
         measurements=tuple(measurements),
         observed_window=observed_window(evidence),
         record_count=len(evidence),
     )
+
+
+def _probes_covered_by_window(
+    wal_dir: str,
+    tenant: str,
+    window: tuple[int, int],
+    *,
+    warnings: list[str],
+) -> int | None:
+    """窗口内有【多少个不同的请求】留下了决策记录 —— 用来和主动侧发出的件数对账。
+
+    🔴 数的是 `record_type == DECISION` 的 **distinct request_id**，不是记录条数：
+    一次探针会写多条记录（决策 / 响应 / 异步治理），按条数比会恒不等，
+    那样这条对账就成了一条恒红的门 —— 而恒红与恒绿一样没有信息。
+
+    读不出来 ⇒ 返回 None（不是 0）：一次失败的读取不是一次"零覆盖"的观测。"""
+    try:
+        evidence = WalEvidenceReader(wal_dir).read_audit(
+            tenant_id=tenant, time_from_ns=window[0], time_to_ns=window[1]
+        )
+        seen = {
+            ev.ref.request_id
+            for ev in evidence
+            if ev.record.record_type == _DECISION_MADE and ev.ref.request_id
+        }
+    except Exception as e:  # 读不出来就说读不出来，不兜成一个数
+        warnings.append(
+            f"probe_window 覆盖对账跳过：WAL 读取失败 {type(e).__name__}: {e}"
+        )
+        return None
+    return len(seen)
 
 
 def _observed_window_unfiltered(wal_dir: str, tenant: str) -> tuple[int, int] | None:
@@ -784,6 +1586,8 @@ def collect_measurements(
     warnings: list[str],
     corpus_set: str = "en",
     denominator: Denominator | None = None,
+    drain_timeout_s: float | None = None,
+    wal_dir: str = "",
 ) -> ActiveScan:
     """Run every curated producer against `target`. A producer exception is caught, noted
     in `warnings`, and skipped (best-effort collection — §5). Pure w.r.t. `target`: pass a
@@ -793,10 +1597,25 @@ def collect_measurements(
     🔴 EV-CN-BASELINE 件2 — `corpus_set` selects the producer set (`en` default ⇒ CURATION, bit-identical
     to every existing run; `cn` ⇒ CURATION_CN). 件1 — the set is guarded for id↔subdir collisions first."""
     producers = curation_for(corpus_set)
+    # 🔴 臂名解析必须排在【所有跑前门之前】—— 2026-09-24 实测的一处缺口：
+    # `--benign-arm` 的重映射原本在 1600 行之后，而四道门读的是重映射【之前】的
+    # `corpus_subdir`。于是良性验收臂走 `--corpus-set w2 --benign-arm <新臂>` 时：
+    #   ① 冻结门在射程内找不到臂 ⇒ 静默跳过 ⇒ 那条一次性臂的标签【跑时不校验】
+    #   ② 一次性门看到默认名 ⇒ 空过 ⇒ "已消耗"拦不住
+    #   ③ 卷归属门看到默认名（无卷标记）而卷名带着新臂的标记 ⇒ 反而把【合法的跑】拦下来
+    # 三种表现，同一个根因：门读的名字不是要打的那条臂。
+    # ⚠️ 而②那一格最危险：它不报错、不吭声，看上去和"这条臂没问题"完全一样。
+    producers = _with_arm_resolved(producers, benign_arm)
     _assert_no_id_subdir_collision(producers)
     _assert_no_calib_producer(
         producers
     )  # 🔴 件2 — the fit set is structurally unreachable
+    _assert_frozen_arms_unchanged(producers, corpus_root)
+    # 🔴 PM 2026-09-23 要的两道门 —— 两次【事后才发现】的失效各对一道：
+    #   ① A2 被完整读了两次   ⇒ assert_read_once_not_spent
+    #   ② F1 的流量落进 wal-a2 ⇒ assert_wal_belongs_to_this_run
+    # 两道都排在这里（一件语料未发之前），与上面三道同一位置 —— 跑完再发现等于没发现。
+    _assert_read_once_arms_intact(producers, wal_dir)
     measurements: list[Measurement] = []
     probe_count = 0
     error_count = 0
@@ -863,13 +1682,12 @@ def collect_measurements(
     # 两处必须永远相等 —— 而它们不相等时的表现是：171 件探针照跑、四个 producer 一个都没消费到、
     # 退出码 0、bundle 写了、报告 ✅ CITABLE。W2 一次性臂就是这么空跑掉的（2026-09-06 实测）。
     # ⇒ 一个"必须永远相等"的东西出现两次，就是它迟早不等的原因。抽成函数，让它不可能不等。
-    def _arm_of(prod: Producer) -> str:
-        sub = prod.corpus_subdir
-        return benign_arm if (benign_arm and sub == BENIGN_ARM_DEFAULT) else sub
-
+    # 🔴 臂名已在函数开头由 `_with_arm_resolved` 解析过 ⇒ 这里直接读 corpus_subdir。
+    # 2026-09-25 内联掉了原来那层 `_arm_of`：解析提前之后它退化成恒等函数，
+    # 而一个只剩 `return prod.corpus_subdir` 的包装层会让下一个人以为"这里还有一次映射"。
     by_subdir: dict[str, list[Producer]] = {}
     for prod in producers:
-        by_subdir.setdefault(_arm_of(prod), []).append(prod)
+        by_subdir.setdefault(prod.corpus_subdir, []).append(prod)
 
     probed: dict[str, tuple[CorpusCase, ...]] = {}
     runs: dict[str, tuple[ProbeResult, ...]] = {}
@@ -987,7 +1805,19 @@ def collect_measurements(
             # 🔴 Re-split BY POSITION, never by id(): drain_governance rebuilds the attached results
             # with dataclasses.replace, so a drained ProbeResult is a NEW object — an identity map
             # would silently drop exactly the records the drain just found. Order IS preserved.
-            back = list(drain(flat))
+            # 🔴 排空上限：不传 ⇒ 用 target 自己按件数推导的默认（_DRAIN_PER_CASE_S=5.0/件）。
+            # 而那个 5.0 是在【中文认证跑那套栈】上按 median 2.84 s / max 4.26 s 定的（target.py:30
+            # 注释逐字）。2026-09-21 实测同一条 p3 臂：第一跑 ~3.5 s/件，几跑之后劣化到 ~9.5 s/件
+            # ——【语料没变、栈没变、只是判官慢了】，25 分钟的上限差 103 件没排完，整跑的 Tier-2 作废。
+            # ⇒ 对可重跑臂那是白花 25 分钟；🔴 对 read-once 臂那是把臂烧掉，而且烧得毫无征兆：
+            #   失败不是错误，是一个「本该有数的地方写着 not_measured」的产物。
+            # ⇒ 所以这里要一个【操作者能显式声明】的闸门：跑之前量一次 s/件，把它写进跑单。
+            #   常数留作默认（小批次照旧），但它不再是唯一可能的值。
+            back = list(
+                drain(flat)
+                if drain_timeout_s is None
+                else drain(flat, timeout=drain_timeout_s)
+            )
             if len(back) != len(flat):
                 raise ValueError(
                     f"drain returned {len(back)} results for {len(flat)} probes"
@@ -1040,25 +1870,25 @@ def collect_measurements(
     # 🔴 件4 — capture the BENIGN run (the FPR producer's corpus: llm01_benign for `en`, llm01_cn_benign
     # for `cn`) from the SAME single probe pass, so the benign case table re-reads exactly what FPR did.
     benign_subdir = next(
-        (_arm_of(p) for p in producers if p.indicator_id == "false_positive_rate"),
+        (p.corpus_subdir for p in producers if p.indicator_id == "false_positive_rate"),
         None,
     )
     if benign_subdir is not None and benign_subdir in runs:
         benign_cases = probed[benign_subdir]
         benign_results = runs[benign_subdir]
     for prod in producers:
-        shared = runs.get(_arm_of(prod))
+        shared = runs.get(prod.corpus_subdir)
         if shared is None:
             # 🔴 注释原本写着 "already warned in PHASE 1" —— 而臂名重映射之下 PHASE 1 【不会】警告
             # （臂按新名装载成功了），于是这里成了一次**静默跳过**。现在明写一条。
             warnings.append(
                 f"🔴 producer {prod.indicator_id} 没有拿到任何探针结果 —— "
-                f"它绑的臂 {_arm_of(prod)!r} 不在本跑的探针集合里（本跑跑了：{sorted(runs)}）"
+                f"它绑的臂 {prod.corpus_subdir!r} 不在本跑的探针集合里（本跑跑了：{sorted(runs)}）"
             )
             continue
         try:
             (m,) = prod.factory().measure(shared)
-            measurements.append(_apply_declared_subject(prod, m))
+            measurements.append(_apply_arm_note(prod, _apply_declared_subject(prod, m)))
         except Exception as e:
             warnings.append(
                 f"producer {prod.indicator_id} failed: {type(e).__name__}: {e}"
@@ -1245,6 +2075,18 @@ def run_collect(args: argparse.Namespace) -> int:
     except JudgeImprintError as e:
         print(f"error: {e}", file=sys.stderr)
         return 3
+    # 🔴 C2A0 —— 基线产物也在【发探针之前】读，与上面两条同一条理由。
+    # ⚠️ 落点故意分两处：**读**在这里（纯本地文件，读不出就停 ⇒ 连那一件合成试探件都没发过），
+    # **比**在拿到本跑 ruleset_sha256 之后（只有 fetch_buildinfo 能给出它），仍在语料探针之前。
+    # 合成一处做不到：把比对提到这里就没有本跑那一格，放到跑后才比就已经花掉语料。
+    baseline_compared = BASELINE_NOT_DECLARED
+    try:
+        baseline_ruleset_sha = _baseline_ruleset_sha(
+            getattr(args, "baseline_bundle", None)
+        )
+    except BaselineError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 3
     passive_only = getattr(args, "passive_only", False)
     pin_observed = getattr(args, "pin_observed_window", False)
     # E3-n ④ — the tested party's build fingerprint captured before/after a gateway run (None when no
@@ -1429,6 +2271,24 @@ def run_collect(args: argparse.Namespace) -> int:
             # E3-n ④ — snapshot the tested party's build fingerprint BEFORE any probe runs (None when
             # no --admin-url); the AFTER snapshot below must match it bit-for-bit or the run is void.
             build_fp_before, build_fp_before_err = gw.fetch_buildinfo()
+            # 🔴 C2A0 —— 本跑的规则集与基线是不是同一份，**在发第一条语料探针之前**回答。
+            # 今天唯一会红的是 `pair.py` 的拒发门，而它在【配对那一刻】才红 —— 那时语料已经花掉。
+            # ⚠️ 「代价」按臂分两种，不合并：可重跑的公开臂丢的是【可比性】（臂还在，重跑即可）；
+            # 一次性/留出臂能重跑，但重跑得到的数**不再是留出臂的数** —— 丢的是留出性。
+            baseline_compared = compare_baseline_ruleset(
+                baseline_ruleset_sha, build_fp_before
+            )
+            _halt, _msg = baseline_gate_verdict(
+                baseline_compared, getattr(args, "baseline_expect", None)
+            )
+            if _msg:
+                # 🔴 原样打印，不转述：`mismatch` 只说"两格不等"，不说是漂移还是载入了另一份
+                # （判据里不含 ruleset_path）。转述一次就替读者做了那条被去掉的推断。
+                print(_msg, file=sys.stderr if _halt else sys.stdout)
+                if not _halt:
+                    warnings.append(_msg)
+            if _halt:
+                return 3
             target = gw
         elif target_kind == "raw_model":
             # EV-FWD: a bare OpenAI-compatible model. NO wal_dir / NO tenant — it is not governed;
@@ -1456,6 +2316,15 @@ def run_collect(args: argparse.Namespace) -> int:
                 denominator=denominator,
                 warnings=warnings,
                 corpus_set=args.corpus_set,
+                # 🔴 紧挨着上面那条「断在最后一米」的账：本参数同族，所以这一行与 CLI 声明、
+                # 函数签名、drain 调用四处【一次落齐】。少这一行，--drain-timeout-s 会被解析、
+                # 被写进 --help、被操作者写进跑单，然后【永远不起作用】——
+                # 而它不起作用的表现，正是它本来要防的那个（排空追不上、Tier-2 全 not_measured）。
+                drain_timeout_s=getattr(args, "drain_timeout_s", None),
+                # 🔴 与 --benign-arm / --drain-timeout-s 同族的那条账：参数解析了、
+                # 函数签名收了、判据也写了，唯独调用点不传 ⇒ 门永远看不到卷名。
+                # 这一行与签名、判据、CLI 四处【一次落齐】。
+                wal_dir=getattr(args, "wal", "") or "",
             )
         except DenominatorError as e:
             # 🔴 退出码 3 —— 与够不着臂同一档：操作者现在就能修的输入问题，
@@ -1542,6 +2411,9 @@ def run_collect(args: argparse.Namespace) -> int:
             warnings=warnings,
             window_from_ns=window_from,
             window_to_ns=window_to,
+            # 🔴 C1 —— 声明传下去，否则那道守卫只挡得住主动侧（实证 2026-09-14：
+            # pii_exposure_surface 在 echo 上报出一个高值，而它量的是被回显的请求）。
+            no_output_side=bool(getattr(args, "no_output_side", False)),
         )
         if (args.wal and target_kind == "gateway")
         else PassiveScan((), None, 0)
@@ -1621,6 +2493,28 @@ def run_collect(args: argparse.Namespace) -> int:
         else None
     )
 
+    # 🔴 C2 —— 窗口是不是真的盖住了这一跑自己发的探针。
+    #
+    # 实证：某一跑里产物声明的件数，与 `probe_window` 内可复算的 type-1 决策记录数【不等】。
+    # WAL 完整性 ok、两个数【各自都自洽】—— 声明的 n 来自主动侧逐件 probe 的返回（不经窗口），
+    # 窗口内那个数来自按窗口过滤的 WAL。
+    # 🔴 于是"按窗口复算得 122、报告写 134"这件事，只在有人去复算的那一天才暴露。
+    #
+    # ⚠️ 本处【只出声，不改窗口语义】：窗口该怎么定是口径，改它要 PM 落笔。
+    #    这里做的是把一个今天无人知晓的不一致变成一条 warning —— 与 `denominator` 那条
+    #    「一份对不上的输入，代价应该是零」同族，只是它发生在跑完之后，所以只能出声。
+    if probe_window is not None and args.wal:
+        covered = _probes_covered_by_window(
+            args.wal, args.tenant, probe_window, warnings=warnings
+        )
+        if covered is not None and covered != active.probe_count:
+            warnings.append(
+                f"🔴 probe_window 未盖住本跑全部探针：主动侧发了 {active.probe_count} 件，"
+                f"而窗口内可复算的决策记录只有 {covered} 件。两个数各自自洽，口径不同 —— "
+                "任何【按窗口复算】的人会得到后者，而产物声明的是前者。"
+                "不要用窗口复算这一跑，直到这一格查清。"
+            )
+
     bundle = build_bundle(
         measurements,
         tenant_id=args.tenant,
@@ -1659,6 +2553,15 @@ def run_collect(args: argparse.Namespace) -> int:
             # 🔴 N180 件0 — the judge/τ declaration axes (operator-declared, like language_scope). Absent
             # ⇒ the bundle is not citable (a number that didn't record which τ / path / judge form can't
             # be cited as a product capability). measurement_path IS the assembly axis.
+            # 🔴 A2 —— 留出语料【落地那一刻】网关加载的 ruleset_sha256，操作者声明。
+            # 不得从本跑推导：material_window_verified 拿它与本跑的 build_fingerprint_before
+            # 比，两侧同源就永远 matched（citability.py:995 逐字说明了它比的是哪两个时点）。
+            material_ruleset_sha256=args.material_ruleset_sha256,
+            # 🔴 A4 —— 语料指纹搬上产物行。机制早在算（ActiveResult.corpus_sha），
+            # 而在它落到 provenance 之前，「冻结即不可改」没有任何东西在比对。
+            # 🔴 不写 `or None`:{}(跑了但没有 producer)与"这格不存在"在产物上会同形。
+            # 空 dict 原样落盘 —— 它说的是"有这一格,而它是空的",与 None 不是一回事。
+            corpus_sha=active.corpus_sha,
             judge_form=getattr(args, "judge_form", None),
             measurement_path=getattr(args, "measurement_path", None),
             tau_declared=getattr(args, "tau_declared", None),
@@ -1666,6 +2569,7 @@ def run_collect(args: argparse.Namespace) -> int:
             # 🔴 弱门（PM 2026-09-07）—— 判官指纹取没取。三态：None 未声明 · "not_taken" 明确没取 ·
             # {…} 取了。解析在 `resolve_judge_imprint`（0 字节的文件抛错，不降级成 not_taken）。
             judge_imprint=judge_imprint,
+            baseline_compared=baseline_compared,
             # E3-n ② — collect does NOT drain the async Tier-2 layer (Platform froze it OFF), so the
             # freeze pack records whether PHASE 2 actually ran: False ⇒ the Tier-2 indicators read
             # n/a, never 0% ("scored below τ" and "we never looked" must not be the same number).

@@ -450,6 +450,20 @@ def build_parser() -> argparse.ArgumentParser:
             "denominator）。按 attack_class 剔 control_ 前缀 + 两份具名剔除表，并断言筛出的件数"
             "等于清单声明的数 —— 不等就非零退出。只作用于清单点名的那条臂",
         )
+        # 🔴 C2A0 —— 一份对不上的输入，代价应该是零。今天唯一会红的是配对那一刻的拒发门，
+        # 而那时语料已经花掉。不传这个参数**不是静默通过**：产物记 `baseline_compared:
+        # not_declared`，因为「比过且一致」与「根本没比」半年后没人分得清。
+        col.add_argument(
+            "--baseline-bundle",
+            default=None,
+            help=(
+                "基线产物（collect bundle JSON）的路径。跑前只比一格："
+                "本跑的 build_fingerprint_before.runtime.ruleset_sha256 是否等于该产物里的同一格；"
+                "不等 ⇒ 非零退出、一件语料不发。🔴 不比路径（路径是自述，哈希是测量），"
+                "也不比整块指纹（里面含我们自己发流量就会动的计数器 ⇒ 会假红）。"
+                "不传 ⇒ 不做本项比对，且在产物里记 not_declared"
+            ),
+        )
         col.add_argument(
             "--benign-arm",
             default="",
@@ -609,6 +623,16 @@ def build_parser() -> argparse.ArgumentParser:
             "value, e.g. 60) — the gateway --timeout is then DERIVED as 2× this (not guessed), and the "
             "value is pinned into the freeze pack (E3-n ③)",
         )
+        col.add_argument(
+            "--drain-timeout-s",
+            type=float,
+            default=None,
+            help="Tier-2 排空的绝对上限（秒）。不传 ⇒ 按件数推导（5.0 s/件，下限 20 s）——"
+            "而那个 5.0 是在另一套栈上按 median 2.84 s/件 标定的。🔴 实测同一条臂的判官延迟会在"
+            "几跑之内从 3.5 s/件 劣化到 9.5 s/件（语料没变、栈没变），届时排空追不上，"
+            "该跑的 Tier-2 全部变 not_measured。⇒ 跑 read-once 臂【必须】显式传："
+            "跑前量一次 s/件，按 3 倍余量给（例：257 件 × 9.5 × 3 ≈ 7300）",
+        )
         # 🔴 EV-CN-BENIGN-N180 件0 — the JUDGE/τ declaration axes (operator-declared, like
         # --language-scope). Absent ⇒ not a citable run: a number that didn't record which τ / measurement
         # path / judge form it used cannot be cited as a product capability. `--measurement-path` IS the
@@ -649,6 +673,36 @@ def build_parser() -> argparse.ArgumentParser:
             "sha256 is a perfectly valid hash, and accepting it would make this gate certify the very "
             "run it exists to flag. It does NOT check that the imprint was taken within this run's "
             "window — that gate needs `taken_at` on the imprint side (next round)",
+        )
+        # 🔴 D1 —— 对"本跑规则集与基线是否相同"的【事前声明】。
+        # 形态改判（规则专家 2026-09-13 提）：旧形态「不一致就拦」会拦住我们正要跑的那一跑
+        # —— 块一落地之后 ruleset_sha256 是【故意】改的。⇒ 记录 + 要求显式声明，
+        # 不一致【且未声明】才红；而一致却声明"预期不同"同样出声（反方向的不符一样是错）。
+        col.add_argument(
+            "--baseline-expect",
+            # 🔴 字面量而不是从 collect 导入常量:collect 是惰性导入的（§0② 故障隔离，
+            # 纯 report 路径不该拉进 active-eval/httpx）。为一个 choices 破坏那条隔离不值。
+            # ⚠️ 代价：两处各有一份取值域 ⇒ 由 tests 钉住它们必须相等。
+            choices=("same", "different"),
+            default=None,
+            help="declare BEFORE the run whether this run's ruleset is expected to be the SAME as "
+            "or DIFFERENT from --baseline-bundle's. mismatch + 'different' ⇒ recorded and allowed; "
+            "mismatch + undeclared ⇒ 🔴 halt; matched + 'different' ⇒ also surfaced (a declaration "
+            "that disagrees with the fact in EITHER direction is wrong). Omitted ⇒ any mismatch halts",
+        )
+        # 🔴 A2 件⑧ —— 留出语料【落地那一刻】网关加载的 ruleset_sha256。
+        # 它与本跑的 build_fingerprint_before 比对，回答「这批材料落地之后，有没有人照着它改规则」。
+        # ⚠️ 必须由操作者声明，**不得从本跑推导**：两侧同源 ⇒ 这道门恒为 matched，
+        # 而一道恒真的门与没有门的区别只在它会让人以为有人在守。
+        col.add_argument(
+            "--material-ruleset-sha256",
+            default=None,
+            metavar="SHA256",
+            help="the ruleset_sha256 in force when this run's HOLDOUT material landed (operator-"
+            "declared). Compared against build_fingerprint_before.runtime.ruleset_sha256 ⇒ "
+            "matched / mismatch. Omitted ⇒ 'unverifiable' — NEVER read as 'no problem'. "
+            "🔴 Do not pass this run's own sha to make it green: both sides would come from one "
+            "source and the gate would certify nothing",
         )
         # EV-COVERAGE E3-n ④ — the gateway admin base (GET /admin/v1/buildinfo). Passed to
         # GatewayTarget so collect can capture the build fingerprint before AND after the run and prove
