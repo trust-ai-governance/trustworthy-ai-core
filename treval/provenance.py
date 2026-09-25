@@ -29,7 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# 🔴 A3:判据版本从 citability 单向导入(citability 不 import 本模块,无环)。
+# 在这里再写一个字面量 6,就是"一个必须永远相等的东西出现在两处"。
 from tools._wal_format import list_segments
+from treval.citability import CRITERIA_VERSION as _CRITERIA_VERSION
 from treval.models import AuditEvidence
 
 
@@ -156,6 +159,8 @@ def build_provenance(
     tau_source: str | None = None,
     judge_imprint: dict[str, Any] | str | None = None,
     material_ruleset_sha256: str | None = None,
+    corpus_sha: dict[str, str] | None = None,
+    baseline_compared: str = "not_declared",
     policy_snapshots: tuple[str, ...] = (),
     config_source: str = "declared",
     tier2_drain_executed: bool = False,
@@ -216,6 +221,12 @@ def build_provenance(
         # an operator DECLARATION (the --language-scope flag), NEVER inferred from case bytes.
         # `config_source` is HOW they arrived — metadata, not the criterion.
         "language_scope": language_scope or "",
+        # ⚠️ 这里的 `or ""` 【不是】 material_ruleset_sha256 那个缺陷，别顺手"修"它
+        # （2026-09-17 我就这么顺手改过一次，被 test_..._E3h 当场拦下）：
+        #   那一格   None=没声明 · ""=声明了是空  ⇒ 两态挤在一个值里 ⇒ 要拆
+        #   这四格   E3-h/E3-m 用【键在不在】分状态：键缺席=pre-E3 产物、""=本跑没声明
+        #            ⇒ 状态已经分开了，改成 None 反而让"没声明"与"旧产物"重新同形
+        # 🔴 同一个 `or ""` 在两处是两个意思 —— 判断哪一个之前，先读它的契约。
         "tested_version": tested_version or "",
         "detect_config": detect_config or "",
         "exec_mode": exec_mode or "",
@@ -244,7 +255,36 @@ def build_provenance(
         "judge_imprint": judge_imprint,
         # 件⑧ — the ruleset_sha256 at HOLDOUT-MATERIAL-LANDING time; compared against the run-start
         # fingerprint so "nobody tuned to the material" is a fingerprint fact, not an attestation.
-        "material_ruleset_sha256": material_ruleset_sha256 or "",
+        # 🔴 A2 三态,不折叠成 falsy:None = 这一跑【没声明】留出件落地时的规则集指纹;
+        # "" 在此前的版本里同时表示"没声明"和"声明了是空",而 citability.py:928 用
+        # `if prov.get(...)` 读它 ⇒ 两种状态在下游【同形】。保留 None 让"没声明"有自己的样子。
+        "material_ruleset_sha256": material_ruleset_sha256,
+        # 🔴 A3 判据版本 —— 从 citability 导入,【不在这里再写一遍字面量】:
+        # 两处各写一个 6,就是它们迟早不等的原因。它一变,任何跨批比较自动作废。
+        "criteria_version": _CRITERIA_VERSION,
+        # 🔴 A4 语料指纹(indicator_id -> 该 producer 实际跑的那份语料的指纹)。
+        # 机制早就在算(cli/collect.py),缺的只是搬到产物行上 —— 在此之前
+        # 「冻结即不可改」只是一句声明,没有任何东西在比对。
+        #
+        # 🔴 与 `measurements[].corpus_sha` 的关系,写在这里而不是靠读者猜(PM 2026-09-16 提):
+        #   本格 = 【跑级汇总】,一次 collect 跑里每个 producer 各读了哪份语料
+        #   逐条格 = 【测量级】,那一个数是在哪份语料上出的 —— 两者同源,后者是权威
+        # ⇒ 三态读法:
+        #   dict 非空  本跑有主动 producer,逐条对得上
+        #   {}        本跑跑了但没有任何 producer 产出(空跑)——【不是】"没有这一格"
+        #   None      本跑没有主动阶段(例如纯被动扫描)⇒ 语料指纹到逐条格里找
+        # ⚠️ None 不等于"未知":它是"这一跑没有跑级汇总可言",而逐条格照常有值。
+        #    一个空着的同名格会被下一个人读成"没完工",所以它的三个意思必须写在格子旁边。
+        "corpus_sha": corpus_sha,
+        # 🔴 C2A0 —— 跑前基线比对的结果，**三个词原样落盘，不转述**：
+        # not_declared（没声明基线，或本跑那一格取不到 ⇒ 这一跑【没做过】这个比对）
+        # matched / mismatch。
+        # ⚠️ 三态的理由与本文件其余几格同源：一次**没做**的比对必须留下一个空格子，
+        # 否则半年后没人分得清「比过且一致」与「根本没比」——而两者在下游读起来一模一样。
+        # 🔴 `mismatch` 只说"两格不等"，**不说是「漂移」还是「载入了另一份」**：
+        # 判据里不含 ruleset_path（路径是自述、哈希是测量），所以这两种情形在这一格上不可区分。
+        # 替读者做那条被去掉的推断，就是把一个去掉了消歧信息的比较当成一个有消歧信息的结论。
+        "baseline_compared": baseline_compared or "not_declared",
         # 🔴 本跑读的是**哪一条良性臂**（`--benign-arm`，默认 llm01_benign_holdout）。
         # 在此之前它只活在运行参数里，产物答不出「这个数出自哪一条臂」—— 而随数走的分母构成声明
         # 恰恰只对其中一条臂成立：不记臂名，那条声明要么挂不上，要么挂上就是一句假话。
