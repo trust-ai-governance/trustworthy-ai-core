@@ -21,7 +21,15 @@ from treval.models import INTERVAL_CENSUS, AuditEvidence, Measurement
 
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
 _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
-_RESPONSE_OBSERVED = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
+# Only decision-bearing records enter this denominator. Legacy records have no
+# record_type (UNSPECIFIED) and are decisions by convention; every other type --
+# response, governance, posture, erasure, type-6/7 -- is not a decision.
+_DECISION_RECORD_TYPES = frozenset(
+    {
+        rc_pb.AUDIT_RECORD_TYPE_DECISION_MADE,
+        rc_pb.AUDIT_RECORD_TYPE_UNSPECIFIED,
+    }
+)
 
 
 class BlockRate:
@@ -37,8 +45,9 @@ class BlockRate:
         blocks = 0
         for ev in evidence:
             record = ev.record
-            # B records (response.observed) carry no decision — skip them.
-            if record.record_type == _RESPONSE_OBSERVED:
+            # Explicit allowlist: type-6/7 must not be counted even if a malformed
+            # record carries a decision field.
+            if record.record_type not in _DECISION_RECORD_TYPES:
                 continue
             final = record.decision.final_decision
             if final not in (_ALLOW, _BLOCK):
