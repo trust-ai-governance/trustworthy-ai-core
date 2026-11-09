@@ -1268,6 +1268,7 @@ class _MixedTerminalTarget:
             dec.decision.final_decision = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
 
         resp = rc_pb.RequestContext()
+        resp.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
         resp.envelope.request_id = f"req-{case.id}"
         resp.response.final_terminal = terminal
 

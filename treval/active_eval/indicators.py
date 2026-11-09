@@ -2537,6 +2537,7 @@ class Tier2ShadowRecallLift:
         rescued = 0
         errors = 0
         no_async = 0
+        unscored = 0  # a type-3 unscored marker: no score was produced
         skipped_prefiltered = (
             0  # §3.2-3: Tier-1 already HARD-blocked ⇒ judge never scores it (by design)
         )
@@ -2604,6 +2605,8 @@ class Tier2ShadowRecallLift:
                 # Only a genuinely-missing record is `no_async` — the lower-bound / drain signal.
                 if hard_blocked(pr):
                     skipped_prefiltered += 1
+                elif pr.tier2_unscored:
+                    unscored += 1
                 else:
                     no_async += 1
             elif not t1_injection and caught_by_tier2(pr):
@@ -2637,6 +2640,11 @@ class Tier2ShadowRecallLift:
             f"; {skipped_prefiltered} Tier-1-hard-blocked (judge pre-filtered by design, NOT a "
             "drain problem)"
             if skipped_prefiltered
+            else ""
+        )
+        unscored_note = (
+            f"; {unscored} unscored marker(s) (no score was produced — NOT a drain gap)"
+            if unscored
             else ""
         )
         control_note = (
@@ -2675,7 +2683,7 @@ class Tier2ShadowRecallLift:
             # "combined 78%" (n=143). The combined figure is its own indicator, with its own
             # denominator and its own interval.
             "combined recall is its own indicator (injection_combined_recall), same denominator; "
-            f"{measured}{async_note}{prefilter_note}{control_note}{wal_note}{evaluated_miss_note}{extra}"
+            f"{measured}{async_note}{prefilter_note}{unscored_note}{control_note}{wal_note}{evaluated_miss_note}{extra}"
             f"{_unattributable_warning(unattributable)}"
         )
         _lo, _pt, _hi = wilson_interval(rescued, total) if total else (None, None, None)

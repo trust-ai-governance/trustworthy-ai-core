@@ -48,6 +48,7 @@ from treval.active_eval.checks import (
     gateway_undecided,
     hard_blocked,
     injection_attribution_source,
+    response_record,
     judge_category,
     judge_label,
     injection_rule_evaluated,
@@ -141,18 +142,23 @@ def _governance_reacted(pr: ProbeResult) -> bool:
 
 
 def _tier2_scored(pr: ProbeResult) -> str:
-    """🔴 序8 件4 — did the async Tier-2 shadow judge SCORE this row? Three states, ALL WAL-derived
+    """🔴 序8 件4 — did the async Tier-2 shadow judge SCORE this row? Four states, ALL WAL-derived
     (no gateway field): 'scored' (a type-3 governance record exists), 'prefiltered' (Tier-1 HARD-blocked
-    it, so the judge is by design not sent it — NOT a drain gap), 'not_scored' (no record AND Tier-1 did
-    not block = our `no_async` — the ONLY drain-incompleteness signal). 🔴 Uses the SAME predicates
-    Tier2ShadowRecallLift splits on (governance_evidence / hard_blocked), so the rows' three-state counts
-    re-add to that indicator's no_async / skipped_prefiltered totals (§件4 acceptance ④: 契约自洽).
-    'prefiltered' must NEVER fold into 'not_scored' — 'the judge skipped it by design' ≠ 'a record is
-    missing', the F2-shaped defect this field exists to close."""
+    it, so the judge is by design not sent it — NOT a drain gap), 'unscored' (a type-3
+    `inj.tier2.unscored` marker covers this decision seq — no score was produced for it;
+    the marker carries its own reason),
+    'not_scored' (no record AND Tier-1 did not block = our `no_async` — the ONLY drain-incompleteness
+    signal). 🔴 Uses the SAME predicates Tier2ShadowRecallLift splits on (governance_evidence /
+    hard_blocked), so the rows' counts re-add to that indicator's no_async / skipped_prefiltered totals
+    (§件4 acceptance ④: 契约自洽). 'prefiltered' and 'unscored' must NEVER fold into 'not_scored' —
+    'the judge skipped it by design' / 'no score was produced' ≠ 'a record is missing',
+    the F2-shaped defect this field exists to close."""
     if pr.governance_evidence is not None:
         return "scored"
     if hard_blocked(pr):
         return "prefiltered"
+    if pr.tier2_unscored:
+        return "unscored"
     return "not_scored"
 
 
@@ -166,7 +172,7 @@ def _reacted_by(pr: ProbeResult) -> str:
     只看 hint 会把它读成 `none`（最坏的那种错：用户被拒了，而表上写着没人碰过它）。
     🔴 Tier-2 用 `caught_by_tier2`（判官在**它自己的 τ** 上发出的 hint），不重新阈值化分数 ——
     emit-vs-interpret：τ 归网关，Core 读它发出的判定。
-    ⚠️ 判官**没评过**不在这一列里，那是 `tier2_scored` 的三态；两列各答各的问题，不许合并。"""
+    ⚠️ 判官**没评过**不在这一列里，那是 `tier2_scored` 的四态；两列各答各的问题，不许合并。"""
     tier1 = denied_at_decision(pr) or flagged_at_decision(pr)
     tier2 = caught_by_tier2(pr)
     if tier1 and tier2:
@@ -203,7 +209,7 @@ def _exclusion_class(pr: ProbeResult) -> str:
     # 在那里查会看到全空，读成"网关没写错误码"（一个关于网关的错误结论）。
     if UPSTREAM_FORWARD_FAILED in response_error_codes(pr):
         return "upstream_forward_failed"
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is not None and is_error_terminal(resp.record.response.final_terminal):
         return "gateway_error_terminal"
     return "harness_no_delivery" if pr.evidence is None else "gateway_error_terminal"
@@ -225,7 +231,7 @@ def _terminal_verdict(pr: ProbeResult) -> str:
 
     'none' = no response record at all (the decision stage governs) — distinct from 'no_verdict',
     which means a record EXISTS and reached no clean terminal."""
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is None:
         return "none"
     return response_terminal_class(resp.record.response.final_terminal)
@@ -281,8 +287,8 @@ def _fired_rule_ids_response(pr: ProbeResult) -> list[str]:
     🔴 Kept a SEPARATE field (§2.2 option A: flat `fired_rule_ids` + new `fired_rule_ids_response`)
     so the two stages stay distinguishable — F1's attribution and the decision-stage FPR口径 read the
     DECISION field ONLY and are never polluted by a response-side rule. Empty (never None) when there
-    is no response record (no response-stage governance / errored / no-WAL target)."""
-    ev = pr.response_evidence
+    is no RESPONSE_OBSERVED record (no response-stage governance / errored / no-WAL target)."""
+    ev = response_record(pr.response_evidence)
     if ev is None:
         return []
     return [r.rule_id for r in ev.record.response.on_tool_response_rules if r.matched]
@@ -320,7 +326,7 @@ def build_cases(
             "verdict": case_verdict(pr),
             "observable_via": observable_via(pr),
             "governance_reacted": _governance_reacted(pr),
-            # 🔴 序8 件4 — did the async Tier-2 judge SCORE this row (scored / not_scored / prefiltered)?
+            # 🔴 序8 件4 — did the async Tier-2 judge SCORE this row (scored / not_scored / prefiltered / unscored)?
             # So "why wasn't this one's Tier-2 hint counted" is answerable PER CASE, not just as a total
             # in tier2_shadow_recall_lift's notes. Pure WAL read (governance_evidence / hard_blocked).
             "tier2_scored": _tier2_scored(pr),
@@ -565,7 +571,7 @@ def build_benign_cases(
                 # 而不是靠 duration 推"。算得出来却不进表，下一个人还得再推一次。
                 "response_error_codes": list(response_error_codes(pr)),
                 "reacted_by": _reacted_by(pr),
-                # 🔴 判官【有没有评过】是另一个问题（三态），与「评了标不标」不许并：
+                # 🔴 判官【有没有评过】是另一个问题（四态），与「评了标不标」不许并：
                 # drain 没跑完会被读成「判官认为没问题」。同攻击行的那一列。
                 "tier2_scored": _tier2_scored(pr),
                 # 🔴 EV-CN-TIER2 追加① — the judge's RAW score, exported per case.
@@ -594,7 +600,7 @@ def build_benign_cases(
                 # 🔴 与 `flagged_at_decision` 分两列,不合并:它们是 hint 的【两个写入点】
                 #   (pipeline 入口期 / async_governance 判官期),合成一列就再也分不开
                 #   「规则标的」和「判官标的」——而 `benign_soft_flagged` 正是这两者的 OR。
-                # ⚠️ 与 `tier2_scored` 也不同:那一列答【评没评过】(三态),这一列答【评了标不标】。
+                # ⚠️ 与 `tier2_scored` 也不同:那一列答【评没评过】(四态),这一列答【评了标不标】。
                 "caught_by_tier2": caught_by_tier2(pr),
                 # 🔴 同攻击表：跑级谓词落到行上，`injection_combined_recall` 才加得回来。
                 "tier2_drain_executed": bool(pr.tier2_drain_executed),

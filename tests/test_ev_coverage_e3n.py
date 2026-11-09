@@ -74,6 +74,7 @@ def _decision_ev(cid, *, final, hint=False, matched_rules=None):
 
 def _response_ev(cid, *, terminal=""):
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     ctx.envelope.request_id = f"req-{cid}"
     if terminal:
         ctx.response.final_terminal = terminal

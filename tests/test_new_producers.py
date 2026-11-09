@@ -399,6 +399,7 @@ def test_the_exclusion_class_names_whose_account_it_is() -> None:
 
     def _resp(terminal):
         ctx = rc_pb.RequestContext()
+        ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
         ctx.envelope.request_id = "r"
         ctx.response.final_terminal = terminal
         return AuditEvidence(
@@ -457,6 +458,7 @@ def test_a_written_error_code_beats_a_terminal_shape() -> None:
 
     def _resp(terminal, code=None):
         ctx = rc_pb.RequestContext()
+        ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
         ctx.envelope.request_id = "r"
         ctx.response.final_terminal = terminal
         if code:

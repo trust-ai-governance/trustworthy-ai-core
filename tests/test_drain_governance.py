@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import walgen
+
 import treval.active_eval.target as tgt
 from treval.active_eval.target import GatewayTarget, ProbeResult
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
@@ -32,6 +34,25 @@ def _gov_ev(rid: str) -> AuditEvidence:
     )
 
 
+def _unscored_ev(seq: int, to_seq: int | None = None) -> AuditEvidence:
+    """A fabricated `inj.tier2.unscored` marker: no request_id, seq range in tags."""
+    ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_GOVERNANCE_OBSERVED
+    r = ctx.decision.rules_evaluated.add()
+    r.rule_id = "inj.tier2.unscored"
+    r.matched = False
+    r.tags["seq"] = str(seq)
+    if to_seq is not None:
+        r.tags["to_seq"] = str(to_seq)
+    return AuditEvidence(
+        ref=EvidenceRef(source="wal:x", seq=0, request_id=""),
+        integrity=IntegrityStatus.VERIFIED,
+        tenant_id="__eval__",
+        received_at_ns=0,
+        record=ctx,
+    )
+
+
 def _probe(rid: str) -> ProbeResult:
     return ProbeResult(
         case_id=rid,
@@ -39,6 +60,25 @@ def _probe(rid: str) -> ProbeResult:
         decision="ALLOW",
         response_text="",
         evidence=None,
+    )
+
+
+def _probe_with_seq(rid: str, seq: int) -> ProbeResult:
+    ctx = rc_pb.RequestContext()
+    ctx.envelope.request_id = rid
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_DECISION_MADE
+    return ProbeResult(
+        case_id=rid,
+        request_id=rid,
+        decision="ALLOW",
+        response_text="",
+        evidence=AuditEvidence(
+            ref=EvidenceRef(source="wal:x", seq=seq, request_id=rid),
+            integrity=IntegrityStatus.VERIFIED,
+            tenant_id="__eval__",
+            received_at_ns=0,
+            record=ctx,
+        ),
     )
 
 
@@ -56,9 +96,9 @@ class _Clock:
         self.now += secs
 
 
-def _install_reader(monkeypatch, rids_present: set[str]) -> None:
-    """Stub the WAL read so a scan yields a type-3 record only for `rids_present`."""
-    evs = [_gov_ev(r) for r in rids_present]
+def _install_reader(monkeypatch, rids_present: set[str], unscored=()) -> None:
+    """Stub the WAL read: type-3 records for `rids_present`, plus any markers."""
+    evs = [_gov_ev(r) for r in rids_present] + list(unscored)
 
     class _Reader:
         def __init__(self, wal_dir) -> None:
@@ -155,3 +195,79 @@ def test_read_cursor_none_without_admin_url(tmp_path):
     no network touched."""
     t = GatewayTarget("http://gw:8080", wal_dir=tmp_path)
     assert t._read_cursor() is None
+
+
+def test_unscored_marker_marks_decision_seq_range(monkeypatch, tmp_path):
+    """A no-request_id unscored marker joins by its seq range, not by id."""
+    _install_reader(monkeypatch, set(), unscored=[_unscored_ev(5, to_seq=7)])
+    t = _target(
+        monkeypatch,
+        tmp_path,
+        _seq_cursor({"wal_head_seq": 100, "guardrail_cursor_seq": 100}),
+    )
+    probes = [
+        _probe_with_seq("req-a", 5),
+        _probe_with_seq("req-b", 6),
+        _probe_with_seq("req-c", 7),
+        _probe_with_seq("req-d", 8),
+    ]
+
+    out = t.drain_governance(probes, timeout=100.0, poll_interval=2.0)
+
+    by_id = {r.request_id: r for r in out}
+    assert by_id["req-a"].tier2_unscored is True
+    assert by_id["req-b"].tier2_unscored is True
+    assert by_id["req-c"].tier2_unscored is True
+    assert by_id["req-d"].tier2_unscored is False
+
+
+def _decision_ctx(request_id: str) -> rc_pb.RequestContext:
+    ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_DECISION_MADE
+    ctx.envelope.request_id = request_id
+    ctx.envelope.tenant_id = "__eval__"
+    return ctx
+
+
+def _unscored_ctx(
+    seq: int, *, tenant: str = "", to_seq: int | None = None
+) -> rc_pb.RequestContext:
+    ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_GOVERNANCE_OBSERVED
+    ctx.envelope.tenant_id = tenant
+    rule = ctx.decision.rules_evaluated.add()
+    rule.rule_id = "inj.tier2.unscored"
+    rule.matched = False
+    rule.tags["seq"] = str(seq)
+    if to_seq is not None:
+        rule.tags["to_seq"] = str(to_seq)
+    return ctx
+
+
+def test_real_wal_empty_tenant_unscored_marker_is_attached(monkeypatch, tmp_path):
+    """The hole / unparsable marker is written without a tenant; a tenant-filtered
+    read drops it and every covered probe reads not_scored instead of unscored."""
+    payloads = [
+        _decision_ctx("req-a").SerializeToString(),
+        _unscored_ctx(0, to_seq=0).SerializeToString(),
+        _unscored_ctx(50, tenant="other").SerializeToString(),
+    ]
+    walgen.write_v2_segment(
+        tmp_path / walgen.NAME.format(0), 0, payloads, walgen.GENESIS
+    )
+    t = _target(
+        monkeypatch,
+        tmp_path,
+        _seq_cursor({"wal_head_seq": 3, "guardrail_cursor_seq": 3}),
+    )
+
+    out = t.drain_governance(
+        [_probe_with_seq("req-a", 0), _probe_with_seq("req-b", 50)],
+        timeout=100.0,
+        poll_interval=2.0,
+    )
+
+    by_id = {r.request_id: r for r in out}
+    assert by_id["req-a"].tier2_unscored is True
+    assert by_id["req-b"].tier2_unscored is False
+    assert t._tier2_rule_census() == {"inj.tier2.unscored": 1}
