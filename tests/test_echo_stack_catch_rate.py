@@ -52,6 +52,7 @@ def _decision(cid: str, *, final, matched_rule: str | None) -> AuditEvidence:
 def _echo_response(cid: str) -> AuditEvidence:
     """echo 栈的响应记录：terminal BLOCKED，而【没有任何响应期规则命中】(fail-closed)。"""
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
     ctx.envelope.request_id = f"req-{cid}"
     ctx.response.final_terminal = "BLOCKED"
     ctx.response.response_status_code = 200

@@ -26,6 +26,7 @@ from treval.active_eval.checks import (
     evaluate,
     hard_blocked,
     injection_score,
+    response_record,
 )
 from treval.active_eval.corpus import CorpusCase
 from treval.active_eval.target import ProbeResult
@@ -128,7 +129,7 @@ def _response_suffix(pr: ProbeResult) -> str:
     HARD-BLOCKED at the response stage (output-DLP / LLM05 / neutralize fail-close): the
     decision line alone would misread it as a clean ALLOW and hide the block that the
     FPR/hard-block signal actually counts. Empty when the response stage was clean."""
-    ev = pr.response_evidence
+    ev = response_record(pr.response_evidence)
     if ev is None:
         return ""
     r = ev.record.response

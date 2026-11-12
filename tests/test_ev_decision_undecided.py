@@ -38,6 +38,7 @@ def _benign(cid, *, final=_ALLOW, rules=1, response_block=False):
     resp_ev = None
     if response_block:
         rctx = rc_pb.RequestContext()
+        rctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
         rctx.envelope.request_id = f"req-{cid}"
         rctx.response.final_terminal = "BLOCKED"
         resp_ev = _ev(cid, rctx)

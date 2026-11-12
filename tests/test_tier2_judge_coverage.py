@@ -33,6 +33,7 @@ def _rec(cid: str, *, kind: str, decision=_ALLOW, terminal="ALLOWED"):
         r.matched = decision == _BLOCK
         r.tags["owasp"] = "LLM01"
     elif kind == "response":
+        ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
         ctx.response.final_terminal = terminal
     else:  # governance（类型 3 —— 判官产出过分）
         ctx.audit.hint_emitted = False

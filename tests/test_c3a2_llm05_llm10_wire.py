@@ -57,6 +57,7 @@ _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
 
 def _resp_ev(cid: str, markers: dict[str, str]):
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
     ctx.envelope.request_id = f"req-{cid}"
     for k, v in markers.items():
         ctx.audit.hint_variables[k] = v
