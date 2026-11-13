@@ -89,6 +89,18 @@ def _response(
     return c.SerializeToString()
 
 
+def _type7(request_id):
+    c = rc_pb.RequestContext()
+    c.record_type = rc_pb.AUDIT_RECORD_TYPE_COMPLIANCE_OPERATION
+    c.envelope.request_id = request_id
+    c.audit_schema_version = 3
+    c.body_state = rc_pb.BODY_STATE_NOT_APPLICABLE
+    c.compliance_operation.operation_type = rc_pb.COMPLIANCE_OPERATION_DELETE_REQUESTED
+    c.compliance_operation.result = rc_pb.COMPLIANCE_OPERATION_RESULT_PENDING
+    c.compliance_operation.operation_id = "op-1"
+    return c.SerializeToString()
+
+
 ALLOW = rc_pb.DecisionTrace.FinalDecision.FINAL_DECISION_ALLOW
 BLOCK = rc_pb.DecisionTrace.FinalDecision.FINAL_DECISION_BLOCK
 
@@ -131,6 +143,15 @@ def test_decode_shows_record_type_and_renders_preview(mixed_wal, capsys):
     assert '"content": "hi"' in out
     # reasoning tokens preserved in token_usage.extra
     assert "completion_tokens_details.reasoning_tokens" in out
+
+
+def test_decode_renders_type7_raw_not_decision(tmp_path, capsys):
+    _write_segment(tmp_path, [_type7("rid-type7")])
+    rc = wal_dump.main([str(tmp_path), "--decode"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "record_type=AUDIT_RECORD_TYPE_COMPLIANCE_OPERATION" in out
+    assert "decision.made" not in out
 
 
 # --------------------------------------------------------------------------- #

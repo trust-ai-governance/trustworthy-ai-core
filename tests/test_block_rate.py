@@ -86,6 +86,28 @@ def test_response_observed_records_excluded():
     assert m.value == 0.5
 
 
+def test_all_non_decision_record_types_excluded():
+    # Explicit allowlist, not "decision field happens to be empty": even a malformed
+    # type-6/7 record carrying BLOCK must not enter the denominator.
+    non_decision = [
+        _RESPONSE,
+        rc_pb.AUDIT_RECORD_TYPE_GOVERNANCE_OBSERVED,
+        rc_pb.AUDIT_RECORD_TYPE_POSTURE_DECLARED,
+        rc_pb.AUDIT_RECORD_TYPE_BODY_ERASED,
+        rc_pb.AUDIT_RECORD_TYPE_PROCESSING_RESTRICTED,
+        rc_pb.AUDIT_RECORD_TYPE_COMPLIANCE_OPERATION,
+    ]
+    evidence = [_evidence(0, final=_ALLOW), _evidence(1, final=_BLOCK)]
+    evidence += [
+        _evidence(i + 2, record_type=rt, final=_BLOCK)
+        for i, rt in enumerate(non_decision)
+    ]
+    (m,) = BlockRate().measure(evidence)
+    assert m.sample_size == 2
+    assert m.value == 0.5
+    assert [ref.request_id for ref in m.evidence_refs] == ["req-0", "req-1"]
+
+
 # --------------------------------------------------------------------------- #
 # 4. Undecided / unspecified excluded from the denominator
 # --------------------------------------------------------------------------- #

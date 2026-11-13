@@ -191,6 +191,7 @@ def _pr_with_response_errors(*codes: str, request_id: str = "r1"):
     from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
 
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     ctx.envelope.request_id = request_id or "r1"
     for c in codes:
         e = ctx.response.errors.add()

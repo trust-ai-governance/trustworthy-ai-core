@@ -38,6 +38,7 @@ _CORPUS = Path(__file__).resolve().parents[1] / "corpus" / "llm05_neutralize"
 
 def _resp_ev(markers: dict[str, str], request_id: str = "req-1") -> AuditEvidence:
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
     ctx.envelope.request_id = request_id
     for k, v in markers.items():
         ctx.audit.hint_variables[k] = v

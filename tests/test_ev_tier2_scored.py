@@ -1,7 +1,7 @@
-"""序8 件4 — the case-level contract carries `tier2_scored` per row (scored / not_scored / prefiltered),
-so "why wasn't this row's Tier-2 hint counted" is answerable PER CASE, not only as a total in
-tier2_shadow_recall_lift's notes. 🔴 Pure WAL read; the row three-state counts re-add to the indicator's
-no_async / skipped_prefiltered totals (契约自洽).
+"""序8 件4 — the case-level contract carries `tier2_scored` per row (scored / not_scored /
+prefiltered / unscored), so "why wasn't this row's Tier-2 hint counted" is answerable PER CASE,
+not only as a total in tier2_shadow_recall_lift's notes. 🔴 Pure WAL read; the row counts re-add
+to the indicator's no_async / skipped_prefiltered totals (契约自洽).
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _gov(cid, hint):
     return _ev(cid, ctx)
 
 
-def _probe(cid, *, final=_ALLOW, scored=False, hint=False):
+def _probe(cid, *, final=_ALLOW, scored=False, hint=False, unscored=False):
     return ProbeResult(
         case_id=cid,
         request_id=f"req-{cid}",
@@ -61,6 +61,7 @@ def _probe(cid, *, final=_ALLOW, scored=False, hint=False):
         evidence=_dec(cid, final),
         governance_evidence=_gov(cid, hint) if scored else None,
         tier2_drain_executed=True,  # so the lift MEASURES (drain ran), not not_measured
+        tier2_unscored=unscored,
         attack_class="direct_prompt_injection",
     )
 
@@ -79,9 +80,9 @@ def _case(cid):
 
 
 # --------------------------------------------------------------------------- #
-# ①②③ — the three states
+# ①②③④ — the four states
 # --------------------------------------------------------------------------- #
-def test_tier2_scored_three_states_acceptance1_2_3():
+def test_tier2_scored_four_states():
     # ① a type-3 governance record ⇒ scored
     assert _tier2_scored(_probe("s", scored=True)) == "scored"
     # ② no record AND Tier-1 did not block ⇒ not_scored (= our no_async)
@@ -89,6 +90,16 @@ def test_tier2_scored_three_states_acceptance1_2_3():
     # ③ 🔴 Tier-1 already HARD-blocked ⇒ prefiltered, NEVER folded into not_scored
     p = _probe("p", final=_BLOCK, scored=False)
     assert _tier2_scored(p) == "prefiltered" and _tier2_scored(p) != "not_scored"
+    # ④ an unscored marker covers this seq ⇒ unscored, NEVER folded into not_scored
+    u = _probe("u", final=_ALLOW, unscored=True)
+    assert _tier2_scored(u) == "unscored" and _tier2_scored(u) != "not_scored"
+
+
+def test_unscored_marker_does_not_override_prefiltered():
+    # Tier-1 hard-blocked means the judge was not sent the probe by design; an unscored
+    # marker (if present) must not reclassify it as a judge failure.
+    p = _probe("p", final=_BLOCK, unscored=True)
+    assert _tier2_scored(p) == "prefiltered"
 
 
 def test_build_cases_carries_tier2_scored():
@@ -96,6 +107,11 @@ def test_build_cases_carries_tier2_scored():
         [_case("s")], [_probe("s", scored=True)], target_kind="gateway"
     )
     assert row["tier2_scored"] == "scored"
+
+    (row_u,) = build_cases(
+        [_case("u")], [_probe("u", unscored=True)], target_kind="gateway"
+    )
+    assert row_u["tier2_scored"] == "unscored"
 
 
 # --------------------------------------------------------------------------- #
@@ -105,15 +121,23 @@ def test_case_row_counts_match_lift_notes_acceptance4():
     probes = [
         _probe("s", final=_ALLOW, scored=True, hint=True),  # scored (rescued)
         _probe("p", final=_BLOCK, scored=False),  # prefiltered (Tier-1 hard block)
+        _probe("u", final=_ALLOW, unscored=True),  # unscored (marker, no score)
         _probe("n", final=_ALLOW, scored=False),  # not_scored (no record, not blocked)
     ]
     rows = build_cases(
         [_case(p.case_id) for p in probes], probes, target_kind="gateway"
     )
     counts = Counter(r["tier2_scored"] for r in rows)
-    assert counts == {"scored": 1, "prefiltered": 1, "not_scored": 1}
+    assert counts == {
+        "scored": 1,
+        "prefiltered": 1,
+        "unscored": 1,
+        "not_scored": 1,
+    }
 
     (lift,) = Tier2ShadowRecallLift().measure(probes)
     # 🔴 the case rows and the indicator notes must AGREE (no two-sides-computing-separately)
     assert f"{counts['not_scored']} probe(s) had NO async record" in lift.notes
     assert f"{counts['prefiltered']} Tier-1-hard-blocked" in lift.notes
+    assert f"{counts['unscored']} unscored marker(s)" in lift.notes
+    assert "no score was produced" in lift.notes

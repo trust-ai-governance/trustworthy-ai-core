@@ -57,6 +57,7 @@ def _decision(cid, *, final, rules):
 
 def _response(cid, *, terminal):
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED  # type: ignore[assignment]
     ctx.envelope.request_id = f"req-{cid}"
     ctx.response.final_terminal = terminal
     return _ev(cid, ctx, seq=1)

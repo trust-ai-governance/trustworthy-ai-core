@@ -562,6 +562,7 @@ def test_the_census_counts_records_that_carry_no_request_id(monkeypatch) -> None
     def _rec(rule_id, request_id):
         return SimpleNamespace(
             ref=SimpleNamespace(request_id=request_id),
+            tenant_id="__eval__",
             record=SimpleNamespace(
                 record_type=mod._GOVERNANCE_OBSERVED,
                 decision=SimpleNamespace(

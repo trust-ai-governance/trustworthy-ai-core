@@ -1,0 +1,6 @@
+# Optional private legal-basis registry bundle for Core B-06.
+# Not required by the core treval library, CLI, or `import treval`.
+# This package is not on a public index: install it from the consumer's
+# configured private index or provide a local wheel/bundle. Do not add a
+# private index URL or credentials here.
+trustworthy-ai-legal-basis

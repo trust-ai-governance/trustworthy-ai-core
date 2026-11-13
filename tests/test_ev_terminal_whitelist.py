@@ -10,10 +10,13 @@ import pytest
 from trustworthy_ai.v1 import request_context_pb2 as rc_pb
 
 from treval.active_eval import InjectionCatchRate
+from treval.active_eval.cases import _fired_rule_ids_response, _terminal_verdict
 from treval.active_eval.checks import (
     _caught_at_response,
+    blocked_at_response,
     hard_blocked,
     response_no_verdict,
+    response_record,
 )
 from treval.active_eval.target import ProbeResult
 from treval.models import AuditEvidence, EvidenceRef, IntegrityStatus
@@ -25,6 +28,9 @@ from treval.terminal import (
 
 _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
 _ALLOW = rc_pb.DecisionTrace.FINAL_DECISION_ALLOW
+_RESP = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
+_TYPE6 = rc_pb.AUDIT_RECORD_TYPE_PROCESSING_RESTRICTED
+_TYPE7 = rc_pb.AUDIT_RECORD_TYPE_COMPLIANCE_OPERATION
 
 
 def _ev(cid, ctx):
@@ -47,15 +53,18 @@ def _decision(cid, final):
     return _ev(cid, ctx)
 
 
-def _response(cid, terminal):
+def _response(cid, terminal, *, record_type=_RESP):
     ctx = rc_pb.RequestContext()
     ctx.envelope.request_id = f"req-{cid}"
+    ctx.record_type = record_type  # type: ignore[assignment]
     ctx.response.final_terminal = terminal
     return _ev(cid, ctx)
 
 
-def _probe(cid, *, final=_ALLOW, terminal=None):
-    resp = _response(cid, terminal) if terminal is not None else None
+def _probe(cid, *, final=_ALLOW, terminal=None, response_evidence=None):
+    resp = response_evidence
+    if resp is None and terminal is not None:
+        resp = _response(cid, terminal)
     return ProbeResult(
         case_id=cid,
         request_id=f"req-{cid}",
@@ -96,6 +105,41 @@ def test_blocked_terminal_still_a_block_acceptance4():
     assert response_terminal_class("BLOCKED") == "block"
     assert _caught_at_response(_response("x", "BLOCKED")) is True
     assert hard_blocked(_probe("x", final=_ALLOW, terminal="BLOCKED")) is True
+
+
+def test_type6_7_are_not_response_records():
+    # A type-6/7 record is not a response. Even if a malformed record carries
+    # final_terminal="BLOCKED", it must not become an allow/block/error signal.
+    for record_type in (_TYPE6, _TYPE7):
+        resp = _response("x", "BLOCKED", record_type=record_type)
+        assert response_record(resp) is None
+        assert _caught_at_response(resp) is False
+
+        pr = _probe("x", final=_ALLOW, response_evidence=resp)
+        assert hard_blocked(pr) is False
+        assert blocked_at_response(pr) is False
+        assert response_no_verdict(pr) is False
+        assert _terminal_verdict(pr) == "none"
+
+
+def test_fired_rule_ids_response_ignores_type6_7():
+    # Type-6/7 are not response records, even if a malformed record carries
+    # response.on_tool_response_rules. Only a type-2 record contributes rule ids.
+    for record_type in (_TYPE6, _TYPE7):
+        resp = _response("x", "ALLOWED", record_type=record_type)
+        rule = resp.record.response.on_tool_response_rules.add()
+        rule.rule_id = "resp-rule"
+        rule.matched = True
+        pr = _probe("x", final=_ALLOW, response_evidence=resp)
+        assert _fired_rule_ids_response(pr) == []
+
+    resp = _response("y", "ALLOWED")
+    rule = resp.record.response.on_tool_response_rules.add()
+    rule.rule_id = "resp-rule"
+    rule.matched = True
+    assert _fired_rule_ids_response(
+        _probe("y", final=_ALLOW, response_evidence=resp)
+    ) == ["resp-rule"]
 
 
 def test_response_no_verdict_predicate():
@@ -162,8 +206,6 @@ def test_is_error_terminal_membership_not_substring():
 # --------------------------------------------------------------------------- #
 from treval.indicators.terminal_error_ratio import TerminalErrorRatio  # noqa: E402
 from treval.terminal import is_unregistered_terminal  # noqa: E402
-
-_RESP = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
 
 
 def _brec(cid, terminal):

@@ -85,6 +85,7 @@ def _response_ev(cid, *, matched_rules=(), terminal=""):
     """A RESPONSE_OBSERVED record with matched on_tool_response_rules.
     `terminal` 默认空串 = protobuf 默认（无响应观测）；传 ERROR/REJECTED 造 no_verdict（序8 件3/6）。"""
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     ctx.envelope.request_id = f"req-{cid}"
     ctx.response.final_terminal = terminal
     for rid in matched_rules:

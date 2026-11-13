@@ -164,6 +164,10 @@ class ProbeResult:
     # 🔴 `False` 含【查了、盘上一条 Tier-2 记录都没有】—— 那不是极端情况，是判官路由不通
     #    且期间重启过时的**预期状态**（give-up 记录要同件连失败 3 次才落，重试计数重启清零）。
     tier2_judge_produced: bool | None = None
+    # B-07: a type-3 `inj.tier2.unscored` marker covers this probe's decision seq.
+    # That marker deliberately has no request_id; drain correlates it through
+    # tags["seq"] / tags["to_seq"]. False when no marker was read.
+    tier2_unscored: bool = False
     # 🔴 The run DECLARED there is no upstream model (echo forwarder). Stamped by GatewayTarget from
     # `--no-output-side`, never inferred. The decoy-tool checks read it to return `not_measured`
     # instead of False: with no model there can BE no tool_call, so "not observed" is not "did not
@@ -193,6 +197,10 @@ class Target(Protocol):
     target_id: str
 
     def probe(self, case: CorpusCase) -> ProbeResult: ...
+
+
+def _seq_in_ranges(seq: int | None, ranges: list[tuple[int, int]]) -> bool:
+    return seq is not None and any(lo <= seq <= hi for lo, hi in ranges)
 
 
 def _coerce_int(value: object) -> int:
@@ -639,8 +647,18 @@ class GatewayTarget:
                 break
             time.sleep(poll_interval)
 
+    def _in_tenant_scope(self, ev: AuditEvidence) -> bool:
+        """Whether a diagnostic scan may count this record.
+
+        The tenant filter is exact except for tenant-less records: a marker written for a
+        record the writer could not attribute (a hole / unparsable payload) carries no
+        tenant on purpose. Dropping those markers would make exactly the missing-score
+        cases invisible. Other tenants' records stay out.
+        """
+        return ev.tenant_id in ("", self._tenant_id)
+
     def _tier2_rule_census(self) -> dict[str, int] | None:
-        """按 `rule_id` 清点本租户 WAL 里的 Tier-2 治理记录（record_type=3）。
+        """按 `rule_id` 清点本租户（含无租户标记）WAL 里的 Tier-2 治理记录（record_type=3）。
 
         🔴 为什么不能复用 `_scan_governance`：那一条按 `request_id` join，而**判官报错写出来的
         `inj.tier2.unscored` 记录【没有 request_id】**（它用 `tags.seq` 指回决策记录）⇒ 那条链路
@@ -669,9 +687,15 @@ class GatewayTarget:
             return None
         census: dict[str, int] = {}
         try:
-            evidence = list(
-                WalEvidenceReader(wal_dir).read_audit(tenant_id=self._tenant_id)
-            )
+            for ev in WalEvidenceReader(wal_dir).read_audit():
+                if not self._in_tenant_scope(ev):
+                    continue
+                if ev.record.record_type != _GOVERNANCE_OBSERVED:
+                    continue
+                for rule in ev.record.decision.rules_evaluated:
+                    rid = rule.rule_id
+                    if rid.startswith("inj.tier2."):
+                        census[rid] = census.get(rid, 0) + 1
         except Exception:
             # 🔴 这是一条【诊断】，不许把跑批弄挂。读不出证据 ⇒ 返回 `None`（没查成），
             # 调用方退到"没排完"那句。一个读不出证据的诊断，绝不能因此做出更确定的断言。
@@ -681,21 +705,53 @@ class GatewayTarget:
             # 会变成 `None`，而 `None` 在那里不算 False ⇒ 判定退到的是【通过】那一侧。
             # 🔴 措辞保守 ≠ 判定保守。返回 `None` 之后这两者才第一次指向同一边。
             return None
-        for ev in evidence:
-            if ev.record.record_type != _GOVERNANCE_OBSERVED:
-                continue
-            for rule in ev.record.decision.rules_evaluated:
-                rid = rule.rule_id
-                if rid.startswith("inj.tier2."):
-                    census[rid] = census.get(rid, 0) + 1
         return census
+
+    def _tier2_unscored_ranges(self) -> list[tuple[int, int]]:
+        """Read `inj.tier2.unscored` markers as decision-seq ranges.
+
+        The marker has no request_id on purpose, so it cannot join through
+        `envelope.request_id`. `tags["seq"]` is the first decision seq it covers and
+        optional `tags["to_seq"]` closes a hole range. Tenant-less markers are accepted:
+        the writer leaves them unattributed when it cannot read the record, and those are
+        exactly the holes this function exists to surface. Returns [] on no WAL / read
+        failure / malformed tags -- those are read failures, not proof the judge scored.
+        """
+        wal_dir = self._wal_dir
+        if wal_dir is None:
+            return []
+        ranges: list[tuple[int, int]] = []
+        try:
+            for ev in WalEvidenceReader(wal_dir).read_audit():
+                if not self._in_tenant_scope(ev):
+                    continue
+                if ev.record.record_type != _GOVERNANCE_OBSERVED:
+                    continue
+                for rule in ev.record.decision.rules_evaluated:
+                    if rule.rule_id != "inj.tier2.unscored":
+                        continue
+                    try:
+                        lo = int(rule.tags.get("seq", ""))
+                    except (TypeError, ValueError):
+                        continue
+                    raw_to = rule.tags.get("to_seq", "")
+                    try:
+                        hi = int(raw_to) if raw_to else lo
+                    except (TypeError, ValueError):
+                        hi = lo
+                    if hi < lo:
+                        hi = lo  # malformed range: do not widen the marker beyond its declaration
+                    ranges.append((lo, hi))
+        except Exception:
+            return []
+        return ranges
 
     def _tier2_records_in_other_tenants(self) -> int | None:
         """盘上有多少条类型 3 落在【本分片之外】—— 只在本分片普查为空时才问。
 
-        🔴 为什么必须问：`_tier2_rule_census` 那一趟读是 **带 tenant 过滤**的
-        （`read_audit(tenant_id=self._tenant_id)`）⇒ 它的 `{}` 其实还有第四个含义：
-        「本分片下没有，而判官可能在**另一个 tenant** 下产出了几百条」。
+        🔴 为什么必须问：`_tier2_rule_census` 只把**本分片 + 无租户标记**计入普查
+        （其他 tenant 在本地过滤掉）⇒ 它的 `{}` 其实还有第四个含义：
+        「本分片和无租户标记都没有，而判官可能在**另一个 tenant** 下产出了几百条」。
 
         实测（Core WAL，2026-09-06 21:40 CST，段 48287..49684）：
             tenant=__eval__            → shadow 436
@@ -911,6 +967,7 @@ class GatewayTarget:
         # 它与 governance_evidence 是两件事：后者是 Tier-2 影子判官（异步、type-3），
         # 这个是响应期规则的同步裁决（type-2）—— 正文被扣下时，它是唯一还说得出话的那一面。
         response_rules = self._response_rule_verdicts(wanted)
+        unscored_ranges = self._tier2_unscored_ranges()
         return [
             replace(
                 r,
@@ -919,6 +976,10 @@ class GatewayTarget:
                 governance_evidence=found.get(r.request_id, r.governance_evidence),
                 response_rules_matched=response_rules.get(
                     r.request_id, r.response_rules_matched
+                ),
+                tier2_unscored=_seq_in_ranges(
+                    r.evidence.ref.seq if r.evidence is not None else None,
+                    unscored_ranges,
                 ),
             )
             for r in results

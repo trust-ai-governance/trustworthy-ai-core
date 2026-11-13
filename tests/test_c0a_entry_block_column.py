@@ -43,6 +43,7 @@ def _ev(cid: str, *, decision, rule="inj-1", matched=None, tags=None):
 
 def _resp_ev(cid: str, terminal: str):
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     ctx.envelope.request_id = f"req-{cid}"
     ctx.response.final_terminal = terminal
     return AuditEvidence(

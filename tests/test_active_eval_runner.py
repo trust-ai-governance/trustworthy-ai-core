@@ -224,6 +224,7 @@ def test_response_stage_output_dlp_block_on_undecided_is_unattributable_not_unde
     dec.envelope.request_id = "req-r"
     dec.decision.final_decision = _UNDECIDED  # type: ignore[assignment]
     resp = rc_pb.RequestContext()
+    resp.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     resp.envelope.request_id = "req-r"
     resp.response.final_terminal = "BLOCKED"  # response-stage block
     ev = AuditEvidence(
@@ -685,6 +686,7 @@ def _response_ev(cid, *, final_terminal="", rules=(), rule_id=""):
     response rule with an id so a response-stage catch can be ATTRIBUTED to the injection detector
     (an inj-* id / owasp tag) — default "" leaves them unattributable, as a bare output rule is."""
     ctx = rc_pb.RequestContext()
+    ctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
     ctx.envelope.request_id = f"req-{cid}"
     if final_terminal:
         ctx.response.final_terminal = final_terminal
@@ -943,6 +945,7 @@ def _cost_probe(
     resp_ev = None
     if error is None and (resp_terminal or wal_tokens or cap_hit or reasoning):
         rctx = rc_pb.RequestContext()
+        rctx.record_type = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
         rctx.envelope.request_id = f"req-{cid}"
         if resp_terminal:
             rctx.response.final_terminal = resp_terminal

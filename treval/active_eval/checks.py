@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from treval.models import AuditEvidence
 
 _BLOCK = rc_pb.DecisionTrace.FINAL_DECISION_BLOCK
+_RESPONSE_OBSERVED = rc_pb.AUDIT_RECORD_TYPE_RESPONSE_OBSERVED
 # "The gateway reached no decision" — governance did not run. UNSPECIFIED (proto default)
 # and UNDECIDED both mean no final call was made (GATE-LASTMILE P4).
 _NO_DECISION_FINALS = frozenset(
@@ -64,6 +65,20 @@ def _caught_at_decision(ev: AuditEvidence | None) -> bool:
     return record.decision.final_decision == _BLOCK or bool(record.audit.hint_emitted)
 
 
+def response_record(ev: AuditEvidence | None) -> AuditEvidence | None:
+    """Return `ev` only when it is a RESPONSE_OBSERVED record.
+
+    `ProbeResult.response_evidence` is populated from the response join today, but a
+    hand-built result or a future reader can put any record there. type-6/7 are not
+    response records: reading their `response` submessage would classify a missing
+    response as a terminal and could turn a restriction/compliance record into an
+    ALLOW or BLOCK. Keep the record-type gate at the read boundary.
+    """
+    if ev is None or ev.record.record_type != _RESPONSE_OBSERVED:
+        return None
+    return ev
+
+
 def _caught_at_response(ev: AuditEvidence | None) -> bool:
     """The RESPONSE stage reacted: the response.observed record shows a terminal
     BLOCK OR an on_tool_response_rule that matched AND fired a non-`log` action
@@ -74,6 +89,7 @@ def _caught_at_response(ev: AuditEvidence | None) -> bool:
     actions individually (`any(a != "log" ...)`) so a multi-action ["log","block"]
     counts and a pure-["log"] or no-action [] does not. Missing response record ⇒
     not caught at this stage (fail-closed)."""
+    ev = response_record(ev)
     if ev is None:
         return False
     r = ev.record.response
@@ -311,7 +327,7 @@ def _matched_rules(pr: ProbeResult) -> list[tuple[str, Any]]:
             for r in ev.record.decision.rules_evaluated
             if _reacting(r)
         ]
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is not None:
         out += [
             (r.rule_id, r.tags)
@@ -355,7 +371,7 @@ def _all_evaluated_rules(pr: ProbeResult) -> list[tuple[str, Any]]:
     ev = pr.evidence
     if ev is not None:
         out += [(r.rule_id, r.tags) for r in ev.record.decision.rules_evaluated]
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is not None:
         out += [
             (r.rule_id, r.tags) for r in resp.record.response.on_tool_response_rules
@@ -425,7 +441,7 @@ def hard_blocked(pr: ProbeResult) -> bool:
     dec = pr.evidence
     if dec is not None and dec.record.decision.final_decision == _BLOCK:
         return True
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if (
         resp is not None
         and response_terminal_class(resp.record.response.final_terminal) == "block"
@@ -451,7 +467,7 @@ def response_error_codes(pr: ProbeResult) -> tuple[str, ...]:
     `duration≈60s` 两个旁证推出来的 —— 从相关信号推成因。盘上就写着，直接读。
 
     没有响应记录 ⇒ 空元组：那是"读不到"，既不是"有错误"也不是"没错误"。"""
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is None:
         return ()
     return tuple(e.error_code for e in resp.record.response.errors if e.error_code)
@@ -471,7 +487,7 @@ def blocked_at_response(pr: ProbeResult) -> bool:
     fail-closed 的栈上它饱和成 n/n —— 一个恒等于 100%、携带零信息的数。要答「入口期拦下几件」，
     两半必须能分开数，而分开数的前提是两半都有名字。
     无响应记录 ⇒ False（fail-closed，与 `hard_blocked` 同一支）。"""
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     return (
         resp is not None
         and response_terminal_class(resp.record.response.final_terminal) == "block"
@@ -484,7 +500,7 @@ def response_no_verdict(pr: ProbeResult) -> bool:
     value (REJECTED/PENDING/ERROR/TIMEOUT/…/"" — the last = a record with no response observation). This
     is NOT a clean allow; the denominator must EXIT it and count it (never a silent miss / clean-allow).
     None response record ⇒ False (no response stage to lack a verdict — the decision stage governs)."""
-    resp = pr.response_evidence
+    resp = response_record(pr.response_evidence)
     if resp is None:
         return False
     if _caught_at_response(resp):  # a response-stage catch IS a verdict
